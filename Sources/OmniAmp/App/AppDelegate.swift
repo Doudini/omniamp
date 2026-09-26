@@ -245,7 +245,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sub.delegate = self // rebuilt each time it opens
         item.submenu = sub
         m.addItem(item)
+        let wItem = NSMenuItem(title: "Watched Folders", action: nil, keyEquivalent: "")
+        let wMenu = NSMenu(title: "Watched Folders")
+        wMenu.delegate = self
+        wItem.submenu = wMenu
+        m.addItem(wItem)
     }
+
+    // MARK: Watched folders
+
+    private func fillWatchedMenu(_ m: NSMenu) {
+        m.removeAllItems()
+        let roots = controller.folders.roots
+        if roots.isEmpty {
+            m.addItem(withTitle: "No watched folders", action: nil, keyEquivalent: "").isEnabled = false
+        }
+        for r in roots {
+            let it = NSMenuItem(title: (r as NSString).abbreviatingWithTildeInPath, action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            for (title, sel) in [("Show in Finder", #selector(revealWatched(_:))),
+                                 ("Stop Watching", #selector(unwatch(_:))),
+                                 ("Stop Watching and Remove Its Tracks", #selector(unwatchAndRemove(_:)))] {
+                let s = sub.addItem(withTitle: title, action: sel, keyEquivalent: "")
+                s.target = self
+                s.representedObject = r
+            }
+            it.submenu = sub
+            m.addItem(it)
+        }
+        m.addItem(.separator())
+        m.addItem(withTitle: "Watch a Folder…", action: #selector(watchFolder(_:)), keyEquivalent: "").target = self
+        let rescan = m.addItem(withTitle: "Rescan Now", action: roots.isEmpty ? nil : #selector(rescanWatched(_:)), keyEquivalent: "")
+        rescan.target = self
+    }
+
+    @objc private func watchFolder(_ sender: Any?) {
+        let p = NSOpenPanel()
+        p.title = "Watch a Folder"
+        p.message = "OmniAmp adds this folder's music and keeps the playlist in sync when files are added, changed or deleted."
+        p.canChooseDirectories = true
+        p.canChooseFiles = false
+        p.allowsMultipleSelection = true
+        guard p.runModal() == .OK else { return }
+        p.urls.forEach(controller.folders.add)
+    }
+
+    @objc private func revealWatched(_ sender: NSMenuItem) {
+        if let r = sender.representedObject as? String { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: r) }
+    }
+    @objc private func unwatch(_ sender: NSMenuItem) {
+        if let r = sender.representedObject as? String { controller.folders.remove(r, removeTracks: false) }
+    }
+    @objc private func unwatchAndRemove(_ sender: NSMenuItem) {
+        if let r = sender.representedObject as? String { controller.folders.remove(r, removeTracks: true) }
+    }
+    @objc private func rescanWatched(_ sender: Any?) { controller.folders.rescanAll() }
 
     @objc private func openPlaylist(_ sender: Any?) {
         let p = NSOpenPanel()
@@ -493,6 +547,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 extension AppDelegate: NSMenuDelegate {
     /// Fills "Saved Playlists" with the files in the playlists folder.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu.title == "Watched Folders" {
+            fillWatchedMenu(menu)
+            return
+        }
         if menu.title == "Output" {
             fillOutputMenu(menu)
             return

@@ -20,6 +20,8 @@ final class PlaylistStore {
     private var pending: [(id: Int, info: TagInfo)] = []
     private var flushTimer: Timer?
     private var activeLoads = 0
+    /// Tracks whose tags are being read right now (so bursts of inserts don't read them twice).
+    private var inFlight = Set<Int>()
     private var loadStart = Date()
 
     var onTagLoadingFinished: (() -> Void)?
@@ -109,6 +111,29 @@ final class PlaylistStore {
         delegate?.playlistDidReload()
     }
 
+    /// Insert already-scanned tracks (from the folder watcher) and read their tags.
+    func insert(_ new: [Track], at position: Int) {
+        guard !new.isEmpty else { return }
+        let at = min(max(0, position), tracks.count)
+        tracks.insert(contentsOf: new, at: at)
+        ids.insert(contentsOf: new.map { _ in allocID() }, at: at)
+        indexByID = nil
+        delegate?.playlistDidReload()
+        loadMissingTags()
+    }
+
+    /// Files changed on disk: take the new size/mtime and read their tags again.
+    func refresh(_ updates: [(index: Int, size: Int64, mtime: Double)]) {
+        guard !updates.isEmpty else { return }
+        for u in updates where u.index < tracks.count {
+            tracks[u.index].size = u.size
+            tracks[u.index].mtime = u.mtime
+            tracks[u.index].tagsLoaded = false
+            inFlight.remove(ids[u.index])   // a read already under way may have seen the old file
+        }
+        loadMissingTags()
+    }
+
     /// Stable identity of the track at `i` (survives moves and removals).
     func id(at i: Int) -> Int { ids[i] }
 
@@ -140,8 +165,9 @@ final class PlaylistStore {
 
     private func loadMissingTags() {
         var work: [(id: Int, path: String, size: Int64)] = []
-        for (i, t) in tracks.enumerated() where !t.tagsLoaded {
+        for (i, t) in tracks.enumerated() where !t.tagsLoaded && !inFlight.contains(ids[i]) {
             work.append((ids[i], t.path, t.size))
+            inFlight.insert(ids[i])
         }
         guard !work.isEmpty else { return }
         activeLoads += 1
@@ -193,6 +219,7 @@ final class PlaylistStore {
         if indexByID == nil { rebuildIndex() }
         var changed = IndexSet()
         for (id, info) in batch {
+            inFlight.remove(id)
             guard let i = indexByID?[id] else { continue } // removed meanwhile
             tracks[i].title = info.title
             tracks[i].artist = info.artist

@@ -1,8 +1,8 @@
-// Renders omniamp.svg into Resources/AppIcon.icns (run: swift scripts/make-icon.swift).
+// Renders Resources/omniamp.svg into Resources/AppIcon.icns (run: swift scripts/make-icon.swift).
 import AppKit
 
 let root = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : ".")
-guard let svg = NSImage(contentsOf: root.appendingPathComponent("omniamp.svg")) else { fatalError("cannot read omniamp.svg") }
+guard let svg = NSImage(contentsOf: root.appendingPathComponent("Resources/omniamp.svg")) else { fatalError("cannot read Resources/omniamp.svg") }
 let iconset = FileManager.default.temporaryDirectory.appendingPathComponent("AppIcon.iconset")
 try? FileManager.default.removeItem(at: iconset)
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)

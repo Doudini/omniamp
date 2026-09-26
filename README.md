@@ -17,6 +17,7 @@ A small, fast, Winamp-inspired MP3/FLAC player for macOS, written in Swift with 
 - **Output device picker:** play to any output device, or follow the system default.
 - **Gapless playback** between tracks that share a sample format.
 - **10-band equalizer** with preamp and presets, available in both looks.
+- **Watched folders:** the playlist follows your music folders live. New files are added next to their folder-mates, deleted files are removed and edited files are re-tagged, and tracks you removed by hand stay removed. Your folder structure is never touched.
 - **Playlists:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists.
 - **Winamp keys** (`Z X C V B`, `J` to jump to a file), media keys and Now Playing.
 
@@ -27,7 +28,7 @@ Requires macOS 14+ and Xcode / Swift 6.
 ```sh
 swift build            # debug build
 swift test             # unit tests
-./scripts/make-app.sh  # release build → OmniAmp.app (icon: `swift scripts/make-icon.swift` after editing omniamp.svg)
+./scripts/make-app.sh  # release build → OmniAmp.app (icon: `swift scripts/make-icon.swift` after editing Resources/omniamp.svg)
 open OmniAmp.app
 ```
 

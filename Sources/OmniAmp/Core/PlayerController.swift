@@ -29,6 +29,8 @@ final class PlayerController {
     private(set) var playQueue: [Int] = []
     private var saveWorkItem: DispatchWorkItem?
     private(set) var eqSettings = Equalizer.load()
+    /// Watched folders feeding the playlist.
+    private(set) lazy var folders = FolderSync(controller: self)
 
     // Gapless: the track preloaded behind the current one, and whether we already tried for this track.
     private var preloaded: (index: Int, path: String)?
@@ -53,6 +55,7 @@ final class PlayerController {
         let d = UserDefaults.standard
         player.setOutputDevice(uid: d.string(forKey: "outputDeviceUID"))
         player.setBitPerfect(d.bool(forKey: "bitPerfect"), exclusive: d.bool(forKey: "exclusiveAccess"))
+        folders.rescanAll()   // pick up changes made while the app was closed
         setupRemoteCommands()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.maybePreloadNext() }
         RunLoop.main.add(t, forMode: .common)
@@ -171,6 +174,15 @@ final class PlayerController {
         invalidatePreload()
         let currentID = currentIndex.flatMap { idx.contains($0) ? nil : store.id(at: $0) }
         store.remove(at: idx)
+        remapCurrent(currentID)
+        scheduleSave()
+    }
+
+    /// Insert tracks that were already scanned (watched folders), keeping the current track.
+    func insertScanned(_ tracks: [Track], at position: Int) {
+        invalidatePreload()
+        let currentID = currentIndex.map { store.id(at: $0) }
+        store.insert(tracks, at: position)
         remapCurrent(currentID)
         scheduleSave()
     }
