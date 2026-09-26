@@ -8,6 +8,13 @@ A small, fast, Winamp-inspired MP3/FLAC player for macOS, written in Swift with 
 - **Two looks,** switchable from the View menu:
   - **Modern:** a resizable native window with an LCD-style display and the Hack Nerd Font.
   - **Classic:** loads real Winamp 2.x `.wsz` skins with pixel-exact main, equalizer and playlist windows at 1×–4× size.
+- **Formats:** MP3, FLAC, ALAC/AAC (M4A), WAV (including RF64), AIFF and CAF, all with fast built-in tag readers and bit depth shown (e.g. "FLAC 24-bit / 96 kHz").
+- **Bit-perfect mode** (Output menu):
+  - Switches the output device to each file's sample rate, so macOS doesn't resample.
+  - Bypasses the EQ and software volume; volume goes to the device's hardware control if it has one.
+  - Optional exclusive (hog) access.
+  - The device's original rate is restored on quit.
+- **Output device picker:** play to any output device, or follow the system default.
 - **Gapless playback** between tracks that share a sample format.
 - **10-band equalizer** with preamp and presets, available in both looks.
 - **Playlists:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists.

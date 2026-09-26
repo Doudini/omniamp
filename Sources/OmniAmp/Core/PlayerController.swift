@@ -48,7 +48,11 @@ final class PlayerController {
         player.onTrackFinished = { [weak self] in self?.advance() }
         player.onGaplessAdvance = { [weak self] in self?.gaplessAdvanced() }
         player.apply(eqSettings)
+        player.onOutputChange = { [weak self] in self?.ui?.optionsDidChange() }
         restore()
+        let d = UserDefaults.standard
+        player.setOutputDevice(uid: d.string(forKey: "outputDeviceUID"))
+        player.setBitPerfect(d.bool(forKey: "bitPerfect"), exclusive: d.bool(forKey: "exclusiveAccess"))
         setupRemoteCommands()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.maybePreloadNext() }
         RunLoop.main.add(t, forMode: .common)
@@ -89,11 +93,11 @@ final class PlayerController {
 
     private func restore() {
         let t0 = Date()
-        guard let cache = LibraryCache.load() else { player.volume = 0.8; return }
+        guard let cache = LibraryCache.load() else { player.softwareVolume = 0.8; return }
         NSLog("OmniAmp: restored %d tracks from cache in %.3fs", cache.tracks.count, Date().timeIntervalSince(t0))
         shuffle = cache.shuffle ?? false
         repeatAll = cache.repeatAll ?? true
-        player.volume = cache.volume ?? 0.8
+        player.softwareVolume = cache.volume ?? 0.8
         store.restore(cache.tracks)
         if let i = cache.currentIndex, i < store.tracks.count { currentIndex = i }
     }
@@ -111,7 +115,7 @@ final class PlayerController {
     }
 
     private func payload() -> LibraryCache.Payload {
-        .init(tracks: store.tracks, currentIndex: currentIndex, volume: player.volume, shuffle: shuffle, repeatAll: repeatAll)
+        .init(tracks: store.tracks, currentIndex: currentIndex, volume: player.softwareVolume, shuffle: shuffle, repeatAll: repeatAll)
     }
 
     // MARK: Adding / removing
@@ -440,6 +444,9 @@ final class PlayerController {
 
     // MARK: Equalizer
 
+    /// The EQ is on and actually in the signal path (bit-perfect mode bypasses it).
+    var eqActive: Bool { eqSettings.enabled && !player.bitPerfect }
+
     func setEQ(_ s: Equalizer.Settings) {
         eqSettings = s
         player.apply(s)
@@ -482,6 +489,42 @@ final class PlayerController {
     }
 
     func changeVolume(by delta: Float) { setVolume(player.volume + delta) }
+
+    // MARK: Output
+
+    /// nil = system default.
+    func setOutputDevice(uid: String?) {
+        UserDefaults.standard.set(uid, forKey: "outputDeviceUID")
+        player.setOutputDevice(uid: uid)
+        ui?.optionsDidChange()
+    }
+
+    func setBitPerfect(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: "bitPerfect")
+        invalidatePreload()
+        player.setBitPerfect(on, exclusive: player.exclusive)
+        ui?.optionsDidChange()
+    }
+
+    func setExclusive(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: "exclusiveAccess")
+        player.setBitPerfect(player.bitPerfect, exclusive: on)
+        ui?.optionsDidChange()
+    }
+
+    /// Short output status for the UI, e.g. "BIT-PERFECT 96 kHz" or "RESAMPLED 96→48 kHz".
+    var outputBadge: (text: String, ok: Bool)? {
+        guard player.bitPerfect else { return nil }
+        guard currentTrack != nil, player.sampleRate > 0 else { return ("BIT-PERFECT", true) }
+        func k(_ r: Double) -> String { r.truncatingRemainder(dividingBy: 1000) == 0 ? "\(Int(r / 1000))" : String(format: "%.1f", r / 1000) }
+        if player.isBitPerfectNow { return ("BIT-PERFECT \(k(player.sampleRate)) kHz", true) }
+        return ("RESAMPLED \(k(player.sampleRate))→\(k(player.deviceRate)) kHz", false)
+    }
+
+    func shutdown() {
+        saveNow()
+        player.shutdown()
+    }
 
     func toggleShuffle() {
         invalidatePreload()

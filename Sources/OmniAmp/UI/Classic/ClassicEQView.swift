@@ -42,7 +42,7 @@ final class ClassicEQView: SkinCanvasView {
         s.draw("eqmain", CGRect(x: 0, y: active ? 134 : 149, width: 275, height: 14), at: .zero, in: ctx)
         if pressedClose { s.draw("eqmain", CGRect(x: 0, y: 116, width: 9, height: 9), at: Self.closeRect.origin, in: ctx) }
 
-        let on = controller?.eqSettings.enabled ?? false
+        let on = controller?.eqActive ?? false
         let onX: CGFloat = pressedOn ? (on ? 187 : 128) : (on ? 69 : 10)
         s.draw("eqmain", CGRect(x: onX, y: 119, width: 26, height: 12), at: Self.onRect.origin, in: ctx)
         s.draw("eqmain", CGRect(x: 35, y: 119, width: 32, height: 12), at: CGPoint(x: 40, y: 18), in: ctx) // AUTO (off)

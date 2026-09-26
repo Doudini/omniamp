@@ -117,6 +117,7 @@ final class ModernSlider: NSControl {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
         isDragging = true
         value = valueAt(convert(event.locationInWindow, from: nil))
         onChange?(value)
@@ -130,6 +131,7 @@ final class ModernSlider: NSControl {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        guard isEnabled else { return }
         let d = Double(event.scrollingDeltaY + event.scrollingDeltaX) * (event.hasPreciseScrollingDeltas ? 0.002 : 0.03)
         guard d != 0 else { return }
         value = max(0, min(1, value + d))

@@ -167,11 +167,15 @@ final class ModernEQView: NSView {
     func refresh() {
         guard let c = controller else { return }
         let s = c.eqSettings
-        onButton.isOn = s.enabled
+        let bypassed = c.player.bitPerfect
+        onButton.isOn = s.enabled && !bypassed
+        onButton.label = bypassed ? "BYPASSED" : "EQ ON"
+        onButton.toolTip = bypassed ? "The EQ is bypassed in bit-perfect mode (Output menu)." : nil
+        onButton.needsDisplay = true
         preamp.value = Double(s.preamp / Equalizer.range)
         for (i, b) in bands.enumerated() { b.value = Double(s.bands[i] / Equalizer.range) }
         curve.bands = s.bands
-        curve.enabled = s.enabled
+        curve.enabled = s.enabled && !bypassed
     }
 
     @objc private func toggleOn() { changed { $0.enabled.toggle() } }

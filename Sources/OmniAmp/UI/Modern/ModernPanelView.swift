@@ -83,6 +83,7 @@ final class ModernPanelView: NSView {
     let spectrum = SpectrumView()
     let marquee = MarqueeView()
     private let infoLabel = NSTextField(labelWithString: "")
+    private let badge = NSTextField(labelWithString: "")
     private let volIcon = NSTextField(labelWithString: Fonts.Icon.volume)
     let seek = ModernSlider()
     let volume = ModernSlider()
@@ -113,7 +114,10 @@ final class ModernPanelView: NSView {
         addSubview(leftBox)
         addSubview(rightBox)
         [stateLabel, time, spectrum].forEach(leftBox.addSubview)
-        [marquee, infoLabel, volIcon, volume].forEach(rightBox.addSubview)
+        [marquee, infoLabel, volIcon, volume, badge].forEach(rightBox.addSubview)
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.font = Fonts.hack(9, bold: true)
+        badge.alignment = .right
 
         stateLabel.font = Theme.icon(10)
         stateLabel.textColor = Theme.green
@@ -185,6 +189,8 @@ final class ModernPanelView: NSView {
 
             infoLabel.leadingAnchor.constraint(equalTo: rightBox.leadingAnchor, constant: 8),
             infoLabel.topAnchor.constraint(equalTo: marquee.bottomAnchor, constant: 2),
+            badge.leadingAnchor.constraint(equalTo: rightBox.leadingAnchor, constant: 8),
+            badge.topAnchor.constraint(equalTo: infoLabel.bottomAnchor, constant: 1),
 
             volIcon.leadingAnchor.constraint(equalTo: rightBox.leadingAnchor, constant: 8),
             volIcon.centerYAnchor.constraint(equalTo: repeatButton.centerYAnchor),
@@ -249,6 +255,17 @@ final class ModernPanelView: NSView {
         shuffleButton.isOn = c.shuffle
         repeatButton.isOn = c.repeatAll
         if !volume.isDragging { volume.value = Double(c.player.volume) }
+        volume.alphaValue = c.player.volumeAdjustable ? 1 : 0.35
+        volume.isEnabled = c.player.volumeAdjustable
+        volume.toolTip = c.player.bitPerfect ? (c.player.volumeAdjustable ? "Device volume (bit-perfect mode)" : "Fixed at 100% in bit-perfect mode") : nil
+        if let b = c.outputBadge {
+            let glyph = b.ok ? "\u{25C6} " : "\u{25B2} "
+            badge.stringValue = glyph + b.text
+            badge.textColor = b.ok ? Theme.green : NSColor(calibratedRed: 1, green: 0.7, blue: 0.2, alpha: 1)
+            badge.toolTip = b.ok ? "Samples reach \(c.player.deviceName) unchanged." : "\(c.player.deviceName) does not support this sample rate; macOS resamples."
+        } else {
+            badge.stringValue = ""
+        }
     }
 
     // MARK: Actions

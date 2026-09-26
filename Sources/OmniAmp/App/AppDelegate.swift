@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var controller: PlayerController!
     private var look: LookController?
     private var keyMonitor: Any?
+    private var signalSources: [DispatchSourceSignal] = []
     private var viewMenu: NSMenu!
 
     enum Mode: String { case modern, classic }
@@ -31,6 +32,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showLook(ProcessInfo.processInfo.environment["OMNIAMP_MODE"].flatMap(Mode.init(rawValue:)) ?? mode)
         NSApp.activate(ignoringOtherApps: true)
         installKeyMonitor()
+        // Quit cleanly on SIGTERM/SIGINT too, so the audio device gets its sample rate and access back.
+        for sig in [SIGTERM, SIGINT] {
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { NSApp.terminate(nil) }
+            src.resume()
+            signalSources.append(src)
+        }
 
         // Files passed on the command line (useful for testing: OmniAmp /path/to/folder).
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
@@ -48,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        controller?.saveNow()
+        controller?.shutdown()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -144,6 +153,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         m.addItem(.separator())
         addPlaylistItems(to: m)
         m.addItem(eqMenuItem())
+        let outItem = NSMenuItem(title: "Output", action: nil, keyEquivalent: "")
+        let outMenu = NSMenu(title: "Output")
+        fillOutputMenu(outMenu)
+        outItem.submenu = outMenu
+        m.addItem(outItem)
         m.addItem(.separator())
         addLookItems(to: m)
         m.addItem(.separator())
@@ -335,6 +349,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         item("Remove Missing Files", #selector(removeDeadFiles(_:)), m)
     }
 
+    // MARK: Output
+
+    private func fillOutputMenu(_ m: NSMenu) {
+        m.removeAllItems()
+        let p = controller.player
+        let def = m.addItem(withTitle: "System Default", action: #selector(pickOutput(_:)), keyEquivalent: "")
+        def.target = self
+        def.state = p.selectedOutputUID == nil ? .on : .off
+        for d in AudioDevices.outputDevices() {
+            let it = m.addItem(withTitle: d.name, action: #selector(pickOutput(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = d.uid
+            it.state = p.selectedOutputUID == d.uid ? .on : .off
+            let rates = d.rates.map { $0.truncatingRemainder(dividingBy: 1000) == 0 ? "\(Int($0 / 1000))" : String(format: "%.1f", $0 / 1000) }
+            it.toolTip = rates.isEmpty ? nil : "Supports " + rates.joined(separator: ", ") + " kHz"
+        }
+        m.addItem(.separator())
+        let bp = m.addItem(withTitle: "Bit-Perfect Mode", action: #selector(toggleBitPerfect(_:)), keyEquivalent: "")
+        bp.target = self
+        bp.state = p.bitPerfect ? .on : .off
+        bp.toolTip = "Switch the device to each file's sample rate and bypass EQ and software volume."
+        let ex = m.addItem(withTitle: "Exclusive Access", action: p.bitPerfect ? #selector(toggleExclusive(_:)) : nil, keyEquivalent: "")
+        ex.target = self
+        ex.state = p.exclusive ? .on : .off
+        ex.toolTip = "Keep other apps and system sounds off the device while OmniAmp plays (bit-perfect mode only)."
+        m.addItem(.separator())
+        let rate = p.deviceRate
+        let info = m.addItem(withTitle: "\(p.deviceName) · \(rate > 0 ? String(format: rate.truncatingRemainder(dividingBy: 1000) == 0 ? "%.0f kHz" : "%.1f kHz", rate / 1000) : "—")",
+                             action: nil, keyEquivalent: "")
+        info.isEnabled = false
+    }
+
+    @objc private func pickOutput(_ sender: NSMenuItem) { controller.setOutputDevice(uid: sender.representedObject as? String) }
+    @objc private func toggleBitPerfect(_ sender: Any?) { controller.setBitPerfect(!controller.player.bitPerfect) }
+    @objc private func toggleExclusive(_ sender: Any?) { controller.setExclusive(!controller.player.exclusive) }
+
     // MARK: Equalizer
 
     private func eqMenuItem() -> NSMenuItem {
@@ -416,6 +466,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         plItem.submenu = plMenu
         bar.addItem(plItem)
 
+        let outItem = NSMenuItem()
+        let outMenu = NSMenu(title: "Output")
+        outMenu.delegate = self
+        outItem.submenu = outMenu
+        bar.addItem(outItem)
+
         let ctlItem = NSMenuItem()
         let ctlMenu = NSMenu(title: "Controls")
         ctlMenu.addItem(withTitle: "Volume Up", action: #selector(volUp(_:)), keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!)).target = self
@@ -437,6 +493,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 extension AppDelegate: NSMenuDelegate {
     /// Fills "Saved Playlists" with the files in the playlists folder.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu.title == "Output" {
+            fillOutputMenu(menu)
+            return
+        }
         if menu.title == "Playlist" {
             menu.removeAllItems()
             fillTrackItems(menu, withKeys: true)
