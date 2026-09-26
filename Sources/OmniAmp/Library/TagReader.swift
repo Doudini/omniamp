@@ -7,6 +7,7 @@ struct TagInfo: Equatable {
     var duration: Double?
     var bitrate: Int?
     var sampleRate: Int?
+    var bitDepth: Int?
 }
 
 /// Minimal, fast tag reader: reads only the head (and for ID3v1 the tail) of a file.
@@ -20,6 +21,24 @@ enum TagReader {
         let ext = (path as NSString).pathExtension.lowercased()
         if ext == "flac" || head.starts(with: [0x66, 0x4C, 0x61, 0x43]) {
             return parseFLAC(Array(head))
+        }
+        // Container formats may keep tags/indexes anywhere in the file, so they seek.
+        let magic = Array(head.prefix(12))
+        if magic.count == 12 {
+            let tag4 = String(decoding: magic[0..<4], as: UTF8.self), form = String(decoding: magic[8..<12], as: UTF8.self)
+            if (tag4 == "RIFF" || tag4 == "RF64") && form == "WAVE" { return ContainerTags.wav(fh, fileSize: fileSize) }
+            if tag4 == "FORM" && (form == "AIFF" || form == "AIFC") { return ContainerTags.aiff(fh, fileSize: fileSize) }
+            if String(decoding: magic[4..<8], as: UTF8.self) == "ftyp" { return ContainerTags.mp4(fh, fileSize: fileSize) }
+        }
+        if ext != "mp3" {
+            // Raw AAC, CAF and other odd files: let Core Audio work it out (slower, but rare).
+            var info = parseID3Tag(Array(head))
+            let ca = ContainerTags.coreAudioInfo(path: path)
+            info.duration = ca.duration
+            info.sampleRate = ca.sampleRate
+            info.bitDepth = ext == "aac" ? nil : ca.bitDepth
+            if let d = info.duration, d > 0 { info.bitrate = Int(Double(fileSize) * 8 / d / 1000) }
+            return info
         }
         var info = parseMP3(Array(head), fileSize: fileSize)
         if info.title == nil, fileSize > 128 {
@@ -52,6 +71,7 @@ enum TagReader {
                 let s = start + 10
                 let sr = Int(b[s]) << 12 | Int(b[s + 1]) << 4 | Int(b[s + 2]) >> 4
                 let total = Int64(b[s + 3] & 0x0F) << 32 | Int64(b[s + 4]) << 24 | Int64(b[s + 5]) << 16 | Int64(b[s + 6]) << 8 | Int64(b[s + 7])
+                info.bitDepth = Int((b[s + 2] & 0x01) << 4 | b[s + 3] >> 4) + 1
                 if sr > 0 {
                     info.sampleRate = sr
                     if total > 0 { info.duration = Double(total) / Double(sr) }
@@ -105,6 +125,15 @@ enum TagReader {
             parseID3v2(b, version: ver, flags: flags, tagEnd: min(10 + size, b.count), into: &info)
         }
         parseMPEGAudio(b, from: audioStart, fileSize: fileSize, into: &info)
+        return info
+    }
+
+    /// Parse a standalone ID3v2 tag (e.g. the "id3 " chunk inside WAV/AIFF).
+    static func parseID3Tag(_ b: [UInt8]) -> TagInfo {
+        var info = TagInfo()
+        guard b.count >= 10, b[0] == 0x49, b[1] == 0x44, b[2] == 0x33 else { return info }
+        let size = Int(b[6] & 0x7F) << 21 | Int(b[7] & 0x7F) << 14 | Int(b[8] & 0x7F) << 7 | Int(b[9] & 0x7F)
+        parseID3v2(b, version: b[3], flags: b[5], tagEnd: min(10 + size, b.count), into: &info)
         return info
     }
 

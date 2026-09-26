@@ -168,8 +168,12 @@ final class ClassicMainView: SkinCanvasView {
         drawMarquee(ctx, title)
 
         if st != .stopped {
-            if let k = c.currentKbps { s.drawText(String(String(min(k, 999)).suffix(3)).leftPad(3), at: CGPoint(x: 111, y: 43), in: ctx) }
-            if let k = c.currentKHz { s.drawText(String(String(k).suffix(2)).leftPad(2), at: CGPoint(x: 156, y: 43), in: ctx) }
+            // Winamp's fields are 3 and 2 characters wide; hi-res values get a compact form.
+            if let k = c.currentKbps {
+                let t = k < 1000 ? String(k) : (k < 10000 ? String(format: "%.1f", Double(k) / 1000) : "\(k / 1000)k")
+                s.drawText(String(t.prefix(3)).leftPad(3), at: CGPoint(x: 111, y: 43), in: ctx)
+            }
+            if let k = c.currentKHz { s.drawText((k < 100 ? String(k) : "hi").leftPad(2), at: CGPoint(x: 156, y: 43), in: ctx) }
         }
         let ch = st == .stopped ? 0 : c.player.channelCount
         s.draw("monoster", CGRect(x: 29, y: ch == 1 ? 0 : 12, width: 27, height: 12), at: CGPoint(x: 212, y: 41), in: ctx)

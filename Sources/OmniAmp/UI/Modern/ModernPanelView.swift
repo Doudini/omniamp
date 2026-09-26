@@ -237,9 +237,7 @@ final class ModernPanelView: NSView {
         guard let c = controller else { return }
         if let i = c.currentIndex, i < c.tracks.count {
             marquee.text = c.title(for: i)
-            let ch = c.player.channelCount == 1 ? "mono" : (c.player.channelCount >= 2 ? "stereo" : "")
-            infoLabel.stringValue = [c.currentKbps.map { "\($0) kbps" }, c.currentKHz.map { "\($0) kHz" }, ch]
-                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+            infoLabel.stringValue = c.formatDescription
         } else {
             marquee.text = "OmniAmp · drop a folder to start"
             infoLabel.stringValue = ""

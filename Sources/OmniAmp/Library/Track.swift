@@ -10,6 +10,7 @@ struct Track: Codable, Sendable {
     var duration: Double?
     var bitrate: Int?      // kbps
     var sampleRate: Int?   // Hz
+    var bitDepth: Int?     // bits per sample (lossless/PCM only)
     var tagsLoaded: Bool = false
 
     var url: URL { URL(fileURLWithPath: path) }

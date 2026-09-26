@@ -2,7 +2,7 @@ import Foundation
 
 /// Stage 1: walk folders/files and produce bare tracks (no tag reading).
 enum FolderScanner {
-    static let audioExtensions: Set<String> = ["mp3", "flac"]
+    static let audioExtensions: Set<String> = ["mp3", "flac", "m4a", "m4b", "mp4", "aac", "alac", "wav", "wave", "aif", "aiff", "aifc", "caf"]
 
     static func scan(_ urls: [URL]) -> [Track] {
         let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey]

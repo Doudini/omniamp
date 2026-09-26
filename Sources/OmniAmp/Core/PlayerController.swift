@@ -139,8 +139,8 @@ final class PlayerController {
         p.canChooseDirectories = true
         p.canChooseFiles = true
         p.allowsMultipleSelection = true
-        p.allowedContentTypes = [.mp3, .init(filenameExtension: "flac")!, .folder, .m3uPlaylist, .init(filenameExtension: "pls") ?? .m3uPlaylist,
-                                 .init(filenameExtension: "m3u8") ?? .m3uPlaylist]
+        p.allowedContentTypes = [.audio, .folder, .m3uPlaylist, .init(filenameExtension: "pls") ?? .m3uPlaylist,
+                                 .init(filenameExtension: "m3u8") ?? .m3uPlaylist, .init(filenameExtension: "flac") ?? .audio]
         let done: (NSApplication.ModalResponse) -> Void = { [weak self] r in
             if r == .OK { self?.add(p.urls) }
         }
@@ -515,6 +515,33 @@ final class PlayerController {
     var currentKHz: Int? {
         let sr = currentTrack?.sampleRate ?? Int(player.sampleRate)
         return sr > 0 ? Int((Double(sr) / 1000).rounded()) : nil
+    }
+
+    /// Human readable format, e.g. "FLAC 24-bit / 96 kHz" or "MP3 320 kbps · 44.1 kHz".
+    var formatDescription: String {
+        guard let t = currentTrack else { return "" }
+        let ext = (t.path as NSString).pathExtension.lowercased()
+        let lossless = t.bitDepth != nil
+        let codec: String
+        switch ext {
+        case "flac": codec = "FLAC"
+        case "mp3": codec = "MP3"
+        case "wav", "wave": codec = "WAV"
+        case "aif", "aiff", "aifc": codec = "AIFF"
+        case "m4a", "m4b", "mp4", "alac": codec = lossless ? "ALAC" : "AAC"
+        case "aac": codec = "AAC"
+        default: codec = ext.uppercased()
+        }
+        let sr = currentTrack?.sampleRate ?? Int(player.sampleRate)
+        let khz = sr > 0 ? (sr % 1000 == 0 ? "\(sr / 1000) kHz" : String(format: "%.1f kHz", Double(sr) / 1000)) : ""
+        let ch = player.channelCount == 1 ? "mono" : (player.channelCount == 2 ? "stereo" : (player.channelCount > 2 ? "\(player.channelCount) ch" : ""))
+        let parts: [String]
+        if lossless, let bits = t.bitDepth {
+            parts = ["\(codec) \(bits)-bit / \(khz)", currentKbps.map { "\($0) kbps" } ?? "", ch]
+        } else {
+            parts = ["\(codec) \(currentKbps.map { "\($0) kbps" } ?? "")", khz, ch]
+        }
+        return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     var statusText: String {
