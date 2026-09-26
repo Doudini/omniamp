@@ -1,0 +1,11 @@
+# Build output
+.build/
+OmniAmp.app/
+*.xcodeproj/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# Third-party Winamp skins (not ours to redistribute); drop your own .wsz in the repo root for local testing
+*.wsz
