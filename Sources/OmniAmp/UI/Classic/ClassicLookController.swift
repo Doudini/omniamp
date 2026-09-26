@@ -247,6 +247,15 @@ extension ClassicLookController: PlayerUI {
 
     func optionsDidChange() { mainView.needsDisplay = true; playlistView.needsDisplay = true; eqView.needsDisplay = true }
 
+    var selectedTrackIndices: IndexSet { playlistView.selectedTrackIndices }
+
+    /// Playlist menus, supplied by the app delegate.
+    func setPlaylistMenus(context: @escaping () -> NSMenu, misc: @escaping () -> NSMenu, list: @escaping () -> NSMenu) {
+        playlistView.contextMenu = context
+        playlistView.miscMenu = misc
+        playlistView.listMenu = list
+    }
+
     var selectedTrackIndex: Int? {
         guard let r = playlistView.selectedRow, r < controller.rowCount else { return nil }
         return controller.trackIndex(forRow: r)

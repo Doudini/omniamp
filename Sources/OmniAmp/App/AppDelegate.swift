@@ -62,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .modern:
             let w = ModernWindowController(controller: controller)
             w.onClose = { NSApp.terminate(nil) }
+            w.playlistMenu = { [weak self] in self?.makePlaylistContextMenu() ?? NSMenu() }
             look = w
         case .classic:
             look = makeClassicLook()
@@ -83,6 +84,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let look = ClassicLookController(controller: controller, skin: skin, scale: SkinLibrary.scale)
         look.menuProvider = { [weak self] in self?.makeOptionsMenu() ?? NSMenu() }
         look.onSkinDropped = { [weak self] u in self?.loadSkin(u) }
+        look.setPlaylistMenus(context: { [weak self] in self?.makePlaylistContextMenu() ?? NSMenu() },
+                              misc: { [weak self] in self?.makeSortMenu() ?? NSMenu() },
+                              list: { [weak self] in self?.makeListMenu() ?? NSMenu() })
         return look
     }
 
@@ -203,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case "v": c.stop()
             case "b": c.next()
             case "j": self.look?.focusFilter()
+            case "q": self.queueSelected(nil)
             case " ": c.togglePlayPause()
             default:
                 switch ev.keyCode {
@@ -251,6 +256,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func loadSavedPlaylist(_ sender: NSMenuItem) {
         if let u = sender.representedObject as? URL { controller.loadPlaylist(u) }
+    }
+
+    // MARK: Playlist editing
+
+    @objc private func playSelectedTrack(_ sender: Any?) {
+        if let i = look?.selectedTrackIndex { controller.play(index: i) }
+    }
+    @objc private func queueSelected(_ sender: Any?) { controller.toggleQueue(trackIndices: look?.selectedTrackIndices ?? []) }
+    @objc private func clearQueue(_ sender: Any?) { controller.clearQueue() }
+    @objc private func removeSelected(_ sender: Any?) { controller.remove(trackIndices: look?.selectedTrackIndices ?? []) }
+    @objc private func reversePlaylist(_ sender: Any?) { controller.reverse() }
+    @objc private func randomizePlaylist(_ sender: Any?) { controller.randomize() }
+    @objc private func sortPlaylist(_ sender: NSMenuItem) {
+        if let k = PlayerController.SortKey(rawValue: sender.representedObject as? String ?? "") { controller.sort(by: k) }
+    }
+    @objc private func revealSelected(_ sender: Any?) {
+        let urls = (look?.selectedTrackIndices ?? []).map { controller.tracks[$0].url }
+        if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+    }
+    @objc private func removeDeadFiles(_ sender: Any?) {
+        controller.removeDeadFiles { n in
+            let a = NSAlert()
+            a.messageText = n == 0 ? "No missing files found." : "Removed \(n) missing file\(n == 1 ? "" : "s") from the playlist."
+            a.runModal()
+        }
+    }
+
+    private func item(_ title: String, _ action: Selector, _ m: NSMenu, key: String = "", mods: NSEvent.ModifierFlags = .command) {
+        let it = m.addItem(withTitle: title, action: action, keyEquivalent: key)
+        it.keyEquivalentModifierMask = mods
+        it.target = self
+    }
+
+    /// Sort / reverse / randomize (also the classic MISC button).
+    private func makeSortMenu() -> NSMenu {
+        let m = NSMenu(title: "Sort")
+        for k in PlayerController.SortKey.allCases {
+            let it = m.addItem(withTitle: "Sort by \(k.rawValue)", action: #selector(sortPlaylist(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = k.rawValue
+        }
+        m.addItem(.separator())
+        item("Reverse List", #selector(reversePlaylist(_:)), m)
+        item("Randomize List", #selector(randomizePlaylist(_:)), m)
+        return m
+    }
+
+    /// New / open / save (the classic LIST button).
+    private func makeListMenu() -> NSMenu {
+        let m = NSMenu(title: "List")
+        item("New Playlist (Clear)", #selector(clear(_:)), m)
+        addPlaylistItems(to: m)
+        m.addItem(.separator())
+        item("Remove Missing Files", #selector(removeDeadFiles(_:)), m)
+        return m
+    }
+
+    /// Right-click on playlist rows.
+    private func makePlaylistContextMenu() -> NSMenu {
+        let m = NSMenu(title: "Track")
+        fillTrackItems(m, withKeys: false)
+        return m
+    }
+
+    private func fillTrackItems(_ m: NSMenu, withKeys: Bool) {
+        let sel = look?.selectedTrackIndices ?? []
+        let allQueued = !sel.isEmpty && sel.allSatisfy { controller.queuePosition(of: $0) != nil }
+        item("Play", #selector(playSelectedTrack(_:)), m)
+        item(allQueued ? "Unqueue  (Q)" : "Queue Next  (Q)", #selector(queueSelected(_:)), m)
+        if !controller.playQueue.isEmpty { item("Clear Queue (\(controller.playQueue.count))", #selector(clearQueue(_:)), m) }
+        item("Remove", #selector(removeSelected(_:)), m)
+        item("Show in Finder", #selector(revealSelected(_:)), m, key: withKeys ? "r" : "")
+        m.addItem(.separator())
+        let sortItem = NSMenuItem(title: "Sort", action: nil, keyEquivalent: "")
+        sortItem.submenu = makeSortMenu()
+        m.addItem(sortItem)
+        item("Remove Missing Files", #selector(removeDeadFiles(_:)), m)
     }
 
     // MARK: Equalizer
@@ -328,6 +410,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         bar.addItem(viewItem)
         rebuildViewMenu()
 
+        let plItem = NSMenuItem()
+        let plMenu = NSMenu(title: "Playlist")
+        plMenu.delegate = self // rebuilt when opened
+        plItem.submenu = plMenu
+        bar.addItem(plItem)
+
         let ctlItem = NSMenuItem()
         let ctlMenu = NSMenu(title: "Controls")
         ctlMenu.addItem(withTitle: "Volume Up", action: #selector(volUp(_:)), keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!)).target = self
@@ -349,6 +437,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 extension AppDelegate: NSMenuDelegate {
     /// Fills "Saved Playlists" with the files in the playlists folder.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu.title == "Playlist" {
+            menu.removeAllItems()
+            fillTrackItems(menu, withKeys: true)
+            return
+        }
         guard menu.title == "Saved Playlists" else { return }
         menu.removeAllItems()
         let saved = PlaylistFile.saved

@@ -38,8 +38,9 @@ final class PlaylistStore {
         loadMissingTags()
     }
 
-    /// Stage 1 on a background thread, then append and start stage 2.
-    func add(urls: [URL], completion: ((Int) -> Void)? = nil) {
+    /// Stage 1 on a background thread, then insert (append if `at` is nil) and start stage 2.
+    /// Completion gets the insertion index and the number of tracks added.
+    func add(urls: [URL], at position: Int? = nil, completion: ((Int, Int) -> Void)? = nil) {
         let t0 = Date()
         let cached = Dictionary(tracks.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
         DispatchQueue.global(qos: .userInitiated).async {
@@ -52,12 +53,13 @@ final class PlaylistStore {
             }
             let scanTime = Date().timeIntervalSince(t0)
             DispatchQueue.main.async {
-                self.tracks.append(contentsOf: found)
-                self.ids.append(contentsOf: found.map { _ in self.allocID() })
+                let at = min(max(0, position ?? self.tracks.count), self.tracks.count)
+                self.tracks.insert(contentsOf: found, at: at)
+                self.ids.insert(contentsOf: found.map { _ in self.allocID() }, at: at)
                 self.indexByID = nil
                 NSLog("OmniAmp: scanned %d files in %.3fs", found.count, scanTime)
                 self.delegate?.playlistDidReload()
-                completion?(found.count)
+                completion?(at, found.count)
                 self.loadMissingTags()
             }
         }
@@ -65,12 +67,61 @@ final class PlaylistStore {
 
     func remove(at indexes: IndexSet) {
         guard !indexes.isEmpty else { return }
-        for i in indexes.reversed() where i < tracks.count {
-            tracks.remove(at: i)
-            ids.remove(at: i)
+        // One pass, so removing thousands of rows stays fast.
+        var keptTracks: [Track] = [], keptIDs: [Int] = []
+        keptTracks.reserveCapacity(tracks.count); keptIDs.reserveCapacity(ids.count)
+        for i in tracks.indices where !indexes.contains(i) {
+            keptTracks.append(tracks[i])
+            keptIDs.append(ids[i])
         }
+        tracks = keptTracks
+        ids = keptIDs
         indexByID = nil
         delegate?.playlistDidReload()
+    }
+
+    /// Move the tracks at `indexes` so they start at `destination` (an index in the list *before* the move).
+    /// Returns the new indexes of the moved tracks.
+    @discardableResult
+    func move(_ indexes: IndexSet, to destination: Int) -> IndexSet {
+        let valid = indexes.filteredIndexSet { $0 < tracks.count }
+        guard !valid.isEmpty else { return [] }
+        let movedTracks = valid.map { tracks[$0] }, movedIDs = valid.map { ids[$0] }
+        let dest = destination - valid.count(in: 0..<min(destination, tracks.count))
+        var t = tracks, d = ids
+        for i in valid.reversed() { t.remove(at: i); d.remove(at: i) }
+        let at = max(0, min(dest, t.count))
+        t.insert(contentsOf: movedTracks, at: at)
+        d.insert(contentsOf: movedIDs, at: at)
+        tracks = t
+        ids = d
+        indexByID = nil
+        delegate?.playlistDidReload()
+        return IndexSet(integersIn: at..<(at + valid.count))
+    }
+
+    /// Reorder the whole list by a permutation of the current indexes.
+    func reorder(_ order: [Int]) {
+        guard order.count == tracks.count else { return }
+        tracks = order.map { tracks[$0] }
+        ids = order.map { ids[$0] }
+        indexByID = nil
+        delegate?.playlistDidReload()
+    }
+
+    /// Stable identity of the track at `i` (survives moves and removals).
+    func id(at i: Int) -> Int { ids[i] }
+
+    func index(ofID id: Int) -> Int? {
+        if indexByID == nil { rebuildIndex() }
+        return indexByID?[id]
+    }
+
+    private func rebuildIndex() {
+        var m: [Int: Int] = [:]
+        m.reserveCapacity(ids.count)
+        for (i, id) in ids.enumerated() { m[id] = i }
+        indexByID = m
     }
 
     func clear() {
@@ -139,12 +190,7 @@ final class PlaylistStore {
         pendingLock.unlock()
         guard !batch.isEmpty else { return }
 
-        if indexByID == nil {
-            var m: [Int: Int] = [:]
-            m.reserveCapacity(ids.count)
-            for (i, id) in ids.enumerated() { m[id] = i }
-            indexByID = m
-        }
+        if indexByID == nil { rebuildIndex() }
         var changed = IndexSet()
         for (id, info) in batch {
             guard let i = indexByID?[id] else { continue } // removed meanwhile

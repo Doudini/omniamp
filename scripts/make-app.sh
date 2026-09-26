@@ -7,6 +7,7 @@ APP=OmniAmp.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/OmniAmp" "$APP/Contents/MacOS/OmniAmp"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 mkdir -p "$APP/Contents/Resources/Fonts"
 cp fonts/HackNerdFont-*.woff2 fonts/LICENSE-Hack.md fonts/LICENSE-NerdFonts.txt "$APP/Contents/Resources/Fonts/"
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -18,6 +19,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>OmniAmp</string>
   <key>CFBundleIdentifier</key><string>com.microbot.omniamp</string>
   <key>CFBundleExecutable</key><string>OmniAmp</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>1</string>

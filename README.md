@@ -20,7 +20,7 @@ Requires macOS 14+ and Xcode / Swift 6.
 ```sh
 swift build            # debug build
 swift test             # unit tests
-./scripts/make-app.sh  # release build → OmniAmp.app
+./scripts/make-app.sh  # release build → OmniAmp.app (icon: `swift scripts/make-icon.swift` after editing omniamp.svg)
 open OmniAmp.app
 ```
 

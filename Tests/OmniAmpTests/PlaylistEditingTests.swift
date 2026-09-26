@@ -1,0 +1,93 @@
+import XCTest
+@testable import OmniAmp
+
+final class PlaylistEditingTests: XCTestCase {
+    private var cacheDir: URL!
+
+    override func setUp() {
+        // Keep the controller away from the real playlist cache.
+        cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-edit-\(UUID().uuidString)")
+        setenv("OMNIAMP_CACHE_DIR", cacheDir.path, 1)
+    }
+
+    override func tearDown() {
+        unsetenv("OMNIAMP_CACHE_DIR")
+        try? FileManager.default.removeItem(at: cacheDir)
+    }
+
+    private func track(_ name: String, artist: String? = nil, duration: Double? = nil) -> Track {
+        var t = Track(path: "/nonexistent/\(name).mp3", size: 1, mtime: 0)
+        t.title = name
+        t.artist = artist
+        t.duration = duration
+        t.tagsLoaded = true
+        return t
+    }
+
+    private func names(_ s: PlaylistStore) -> [String] { s.tracks.map { $0.title ?? "" } }
+
+    func testStoreMoveDown() {
+        let s = PlaylistStore()
+        s.restore(["a", "b", "c", "d", "e"].map { track($0) })
+        let moved = s.move([0, 1], to: 4)            // a,b before e
+        XCTAssertEqual(names(s), ["c", "d", "a", "b", "e"])
+        XCTAssertEqual(moved, IndexSet(2...3))
+    }
+
+    func testStoreMoveUpNonContiguous() {
+        let s = PlaylistStore()
+        s.restore(["a", "b", "c", "d", "e"].map { track($0) })
+        let moved = s.move([2, 4], to: 0)
+        XCTAssertEqual(names(s), ["c", "e", "a", "b", "d"])
+        XCTAssertEqual(moved, IndexSet(0...1))
+    }
+
+    func testIDsSurviveMoves() {
+        let s = PlaylistStore()
+        s.restore(["a", "b", "c"].map { track($0) })
+        let idC = s.id(at: 2)
+        s.move([2], to: 0)
+        XCTAssertEqual(s.index(ofID: idC), 0)
+        s.remove(at: [1])
+        XCTAssertEqual(s.index(ofID: idC), 0)
+    }
+
+    func testQueueFollowsTracksThroughReorder() {
+        let c = PlayerController()
+        c.store.restore(["a", "b", "c", "d"].map { track($0) })
+        c.toggleQueue(trackIndices: [3])
+        c.toggleQueue(trackIndices: [1])
+        XCTAssertEqual(c.queuePosition(of: 3), 1)
+        XCTAssertEqual(c.queuePosition(of: 1), 2)
+        c.reverse()                                   // d c b a
+        XCTAssertEqual(c.queuePosition(of: 0), 1)     // d still first in queue
+        XCTAssertEqual(c.queuePosition(of: 2), 2)     // b second
+        c.toggleQueue(trackIndices: [0])              // unqueue d
+        XCTAssertEqual(c.queuePosition(of: 2), 1)
+        XCTAssertNil(c.queuePosition(of: 0))
+    }
+
+    func testShiftClampsAtEdges() {
+        let c = PlayerController()
+        c.store.restore(["a", "b", "c"].map { track($0) })
+        XCTAssertEqual(c.shift(trackIndices: [0], by: -1), [0])  // already at top
+        XCTAssertEqual(c.shift(trackIndices: [0], by: 5), [2])   // clamps to bottom
+        XCTAssertEqual(names(c.store), ["b", "c", "a"])
+    }
+
+    func testSortByArtistPutsUnknownLast() {
+        let c = PlayerController()
+        c.store.restore([track("x"), track("y", artist: "Zappa"), track("z", artist: "ABBA")])
+        c.sort(by: .artist)
+        XCTAssertEqual(names(c.store), ["z", "y", "x"])
+        c.sort(by: .title)
+        XCTAssertEqual(names(c.store), ["x", "y", "z"])
+    }
+
+    func testSortByDuration() {
+        let c = PlayerController()
+        c.store.restore([track("long", duration: 300), track("none"), track("short", duration: 60)])
+        c.sort(by: .duration)
+        XCTAssertEqual(names(c.store), ["short", "long", "none"])
+    }
+}

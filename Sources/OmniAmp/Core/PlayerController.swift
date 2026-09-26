@@ -9,6 +9,8 @@ protocol PlayerUI: AnyObject {
     func optionsDidChange()
     /// Track index under the UI's selection, used by Play when nothing is loaded.
     var selectedTrackIndex: Int? { get }
+    /// All selected tracks (for queue/remove actions from menus and keys).
+    var selectedTrackIndices: IndexSet { get }
     func focusFilter()
 }
 
@@ -21,13 +23,16 @@ final class PlayerController {
     private(set) var currentIndex: Int?
     private(set) var shuffle = false
     private(set) var repeatAll = true
+    /// Previously played tracks (stable track IDs), for Previous in shuffle mode.
     private var history: [Int] = []
+    /// Tracks the user queued with Q (stable track IDs), played before the normal order.
+    private(set) var playQueue: [Int] = []
     private var saveWorkItem: DispatchWorkItem?
     private(set) var eqSettings = Equalizer.load()
 
-    // Gapless: the track queued behind the current one, and whether we already tried for this track.
-    private var queued: (index: Int, path: String)?
-    private var queueAttempted = false
+    // Gapless: the track preloaded behind the current one, and whether we already tried for this track.
+    private var preloaded: (index: Int, path: String)?
+    private var preloadAttempted = false
     private var gaplessTimer: Timer?
 
     /// Indices into store.tracks currently shown (nil = no filter).
@@ -45,7 +50,7 @@ final class PlayerController {
         player.apply(eqSettings)
         restore()
         setupRemoteCommands()
-        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.maybeQueueNext() }
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.maybePreloadNext() }
         RunLoop.main.add(t, forMode: .common)
         gaplessTimer = t
     }
@@ -63,7 +68,7 @@ final class PlayerController {
     }
 
     func setFilter(_ query: String) {
-        invalidateQueued()
+        invalidatePreload()
         filterQuery = query
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if q.isEmpty {
@@ -111,15 +116,19 @@ final class PlayerController {
 
     // MARK: Adding / removing
 
-    func add(_ urls: [URL]) {
+    /// Add files/folders/playlists; `at` inserts at a track index (nil = append).
+    func add(_ urls: [URL], at position: Int? = nil) {
         let t0 = Date()
-        store.add(urls: urls) { [weak self] n in
+        if position != nil { invalidatePreload() }
+        let currentID = currentIndex.map { store.id(at: $0) }
+        store.add(urls: urls, at: position) { [weak self] start, n in
             guard let self else { return }
+            self.remapCurrent(currentID)
             NSLog("OmniAmp: %d rows visible after %.3fs", n, Date().timeIntervalSince(t0))
             // Start playing if nothing is loaded yet.
             let autoplay = ProcessInfo.processInfo.environment["OMNIAMP_NO_AUTOPLAY"] == nil
             if autoplay, n > 0, self.player.state == .stopped, self.currentIndex == nil {
-                self.play(index: self.store.tracks.count - n)
+                self.play(index: start)
             }
             self.scheduleSave()
         }
@@ -139,11 +148,12 @@ final class PlayerController {
     }
 
     func clear() {
-        invalidateQueued()
+        invalidatePreload()
         player.stop()
         let old = currentIndex
         currentIndex = nil
         history.removeAll()
+        playQueue.removeAll()
         filterQuery = ""
         visible = nil
         store.clear()
@@ -154,14 +164,136 @@ final class PlayerController {
 
     func remove(trackIndices idx: IndexSet) {
         guard !idx.isEmpty else { return }
-        invalidateQueued()
-        if let c = currentIndex {
-            if idx.contains(c) { currentIndex = nil }
-            else { currentIndex = c - idx.count(in: 0..<c) }
-        }
-        history.removeAll()
+        invalidatePreload()
+        let currentID = currentIndex.flatMap { idx.contains($0) ? nil : store.id(at: $0) }
         store.remove(at: idx)
+        remapCurrent(currentID)
         scheduleSave()
+    }
+
+    /// After the list changed, find the current track again by its stable ID.
+    private func remapCurrent(_ id: Int?) {
+        let old = currentIndex
+        currentIndex = id.flatMap { store.index(ofID: $0) }
+        if old != currentIndex { ui?.currentTrackDidChange(old: nil, new: currentIndex) }
+    }
+
+    // MARK: Reordering
+
+    /// Move tracks so they start at `destination` (a track index before the move). Returns their new indexes.
+    @discardableResult
+    func move(trackIndices idx: IndexSet, to destination: Int) -> IndexSet {
+        guard visible == nil else { return idx } // no reordering while filtered
+        invalidatePreload()
+        let currentID = currentIndex.map { store.id(at: $0) }
+        let moved = store.move(idx, to: destination)
+        remapCurrent(currentID)
+        scheduleSave()
+        return moved
+    }
+
+    /// Move a block of tracks up/down by `delta` rows (⌥↑/⌥↓, and dragging in the classic playlist).
+    @discardableResult
+    func shift(trackIndices idx: IndexSet, by delta: Int) -> IndexSet {
+        guard let first = idx.first, let last = idx.last, delta != 0 else { return idx }
+        let d = delta < 0 ? max(delta, -first) : min(delta, store.tracks.count - 1 - last)
+        guard d != 0 else { return idx }
+        return move(trackIndices: idx, to: d < 0 ? first + d : last + 1 + d)
+    }
+
+    enum SortKey: String, CaseIterable {
+        case title = "Title", artist = "Artist", album = "Album", fileName = "File Name", path = "Path and File Name", duration = "Duration"
+    }
+
+    func sort(by key: SortKey) {
+        let t = store.tracks
+        let order: [Int]
+        if key == .duration {
+            order = t.indices.sorted { (t[$0].duration ?? .infinity, $0) < (t[$1].duration ?? .infinity, $1) }
+        } else {
+            // Tracks missing the field sort last.
+            let keys: [String] = t.map { tr in
+                switch key {
+                case .title: return tr.title ?? tr.fileStem
+                case .artist: return "\(tr.artist ?? "\u{10FFFF}") \(tr.album ?? "") \(tr.path)"
+                case .album: return "\(tr.album ?? "\u{10FFFF}") \(tr.path)"
+                case .fileName: return (tr.path as NSString).lastPathComponent
+                default: return tr.path
+                }
+            }
+            order = t.indices.sorted {
+                let r = keys[$0].localizedStandardCompare(keys[$1])
+                return r == .orderedSame ? $0 < $1 : r == .orderedAscending
+            }
+        }
+        apply(order: order)
+    }
+
+    func reverse() { apply(order: Array(store.tracks.indices.reversed())) }
+    func randomize() { apply(order: Array(store.tracks.indices).shuffled()) }
+
+    private func apply(order: [Int]) {
+        invalidatePreload()
+        let currentID = currentIndex.map { store.id(at: $0) }
+        store.reorder(order)
+        remapCurrent(currentID)
+        scheduleSave()
+    }
+
+    /// Remove tracks whose files no longer exist. Calls back with the number removed.
+    func removeDeadFiles(completion: ((Int) -> Void)? = nil) {
+        let paths = store.tracks.map(\.path)
+        let ids = store.tracks.indices.map { store.id(at: $0) }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fm = FileManager.default
+            let dead = paths.indices.filter { !fm.fileExists(atPath: paths[$0]) }.map { ids[$0] }
+            DispatchQueue.main.async {
+                let idx = IndexSet(dead.compactMap { self.store.index(ofID: $0) })
+                if !idx.isEmpty { self.remove(trackIndices: idx) }
+                completion?(idx.count)
+            }
+        }
+    }
+
+    // MARK: Play queue
+
+    /// 1-based position in the play queue, or nil.
+    func queuePosition(of trackIndex: Int) -> Int? {
+        guard !playQueue.isEmpty, trackIndex < store.tracks.count else { return nil }
+        return playQueue.firstIndex(of: store.id(at: trackIndex)).map { $0 + 1 }
+    }
+
+    /// Q: queue the tracks, or unqueue them if they are all queued already.
+    func toggleQueue(trackIndices idx: IndexSet) {
+        let ids = idx.filter { $0 < store.tracks.count }.map { store.id(at: $0) }
+        guard !ids.isEmpty else { return }
+        if ids.allSatisfy(playQueue.contains) {
+            playQueue.removeAll { ids.contains($0) }
+        } else {
+            playQueue += ids.filter { !playQueue.contains($0) }
+        }
+        invalidatePreload()
+        ui?.playlistDidReload()
+    }
+
+    func clearQueue() {
+        playQueue.removeAll()
+        invalidatePreload()
+        ui?.playlistDidReload()
+    }
+
+    /// A track started: take it out of the play queue.
+    private func dequeue(_ index: Int) {
+        guard !playQueue.isEmpty, index < store.tracks.count,
+              let i = playQueue.firstIndex(of: store.id(at: index)) else { return }
+        playQueue.remove(at: i)
+        ui?.playlistDidReload()
+    }
+
+    private func pushHistory(_ index: Int) {
+        guard index < store.tracks.count else { return }
+        history.append(store.id(at: index))
+        if history.count > 500 { history.removeFirst() }
     }
 
     // MARK: Playback
@@ -169,13 +301,11 @@ final class PlayerController {
     func play(index: Int, recordHistory: Bool = true) {
         guard index >= 0, index < store.tracks.count else { return }
         let old = currentIndex
-        if recordHistory, let o = old, o != index {
-            history.append(o)
-            if history.count > 500 { history.removeFirst() }
-        }
+        if recordHistory, let o = old, o != index { pushHistory(o) }
         currentIndex = index
-        queued = nil
-        queueAttempted = false
+        dequeue(index)
+        preloaded = nil
+        preloadAttempted = false
         let ok = player.play(url: store.tracks[index].url)
         ui?.currentTrackDidChange(old: old, new: index)
         updateNowPlaying()
@@ -231,7 +361,9 @@ final class PlayerController {
     func previous() {
         guard !store.tracks.isEmpty else { return }
         if player.currentTime > 3, let c = currentIndex { play(index: c, recordHistory: false); return }
-        if shuffle, let h = history.popLast() { play(index: h, recordHistory: false); return }
+        while shuffle, let h = history.popLast() {
+            if let i = store.index(ofID: h) { play(index: i, recordHistory: false); return }
+        }
         guard let c = currentIndex else { play(index: 0); return }
         let order = playOrder()
         if let pos = order.firstIndex(of: c) {
@@ -247,6 +379,11 @@ final class PlayerController {
 
     /// The track that should follow the current one (nil = stop). Shuffle picks randomly.
     private func nextTarget() -> Int? {
+        // The play queue wins over shuffle/order; drop queued tracks that were removed.
+        while let id = playQueue.first {
+            if let i = store.index(ofID: id) { return i }
+            playQueue.removeFirst()
+        }
         let order = playOrder()
         guard !order.isEmpty else { return nil }
         if shuffle, order.count > 1 {
@@ -268,36 +405,37 @@ final class PlayerController {
     // MARK: Gapless
 
     /// Near the end of a track, schedule the next one behind it on the audio engine.
-    private func maybeQueueNext() {
-        guard player.state == .playing, !queueAttempted, !player.hasQueuedNext,
+    private func maybePreloadNext() {
+        guard player.state == .playing, !preloadAttempted, !player.hasQueuedNext,
               player.duration > 0, player.remaining < 8 else { return }
-        queueAttempted = true
+        preloadAttempted = true
         guard let t = nextTarget(), t != currentIndex else { return }
         let track = store.tracks[t]
-        if player.queueNext(url: track.url) { queued = (t, track.path) }
+        if player.queueNext(url: track.url) { preloaded = (t, track.path) }
     }
 
     private func gaplessAdvanced() {
         let old = currentIndex
         var new: Int?
-        if let q = queued {
+        if let q = preloaded {
             if q.index < store.tracks.count, store.tracks[q.index].path == q.path { new = q.index }
             else { new = store.tracks.firstIndex { $0.path == q.path } }
         }
-        queued = nil
-        queueAttempted = false
-        if let o = old, o != new { history.append(o); if history.count > 500 { history.removeFirst() } }
+        preloaded = nil
+        preloadAttempted = false
+        if let o = old, o != new { pushHistory(o) }
         currentIndex = new
+        if let n = new { dequeue(n) }
         NSLog("OmniAmp: gapless advance to #%d", (new ?? -2) + 1)
         ui?.currentTrackDidChange(old: old, new: new)
         updateNowPlaying()
     }
 
-    /// The queued track may no longer be the right one (order/filter/shuffle changed).
-    private func invalidateQueued() {
+    /// The preloaded track may no longer be the right one (order/filter/shuffle changed).
+    private func invalidatePreload() {
         if player.hasQueuedNext { player.cancelQueuedNext() }
-        queued = nil
-        queueAttempted = false
+        preloaded = nil
+        preloadAttempted = false
     }
 
     // MARK: Equalizer
@@ -346,14 +484,14 @@ final class PlayerController {
     func changeVolume(by delta: Float) { setVolume(player.volume + delta) }
 
     func toggleShuffle() {
-        invalidateQueued()
+        invalidatePreload()
         shuffle.toggle()
         history.removeAll()
         ui?.optionsDidChange()
     }
 
     func toggleRepeat() {
-        invalidateQueued()
+        invalidatePreload()
         repeatAll.toggle()
         ui?.optionsDidChange()
     }

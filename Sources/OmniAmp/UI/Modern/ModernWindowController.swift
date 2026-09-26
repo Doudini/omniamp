@@ -18,6 +18,9 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     private var uiTimer: Timer?
     private var tick = 0
     var onClose: (() -> Void)?
+    /// Right-click menu for the playlist (built by the app delegate).
+    var playlistMenu: (() -> NSMenu)?
+    private static let rowType = NSPasteboard.PasteboardType("com.omniamp.rows")
 
     private static let colNum = NSUserInterfaceItemIdentifier("num")
     private static let colTitle = NSUserInterfaceItemIdentifier("title")
@@ -87,12 +90,16 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         table.doubleAction = #selector(tableDoubleClick)
         table.onActivate = { [weak self] in self?.playSelected() }
         table.onDelete = { [weak self] in self?.removeSelected() }
-        table.registerForDraggedTypes([.fileURL])
+        table.onMove = { [weak self] d in self?.moveSelection(by: d) }
+        table.contextMenu = { [weak self] in self?.playlistMenu?() }
+        table.registerForDraggedTypes([.fileURL, Self.rowType])
+        table.setDraggingSourceOperationMask(.move, forLocal: true)
+        table.draggingDestinationFeedbackStyle = .gap
 
         // Only the title column stretches with the window.
         let cNum = NSTableColumn(identifier: Self.colNum); cNum.width = 52; cNum.resizingMask = []
         let cTitle = NSTableColumn(identifier: Self.colTitle); cTitle.width = 300; cTitle.resizingMask = .autoresizingMask
-        let cTime = NSTableColumn(identifier: Self.colTime); cTime.width = 52; cTime.resizingMask = []
+        let cTime = NSTableColumn(identifier: Self.colTime); cTime.width = 84; cTime.resizingMask = []
         [cNum, cTitle, cTime].forEach(table.addTableColumn)
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
 
@@ -218,6 +225,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         updateStatus()
     }
 
+    var selectedTrackIndices: IndexSet {
+        IndexSet(table.selectedRowIndexes.filter { $0 < controller.rowCount }.map { controller.trackIndex(forRow: $0) })
+    }
+
     var selectedTrackIndex: Int? {
         let r = table.selectedRow
         return r >= 0 && r < controller.rowCount ? controller.trackIndex(forRow: r) : nil
@@ -251,6 +262,13 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         controller.remove(trackIndices: idx)
         let n = controller.rowCount
         if n > 0 { table.selectRowIndexes([min(firstRow, n - 1)], byExtendingSelection: false) }
+    }
+
+    private func moveSelection(by delta: Int) {
+        guard controller.visible == nil else { NSSound.beep(); return }
+        let moved = controller.shift(trackIndices: table.selectedRowIndexes, by: delta)
+        table.selectRowIndexes(moved, byExtendingSelection: false)
+        if let f = moved.first { table.scrollRowToVisible(delta < 0 ? f : moved.last!) }
     }
 
     @objc private func filterChanged() {
@@ -330,23 +348,49 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
         switch id {
         case Self.colNum: cell.stringValue = isCurrent ? "\(Fonts.Icon.play) \(i + 1)." : "\(i + 1)."
         case Self.colTitle: cell.stringValue = t.displayTitle
-        default: cell.stringValue = TimeFormat.mmss(t.duration)
+        default:
+            // Queue position in Winamp style: "[2] 3:45".
+            let q = controller.queuePosition(of: i).map { "[\($0)] " } ?? ""
+            cell.stringValue = q + TimeFormat.mmss(t.duration)
         }
         return cell
     }
 
+    // Drag source: rows carry their row number (reordering within the table).
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        guard controller.visible == nil else { return nil } // no reordering while filtered
+        let item = NSPasteboardItem()
+        item.setString(String(row), forType: Self.rowType)
+        return item
+    }
+
     func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
                    proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
-        tableView.setDropRow(-1, dropOperation: .on) // whole-table highlight
+        let fromSelf = (info.draggingSource as? NSTableView) === tableView
+        if fromSelf {
+            guard controller.visible == nil else { return [] }
+            tableView.setDropRow(row, dropOperation: .above)
+            return .move
+        }
+        // Files: insert where dropped; while filtered, just append.
+        if controller.visible != nil { tableView.setDropRow(-1, dropOperation: .on) }
+        else if dropOperation == .on { tableView.setDropRow(row, dropOperation: .above) }
         return .copy
     }
 
     func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int,
                    dropOperation: NSTableView.DropOperation) -> Bool {
-        let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self],
-                                                       options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let pb = info.draggingPasteboard
+        if (info.draggingSource as? NSTableView) === tableView {
+            let rows = IndexSet((pb.pasteboardItems ?? []).compactMap { $0.string(forType: Self.rowType).flatMap(Int.init) })
+            guard !rows.isEmpty else { return false }
+            let moved = controller.move(trackIndices: rows, to: row)
+            tableView.selectRowIndexes(moved, byExtendingSelection: false)
+            return true
+        }
+        let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         guard !urls.isEmpty else { return false }
-        controller.add(urls)
+        controller.add(urls, at: row >= 0 && controller.visible == nil ? row : nil)
         return true
     }
 }

@@ -5,6 +5,10 @@ final class ClassicPlaylistView: SkinCanvasView {
     weak var controller: PlayerController?
     var onClose: (() -> Void)?
     var onResize: ((CGSize) -> Void)?
+    /// Menus built by the app delegate: right-click, MISC (sort) and LIST buttons.
+    var contextMenu: (() -> NSMenu)?
+    var miscMenu: (() -> NSMenu)?
+    var listMenu: (() -> NSMenu)?
 
     /// Size in skin pixels.
     var skinSize = CGSize(width: 275, height: 232) { didSet { invalidateIntrinsicContentSize(); clampScroll(); needsDisplay = true } }
@@ -91,7 +95,8 @@ final class ClassicPlaylistView: SkinCanvasView {
             }
             let color = i == c.currentIndex ? skin.plCurrent : skin.plNormal
             let attrs: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: color]
-            let dur = TimeFormat.mmss(t.duration) as NSString
+            let q = c.queuePosition(of: i).map { "[\($0)] " } ?? ""
+            let dur = (q + TimeFormat.mmss(t.duration)) as NSString
             let dw = dur.size(withAttributes: attrs).width
             let textY = y + (rowHeight - f.ascender + f.descender) / 2 - 0.5
             dur.draw(at: CGPoint(x: area.maxX - dw - 3, y: textY), withAttributes: attrs)
@@ -154,6 +159,19 @@ final class ClassicPlaylistView: SkinCanvasView {
 
     var selectedRow: Int? { selection.first }
 
+    var selectedTrackIndices: IndexSet {
+        guard let c = controller else { return [] }
+        return IndexSet(selection.filter { $0 < rowCount }.map { c.trackIndex(forRow: $0) })
+    }
+
+    /// Replace the selection (e.g. after a move) and keep it in view.
+    func setSelection(_ rows: IndexSet) {
+        selection = rows
+        anchor = rows.first
+        if let f = rows.first { scrollToVisible(f) }
+        needsDisplay = true
+    }
+
     override func scrollWheel(with event: NSEvent) {
         let d = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / (rowHeight * scale) : event.scrollingDeltaY * 3
         accumulatedScroll -= d
@@ -209,10 +227,47 @@ final class ClassicPlaylistView: SkinCanvasView {
             if selection.contains(r) { selection.remove(r) } else { selection.insert(r) }
             anchor = r
         } else {
-            selection = [r]
-            anchor = r
+            let wasSelected = selection.contains(r)
+            if !wasSelected { selection = [r]; anchor = r }
+            needsDisplay = true
+            // Winamp: dragging moves the selected rows along with the mouse.
+            if !dragSelection(event, from: r, controller: c), wasSelected {
+                selection = [r]; anchor = r   // plain click on a multi-selection collapses it
+            }
         }
         needsDisplay = true
+    }
+
+    /// Moves the selection while the mouse is dragged. Returns true if anything moved.
+    private func dragSelection(_ event: NSEvent, from startRow: Int, controller c: PlayerController) -> Bool {
+        guard c.visible == nil else { return false } // no reordering while filtered
+        var lastRow = startRow
+        var moved = false
+        while let e = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
+            if e.type == .leftMouseUp { break }
+            let p = skinPoint(e)
+            // Auto-scroll when dragging past the edges.
+            if p.y < content.minY, scrollRow > 0 { scrollRow -= 1 }
+            if p.y > content.maxY { scrollRow = min(scrollRow + 1, max(0, rowCount - visibleRows)) }
+            let r = max(0, min(rowCount - 1, scrollRow + Int(floor((p.y - content.minY) / rowHeight))))
+            guard r != lastRow else { needsDisplay = true; displayIfNeeded(); continue }
+            let newRows = c.shift(trackIndices: selectedTrackIndices, by: r - lastRow)
+            let delta = (newRows.first ?? 0) - (selection.first ?? 0)
+            if delta != 0 { moved = true }
+            selection = newRows
+            anchor = anchor.map { $0 + delta }
+            lastRow += delta
+            needsDisplay = true
+            displayIfNeeded()
+        }
+        return moved
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        let p = skinPoint(event)
+        if let r = row(at: p), !selection.contains(r) { selection = [r]; anchor = r; needsDisplay = true }
+        if let m = contextMenu?() { NSMenu.popUpContextMenu(m, with: event, for: self) }
     }
 
     private func bottomButton(_ p: CGPoint, _ c: PlayerController) {
@@ -222,7 +277,11 @@ final class ClassicPlaylistView: SkinCanvasView {
         else if CGRect(x: 43, y: y, width: 22, height: 18).contains(p) { removeSelected() }                   // REM
         else if CGRect(x: 72, y: y, width: 22, height: 18).contains(p) {                                    // SEL
             selection = IndexSet(integersIn: 0..<rowCount); needsDisplay = true
-        } else if CGRect(x: W - 44, y: y, width: 22, height: 18).contains(p) { c.clear() }                    // LIST
+        } else if CGRect(x: 101, y: y, width: 22, height: 18).contains(p) {                                 // MISC (sort)
+            popMenu(miscMenu?(), at: CGPoint(x: 101, y: y))
+        } else if CGRect(x: W - 44, y: y, width: 22, height: 18).contains(p) {                              // LIST
+            popMenu(listMenu?(), at: CGPoint(x: W - 44, y: y))
+        }
         else {
             // Mini transport in the bottom-right piece.
             let mini: [(CGFloat, CGFloat, () -> Void)] = [
@@ -231,6 +290,11 @@ final class ClassicPlaylistView: SkinCanvasView {
             ]
             if p.y >= H - 16, p.y < H - 8, let hit = mini.first(where: { p.x >= $0.0 && p.x < $0.0 + $0.1 }) { hit.2() }
         }
+    }
+
+    private func popMenu(_ menu: NSMenu?, at skinPoint: CGPoint) {
+        guard let menu else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: skinPoint.x * scale, y: skinPoint.y * scale), in: self)
     }
 
     private func dragThumb(_ event: NSEvent) {
@@ -281,6 +345,11 @@ final class ClassicPlaylistView: SkinCanvasView {
         guard let c = controller else { return }
         let n = rowCount
         let cur = anchor ?? selection.first ?? -1
+        if event.modifierFlags.contains(.option), event.keyCode == 125 || event.keyCode == 126 {   // ⌥↓ / ⌥↑
+            guard c.visible == nil else { NSSound.beep(); return }
+            setSelection(c.shift(trackIndices: selectedTrackIndices, by: event.keyCode == 125 ? 1 : -1))
+            return
+        }
         switch event.keyCode {
         case 125: select(row: min(n - 1, cur + 1))                     // ↓
         case 126: select(row: max(0, cur - 1))                         // ↑
