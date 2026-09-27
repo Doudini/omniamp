@@ -20,7 +20,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
     private static let genres = ["All genres", "pop", "rock", "jazz", "classical", "electronic", "ambient", "chillout", "lounge",
                                  "dance", "house", "techno", "trance", "hiphop", "rnb", "soul", "funk", "blues", "reggae", "metal",
                                  "indie", "alternative", "country", "folk", "80s", "90s", "oldies", "latin", "world", "news", "talk"]
-    private static let countries: [(String, String)] = [("All countries", ""), ("United States", "US"), ("United Kingdom", "GB"),
+    static let countries: [(String, String)] = [("All countries", ""), ("United States", "US"), ("United Kingdom", "GB"),
         ("Germany", "DE"), ("France", "FR"), ("Netherlands", "NL"), ("Belgium", "BE"), ("Switzerland", "CH"), ("Austria", "AT"),
         ("Italy", "IT"), ("Spain", "ES"), ("Portugal", "PT"), ("Sweden", "SE"), ("Norway", "NO"), ("Denmark", "DK"),
         ("Finland", "FI"), ("Poland", "PL"), ("Czechia", "CZ"), ("Greece", "GR"), ("Canada", "CA"), ("Mexico", "MX"),

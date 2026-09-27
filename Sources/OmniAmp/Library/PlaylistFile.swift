@@ -9,12 +9,22 @@ enum PlaylistFile {
     /// Media file URLs referenced by a playlist (relative paths resolve against its folder).
     static func read(_ url: URL) -> [URL] { entries(url).map(\.url) }
 
-    /// Entries with their titles (#EXTINF / TitleN) and station logos (tvg-logo), needed for radio.
-    static func entries(_ url: URL) -> [(url: URL, title: String?, logo: String?)] {
+    /// One playlist line: the target plus what #EXTINF says about it (radio and podcasts need it).
+    struct Entry {
+        var url: URL
+        var title: String?
+        var logo: String?
+        /// Podcast episodes are saved with the show's name (omniamp-podcast="…") and their length.
+        var podcast: String?
+        var seconds: Double?
+    }
+
+    /// Entries with their titles (#EXTINF / TitleN), station logos (tvg-logo) and podcast shows.
+    static func entries(_ url: URL) -> [Entry] {
         guard let data = try? Data(contentsOf: url) else { return [] }
         let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
         let base = url.deletingLastPathComponent()
-        var refs: [(String, String?, String?)] = []
+        var refs: [(String, String?, String?, String?, Double?)] = []
         if url.pathExtension.lowercased() == "pls" {
             var titles: [String: String] = [:], files: [(String, String)] = []
             for line in text.components(separatedBy: .newlines) {
@@ -24,29 +34,36 @@ enum PlaylistFile {
                 if key.hasPrefix("file") { files.append((String(key.dropFirst(4)), val)) }
                 if key.hasPrefix("title") { titles[String(key.dropFirst(5))] = val }
             }
-            refs = files.map { ($0.1, titles[$0.0], nil) }
+            refs = files.map { ($0.1, titles[$0.0], nil, nil, nil) }
         } else {
-            var pendingTitle: String?, pendingLogo: String?
+            var pendingTitle: String?, pendingLogo: String?, pendingShow: String?, pendingSecs: Double?
             for line in text.components(separatedBy: .newlines) {
                 let t = line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\u{FEFF}", with: "")
                 if t.hasPrefix("#EXTINF:"), let comma = Self.titleComma(t) {
+                    let head = String(t[t.index(t.startIndex, offsetBy: 8)..<comma])
                     pendingTitle = String(t[t.index(after: comma)...]).trimmingCharacters(in: .whitespaces)
-                    pendingLogo = Self.attribute("tvg-logo", in: String(t[..<comma]))
+                    pendingLogo = Self.attribute("tvg-logo", in: head)
+                    pendingShow = Self.attribute("omniamp-podcast", in: head)
+                    pendingSecs = Double(head.split(separator: " ").first ?? "").flatMap { $0 > 0 ? $0 : nil }
                     continue
                 }
                 guard !t.isEmpty, !t.hasPrefix("#") else { continue }
-                refs.append((t, pendingTitle, pendingLogo))
+                refs.append((t, pendingTitle, pendingLogo, pendingShow, pendingSecs))
                 pendingTitle = nil
                 pendingLogo = nil
+                pendingShow = nil
+                pendingSecs = nil
             }
         }
-        return refs.compactMap { ref, title, logo in
-            if ref.hasPrefix("file://") { return URL(string: ref).map { ($0, title, nil) } }
-            if ref.hasPrefix("http://") || ref.hasPrefix("https://") { return URL(string: ref).map { ($0, title, logo) } }   // radio
+        return refs.compactMap { ref, title, logo, show, secs in
+            if ref.hasPrefix("file://") { return URL(string: ref).map { Entry(url: $0, title: title) } }
+            if ref.hasPrefix("http://") || ref.hasPrefix("https://") {   // radio or podcast
+                return URL(string: ref).map { Entry(url: $0, title: title, logo: logo, podcast: show, seconds: secs) }
+            }
             if ref.contains("://") { return nil }
             let path = ref.replacingOccurrences(of: "\\", with: "/")
             let u = path.hasPrefix("/") ? URL(fileURLWithPath: path) : base.appendingPathComponent(path).standardizedFileURL
-            return (u, title, nil)
+            return Entry(url: u, title: title)
         }
     }
 
@@ -75,7 +92,8 @@ enum PlaylistFile {
         for t in tracks {
             let secs = t.duration.map { Int($0.rounded()) } ?? -1
             let logo = t.logo.map { " tvg-logo=\"\($0)\"" } ?? ""
-            out += "#EXTINF:\(secs)\(logo),\(t.displayTitle.replacingOccurrences(of: "\n", with: " "))\n\(t.path)\n"
+            let show = t.podcast.map { " omniamp-podcast=\"\($0.replacingOccurrences(of: "\"", with: "'"))\"" } ?? ""
+            out += "#EXTINF:\(secs)\(logo)\(show),\(t.displayTitle.replacingOccurrences(of: "\n", with: " "))\n\(t.path)\n"
         }
         try out.write(to: url, atomically: true, encoding: .utf8)
     }

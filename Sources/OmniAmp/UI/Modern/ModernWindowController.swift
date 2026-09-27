@@ -27,8 +27,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     private var clock: DisplayClock!
     private var addBtn: ModernButton!
     private var radioBtn: ModernButton!
+    private var podcastBtn: ModernButton!
     /// Opens the Internet Radio window (set by the app delegate).
     var onRadio: (() -> Void)?
+    var onPodcasts: (() -> Void)?
     private var tick = 0
     var onClose: (() -> Void)?
     /// Right-click menu for the playlist (built by the app delegate).
@@ -179,7 +181,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         addBtn = ModernButton(glyph: Fonts.Icon.plus, label: "ADD", target: self, action: #selector(addTapped))
         radioBtn = ModernButton(glyph: Fonts.Icon.radio, label: "RADIO", target: self, action: #selector(radioTapped))
         radioBtn.toolTip = "Internet radio (⌘⌥R)"
-        addBtn.glyphSize = 10; radioBtn.glyphSize = 11
+        podcastBtn = ModernButton(glyph: Fonts.Icon.podcast, label: "PODCASTS", target: self, action: #selector(podcastsTapped))
+        podcastBtn.toolTip = "Podcasts (⌘⌥P)"
+        addBtn.glyphSize = 10; radioBtn.glyphSize = 11; podcastBtn.glyphSize = 11
+        root.addSubview(podcastBtn)
         root.addSubview(addBtn)
         root.addSubview(radioBtn)
 
@@ -209,7 +214,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             radioBtn.leadingAnchor.constraint(equalTo: addBtn.trailingAnchor, constant: 4),
             radioBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
             radioBtn.heightAnchor.constraint(equalToConstant: 22),
-            filterField.leadingAnchor.constraint(equalTo: radioBtn.trailingAnchor, constant: 10),
+            podcastBtn.leadingAnchor.constraint(equalTo: radioBtn.trailingAnchor, constant: 4),
+            podcastBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
+            podcastBtn.heightAnchor.constraint(equalToConstant: 22),
+            filterField.leadingAnchor.constraint(equalTo: podcastBtn.trailingAnchor, constant: 10),
             filterField.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
             filterField.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
 
@@ -228,6 +236,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         let narrow = (window?.frame.width ?? 600) < 520
         addBtn?.compact = narrow
         radioBtn?.compact = narrow
+        podcastBtn?.compact = narrow
         infoView.compact = narrow
         fitInfoDrawer()
     }
@@ -368,6 +377,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     // MARK: Actions
 
     @objc private func radioTapped() { onRadio?() }
+    @objc private func podcastsTapped() { onPodcasts?() }
     @objc private func addTapped() { controller.showOpenPanel(for: window) }
 
     @objc private func tableDoubleClick() {

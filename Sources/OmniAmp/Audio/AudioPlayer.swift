@@ -115,11 +115,19 @@ final class AudioPlayer {
     // MARK: Position
 
     var duration: Double {
+        if let p = episodePlayer {
+            let d = p.currentItem?.duration.seconds ?? .nan
+            return d.isFinite && d > 0 ? d : episodeDurationHint
+        }
         guard let c = current else { return 0 }
         return Double(c.trackEnd - c.trackStart) / c.sampleRate
     }
 
     var currentTime: Double {
+        if let p = episodePlayer {
+            let t = p.currentTime().seconds
+            return t.isFinite ? max(0, t) : 0
+        }
         let running = clockStart.map { CACurrentMediaTime() - $0 } ?? 0
         if isStreaming { return clockBase + running }   // radio: time since it started playing
         guard current != nil else { return 0 }
@@ -235,6 +243,71 @@ final class AudioPlayer {
         onStreamChange?()
     }
 
+    // MARK: Podcast episodes
+
+    // Episodes are ordinary audio files on the web. The system player streams them with seeking and a known
+    // length; like HLS radio they bypass our engine (no EQ or visualizer).
+    private var episodePlayer: AVPlayer?
+    private var episodeObservers: [NSKeyValueObservation] = []
+    private var episodeEnd: NSObjectProtocol?
+    private var episodeDurationHint: Double = 0
+    /// True while a podcast episode is loaded (playing or paused).
+    var isPlayingEpisode: Bool { episodePlayer != nil }
+
+    /// Play a podcast episode from `start` seconds. `duration` (from the feed) is shown until the file reports its own.
+    func playEpisode(url: URL, from start: Double = 0, duration: Double? = nil) {
+        stopNode()
+        stopStream()
+        upcoming = nil
+        current = nil
+        streamError = nil
+        _ = AudioDevices.setHog(deviceID, false)
+        let item = AVPlayerItem(url: url)
+        let p = AVPlayer(playerItem: item)
+        p.audioOutputDeviceUniqueID = AudioDevices.device(id: deviceID)?.uid
+        episodePlayer = p
+        episodeDurationHint = duration ?? 0
+        applyGainStage()
+        isBuffering = true
+        episodeObservers = [
+            item.observe(\.status, options: [.new]) { [weak self] it, _ in
+                DispatchQueue.main.async {
+                    guard let self, self.episodePlayer?.currentItem === it, it.status == .failed else { return }
+                    let err = Self.friendly(it.error)
+                    self.stop()
+                    self.streamError = err
+                    self.onStreamChange?()
+                }
+            },
+            p.observe(\.timeControlStatus, options: [.new]) { [weak self] pl, _ in
+                DispatchQueue.main.async {
+                    guard let self, self.episodePlayer === pl else { return }
+                    self.isBuffering = pl.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                }
+            },
+        ]
+        episodeEnd = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item,
+                                                            queue: .main) { [weak self] _ in
+            guard let self, self.episodePlayer?.currentItem === item else { return }
+            self.stopEpisode()
+            self.state = .stopped
+            self.onTrackFinished?()
+        }
+        if start > 0 { p.seek(to: CMTime(seconds: start, preferredTimescale: 600)) }
+        p.play()
+        state = .playing
+        onStreamChange?()
+    }
+
+    private func stopEpisode() {
+        episodeObservers.removeAll()
+        episodeEnd.map(NotificationCenter.default.removeObserver)
+        episodeEnd = nil
+        episodePlayer?.pause()
+        episodePlayer = nil
+        episodeDurationHint = 0
+    }
+
     private func stopSystemStream() {
         systemObservers.removeAll()
         systemPlayer?.pause()
@@ -341,6 +414,7 @@ final class AudioPlayer {
         stream?.stop()
         stream = nil
         stopSystemStream()
+        stopEpisode()
         if !keepState { streamURL = nil; isBuffering = false }
     }
 
@@ -438,6 +512,7 @@ final class AudioPlayer {
         converter.outputVolume = (bitPerfect ? 1 : replayGain) * fadeGain
         // The system player (HLS/Opus radio) bypasses our mixer: give it the volume directly.
         systemPlayer?.volume = (bitPerfect ? 1 : (testVolume ?? softwareVolume)) * fadeGain
+        episodePlayer?.volume = (bitPerfect ? 1 : (testVolume ?? softwareVolume)) * fadeGain
     }
 
     /// EQ bypass and mixer volume for the current mode.
@@ -464,6 +539,10 @@ final class AudioPlayer {
         releaseDevice(deviceID)
         outputUID = uid
         pointEngineAtDevice()
+        // The system players (HLS/Opus radio, podcast episodes) play outside the engine: move them too.
+        let deviceUID = AudioDevices.device(id: deviceID)?.uid
+        systemPlayer?.audioOutputDeviceUniqueID = deviceUID
+        episodePlayer?.audioOutputDeviceUniqueID = deviceUID
     }
 
     func setBitPerfect(_ on: Bool, exclusive excl: Bool) {
@@ -657,6 +736,7 @@ final class AudioPlayer {
 
     func pause() {
         guard state == .playing else { return }
+        if let p = episodePlayer { p.pause(); state = .paused; return }
         if isStreaming {
             // Radio: pausing stops the stream (a live broadcast can't be paused); play restarts it.
             let u = streamURL
@@ -674,6 +754,7 @@ final class AudioPlayer {
 
     func resume() {
         guard state == .paused else { return }
+        if let p = episodePlayer { p.play(); state = .playing; return }
         if let u = streamURL, !isStreaming { playStream(url: u); return }
         startEngineIfNeeded()
         node.play()
@@ -694,6 +775,10 @@ final class AudioPlayer {
     }
 
     func seek(to seconds: Double) {
+        if let p = episodePlayer {
+            p.seek(to: CMTime(seconds: max(0, min(seconds, duration)), preferredTimescale: 600))
+            return
+        }
         guard !isStreaming, var c = current else { return }   // live radio can't seek
         awaitingRateSettle = false
         let wasPaused = state == .paused

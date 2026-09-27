@@ -216,7 +216,15 @@ final class PlayerController {
         return store.tracks.count - 1
     }
 
-        /// Insert tracks that were already scanned (watched folders), keeping the current track.
+        /// Add a podcast episode (or find it if it's already in the playlist). Returns its index.
+    @discardableResult
+    func addEpisode(_ episode: Track) -> Int {
+        if let i = store.tracks.firstIndex(where: { $0.path == episode.path }) { return i }
+        insertScanned([episode], at: store.tracks.count)
+        return store.tracks.count - 1
+    }
+
+    /// Insert tracks that were already scanned (watched folders), keeping the current track.
     func insertScanned(_ tracks: [Track], at position: Int) {
         invalidatePreload()
         let currentID = currentIndex.map { store.id(at: $0) }
@@ -297,7 +305,7 @@ final class PlayerController {
     /// Remove tracks whose files no longer exist. Calls back with the number removed.
     func removeDeadFiles(completion: ((Int) -> Void)? = nil) {
         let paths = store.tracks.map(\.path)
-        let streams = store.tracks.map(\.isStream)
+        let streams = store.tracks.map(\.isRemote)
         let ids = store.tracks.indices.map { store.id(at: $0) }
         DispatchQueue.global(qos: .userInitiated).async {
             let fm = FileManager.default
@@ -370,6 +378,14 @@ final class PlayerController {
             updateNowPlaying()
             return
         }
+        if store.tracks[index].isEpisode {
+            let t = store.tracks[index]
+            player.playEpisode(url: t.url, from: resumePosition(for: t), duration: t.duration)
+            Scrobbler.shared.trackStarted(nil, duration: 0)   // podcasts aren't scrobbled
+            ui?.currentTrackDidChange(old: old, new: index)
+            updateNowPlaying()
+            return
+        }
         let ok = player.play(url: store.tracks[index].url, from: resumePosition(for: store.tracks[index]), range: store.tracks[index].cueRange)
         if ok { Scrobbler.shared.trackStarted(store.tracks[index], duration: store.tracks[index].duration ?? player.duration) }
         schedulePreloadCheck()
@@ -386,7 +402,7 @@ final class PlayerController {
 
     func togglePlayPause() {
         switch player.state {
-        case .playing: player.pause()
+        case .playing: player.pause(); rememberPosition()
         case .paused: player.resume()
         case .stopped: playOrResume()
         }
@@ -473,10 +489,10 @@ final class PlayerController {
 
     /// Near the end of a track, schedule the next one behind it on the audio engine.
     private func maybePreloadNext() {
-        guard player.state == .playing, !preloadAttempted, !player.hasQueuedNext, !stopAfterCurrent,
+        guard player.state == .playing, !preloadAttempted, !player.hasQueuedNext, !stopAfterCurrent, !player.isPlayingEpisode,
               player.duration > 0, player.remaining < 8 else { return }
         preloadAttempted = true
-        guard let t = nextTarget(), t != currentIndex else { return }
+        guard let t = nextTarget(), t != currentIndex, !store.tracks[t].isRemote else { return }
         let track = store.tracks[t]
         if player.queueNext(url: track.url, range: track.cueRange) { preloaded = (t, track.key) }
     }
@@ -609,6 +625,7 @@ final class PlayerController {
     /// A track reached its end on its own (not Next).
     private func trackFinished() {
         forgetPosition(currentTrack?.key)
+        if let t = currentTrack, t.isEpisode { PodcastLibrary.shared.markPlayed(t.path) }
         if stopAfterCurrent {
             stopAfterCurrent = false
             player.stop()
@@ -658,6 +675,7 @@ final class PlayerController {
 
     /// Uses the player's duration when the tags aren't read yet.
     private func isLong(_ t: Track) -> Bool {
+        if t.isEpisode { return true }   // podcasts always continue where you left off
         let d = t.duration ?? (t.path == player.currentURL?.path ? player.duration : 0)
         return d >= 600 || (t.path as NSString).pathExtension.lowercased() == "m4b"
     }
@@ -767,6 +785,10 @@ final class PlayerController {
             return s
         }
         let d = t.duration.map { " (\(TimeFormat.mmss($0)))" } ?? ""
+        if t.isEpisode, index == currentIndex {
+            if player.isPlayingEpisode, player.isBuffering { return "\(index + 1). \(t.displayTitle) · BUFFERING…" }
+            if let err = player.streamError { return "\(index + 1). \(t.displayTitle) · couldn't load: \(err)" }
+        }
         return "\(index + 1). \(t.displayTitle)\(d)"
     }
 
@@ -774,6 +796,7 @@ final class PlayerController {
     var currentKbps: Int? {
         guard let t = currentTrack else { return nil }
         if t.isStream { return player.streamInfo?.bitrate }
+        if t.isEpisode { return t.bitrate }
         if let b = t.bitrate { return b }
         if let d = t.duration, d > 0 { return Int(Double(t.size) * 8 / d / 1000) }
         return nil
@@ -803,6 +826,13 @@ final class PlayerController {
             let ch = i.channels == 1 ? "mono" : (i.channels == 2 ? "stereo" : "")
             return (["RADIO", i.codec, i.bitrate.map { "\($0) kbps" }].compactMap { $0 }.joined(separator: " "),
                     [khz, ch].filter { !$0.isEmpty }.joined(separator: " · "))
+        }
+        if t.isEpisode {
+            // "PODCAST MP3" · "12 Mar 2026"
+            let ext = (t.url.path as NSString).pathExtension.uppercased()
+            let codec = ["MP3", "M4A", "AAC", "MP4", "OGG", "OPUS", "WAV"].contains(ext) ? (ext == "M4A" || ext == "MP4" ? "AAC" : ext) : ""
+            let date = t.published.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .omitted) } ?? ""
+            return (["PODCAST", codec].filter { !$0.isEmpty }.joined(separator: " "), date)
         }
         let playing = index == currentIndex && player.state != .stopped
         let ext = (t.path as NSString).pathExtension.lowercased()

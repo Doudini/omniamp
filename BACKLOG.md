@@ -7,6 +7,7 @@ Ideas we want but have deferred. Roughly ordered by value within each group.
 - **Synced lyrics**: show `.lrc` files that sit next to the tracks, scrolling in time with playback.
 - **Global hotkeys**: control playback from any app.
 - **Menu-bar mini player**: play/pause/next and the current track from the menu bar.
+- **Podcasts, next steps**: download episodes for offline listening, playback speed (1.25×/1.5×/2×), chapters.
 
 ## Classic look
 - **Shade mode**: double-click the title bar to collapse the window to a thin strip.

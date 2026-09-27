@@ -56,5 +56,8 @@ enum Fonts {
         static let radio = "\u{F0439}"
         static let starFilled = "\u{F005}"
         static let starEmpty = "\u{F006}"
+        static let podcast = "\u{F0994}"
+        static let check = "\u{F00C}"
+        static let rss = "\u{F09E}"
     }
 }

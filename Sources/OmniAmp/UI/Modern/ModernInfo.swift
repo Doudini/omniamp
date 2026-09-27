@@ -313,10 +313,10 @@ final class ModernInfoView: NSView {
         let pathChanged = shownPath != t.path
         shownPath = t.path
         modeLabel.stringValue = pinned ? "SELECTED" : (i == c.currentIndex ? (t.isStream ? "● ON AIR" : "NOW PLAYING") : "")
-        revealButton.isHidden = t.isStream
+        revealButton.isHidden = t.isRemote
         rule.isHidden = false
-        if t.isStream {
-            applyRadio(index: i)
+        if t.isRemote {
+            if t.isStream { applyRadio(index: i) } else { applyEpisode(index: i) }
             if pathChanged || art.image == nil {
                 art.image = LogoStore.shared.cached(t.logo)
                 LogoStore.shared.load(t.logo) { [weak self] img in
@@ -371,6 +371,36 @@ final class ModernInfoView: NSView {
         comment.isHidden = true
     }
 
+    /// Podcast episode: title, show, release date, length, format, show notes.
+    private func applyEpisode(index i: Int) {
+        guard let c = controller else { return }
+        let t = c.tracks[i]
+        title.stringValue = t.title ?? "Episode"
+        byline.stringValue = t.podcast ?? ""
+        byline.isHidden = byline.stringValue.isEmpty
+        byline.toolTip = nil
+        albumTitle.stringValue = t.published.map { Date(timeIntervalSince1970: $0).formatted(date: .long, time: .omitted) } ?? ""
+        albumTitle.isHidden = albumTitle.stringValue.isEmpty
+        albumTitle.toolTip = nil
+        let played = PodcastLibrary.shared.isPlayed(t.path) ? "played" : ""
+        numbers.stringValue = ["PODCAST", TimeFormat.mmss(t.duration), played].filter { !$0.isEmpty }.joined(separator: " · ")
+        numbers.isHidden = false
+        credits.isHidden = true
+        if let err = c.player.streamError, i == c.currentIndex, c.player.state == .stopped {
+            format.stringValue = "Couldn't load: \(err)"
+        } else {
+            format.stringValue = c.formatDescription(for: i)
+        }
+        format.isHidden = format.stringValue.isEmpty
+        file.stringValue = t.path
+        file.toolTip = t.path
+        albumLine.isHidden = true
+        comment.maximumNumberOfLines = 6
+        comment.stringValue = t.summary ?? ""
+        comment.toolTip = t.summary
+        comment.isHidden = comment.stringValue.isEmpty
+    }
+
     private func apply(index i: Int, details d: TrackDetails?, thumb: CGImage?, artPixels: CGSize?) {
         guard let c = controller, i < c.tracks.count else { return }
         let t = c.tracks[i]
@@ -418,6 +448,7 @@ final class ModernInfoView: NSView {
         albumLine.stringValue = albumBits.joined(separator: " · ")
         albumLine.isHidden = albumBits.isEmpty
 
+        comment.maximumNumberOfLines = 3
         let cm = d?.comment?.replacingOccurrences(of: "\n", with: " ")
         comment.stringValue = cm.map { "“\($0)”" } ?? ""
         comment.toolTip = d?.comment

@@ -21,7 +21,22 @@ final class Skin {
     var plFontName: String?
 
     // VISCOLOR.TXT: 0 bg, 1 dots, 2-17 bars (top→bottom), 18-22 oscilloscope, 23 peaks.
-    var visColors: [NSColor] = Skin.defaultVisColors
+    var visColors: [NSColor] = Skin.defaultVisColors { didSet { visCG = Self.deviceColors(visColors) } }
+    /// The same colors in the canvas's device RGB space, so filling a pixel needs no ColorSync conversion
+    /// (the visualizer fills hundreds of 1-pixel rects per frame).
+    private(set) lazy var visCG: [CGColor] = Self.deviceColors(visColors)
+
+    private static func deviceColors(_ cs: [NSColor]) -> [CGColor] {
+        let ns = NSColorSpace(cgColorSpace: canvasSpace) ?? .sRGB
+        return cs.map { c in
+            let d = c.usingColorSpace(ns) ?? c
+            return CGColor(colorSpace: canvasSpace, components: [d.redComponent, d.greenComponent, d.blueComponent, d.alphaComponent]) ?? c.cgColor
+        }
+    }
+
+    /// Everything classic is drawn in the screen's own color space: sprites are converted once when the skin
+    /// loads, and neither CoreGraphics (per blit) nor Core Animation (per frame) has to color-match again.
+    static let canvasSpace: CGColorSpace = NSScreen.main?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
 
     init(url: URL) throws {
         self.url = url
@@ -42,11 +57,11 @@ final class Skin {
         if let d = zip.entries["viscolor.txt"] { parseViscolor(Self.text(d)) }
     }
 
-    /// Decode once into 32-bit BGRA (the screen's native format). ImageIO's BMP images are lazy: without this,
+    /// Decode once into 32-bit BGRA in the screen's color space. ImageIO's BMP images are lazy: without this,
     /// every blit re-decodes (and RLE-unpacks) the whole sheet.
     static func decoded(_ img: CGImage) -> CGImage {
         guard let ctx = CGContext(data: nil, width: img.width, height: img.height, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  space: canvasSpace,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         else { return img }
         ctx.draw(img, in: CGRect(x: 0, y: 0, width: img.width, height: img.height))

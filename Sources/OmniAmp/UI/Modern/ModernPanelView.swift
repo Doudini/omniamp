@@ -341,8 +341,8 @@ final class ModernPanelView: NSView {
             if path != artPath {
                 artPath = path
                 let t = c.tracks[i]
-                if t.isStream {
-                    // Radio: the station logo takes the cover's place.
+                if t.isRemote {
+                    // Radio / podcasts: the station logo or show artwork takes the cover's place.
                     art.image = LogoStore.shared.cached(t.logo)
                     LogoStore.shared.load(t.logo) { [weak self] img in
                         guard let self, self.artPath == path else { return }

@@ -29,6 +29,32 @@ class SkinCanvasView: NSView {
     var renderScale: CGFloat { 1 }
 
     private var canvas: CGContext?
+    // Partial redraws: `invalidateSkin(_:)` collects changed areas (in skin pixels) so a frame repaints
+    // only the visualizer / time / seek bar instead of the whole window. Anything else redraws everything.
+    private var pendingDirty: CGRect?
+    private var pendingFull = true
+    private var inPartialInvalidate = false
+
+    /// Mark an area (skin pixels) for redrawing.
+    func invalidateSkin(_ r: CGRect) {
+        pendingDirty = pendingDirty?.union(r) ?? r
+        inPartialInvalidate = true
+        super.setNeedsDisplay(NSRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale))
+        inPartialInvalidate = false
+    }
+
+    override var needsDisplay: Bool {
+        get { super.needsDisplay }
+        set {
+            if newValue && !inPartialInvalidate { pendingFull = true }
+            super.needsDisplay = newValue
+        }
+    }
+
+    override func setNeedsDisplay(_ invalidRect: NSRect) {
+        if !inPartialInvalidate { pendingFull = true }
+        super.setNeedsDisplay(invalidRect)
+    }
 
     init(skin: Skin, scale: CGFloat) {
         self.skin = skin
@@ -59,17 +85,27 @@ class SkinCanvasView: NSView {
         guard let layer, bounds.width > 0, bounds.height > 0 else { return }
         let rs = renderScale
         let w = Int((bounds.width / scale * rs).rounded(.up)), h = Int((bounds.height / scale * rs).rounded(.up))
-        if canvas?.width != w || canvas?.height != h {
+        let dirty = pendingFull ? nil : pendingDirty
+        pendingFull = false
+        pendingDirty = nil
+        let resized = canvas?.width != w || canvas?.height != h
+        if resized {
             canvas = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                               space: CGColorSpaceCreateDeviceRGB(),
+                               space: Skin.canvasSpace,
                                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         }
         guard let ctx = canvas else { return }
         ctx.saveGState()
-        ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
         // Flipped, in skin pixels.
         ctx.translateBy(x: 0, y: CGFloat(h))
         ctx.scaleBy(x: rs, y: -rs)
+        if let d = dirty, !resized {
+            let r = d.integral
+            ctx.clip(to: r)
+            ctx.clear(r)
+        } else {
+            ctx.clear(CGRect(x: 0, y: 0, width: bounds.width / scale, height: bounds.height / scale))
+        }
         ctx.interpolationQuality = .none
         ctx.setShouldAntialias(false)
         NSGraphicsContext.saveGraphicsState()
@@ -121,6 +157,10 @@ final class ClassicMainView: SkinCanvasView {
     private var marqueeOffset = 0
     private var marqueeStart = animationTime
     private var tick = 0
+    /// The visualizer has its own small layer (76×16 skin pixels), so an animation frame replaces a tiny
+    /// image instead of recompositing and re-sending the whole window.
+    private let visLayer = CALayer()
+    private static let visRect = CGRect(x: 24, y: 43, width: 76, height: 16)
     private var levels = [Float](repeating: 0, count: 19)
     /// Oscilloscope samples (empty unless in oscilloscope mode and playing).
     private var scope: [Float] = []
@@ -171,10 +211,10 @@ final class ClassicMainView: SkinCanvasView {
         let playing = c.player.state == .playing
         if Analyzer.mode == .oscilloscope {
             scope = playing ? c.player.spectrum.wave() : []
-            invalidate(CGRect(x: 24, y: 43, width: 76, height: 16))
+            renderVis()
         } else if !scope.isEmpty {
             scope = []
-            invalidate(CGRect(x: 24, y: 43, width: 76, height: 16))
+            renderVis()
         }
         let bars = playing && Analyzer.mode == .spectrum ? c.player.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount)
         var visChanged = false
@@ -186,7 +226,7 @@ final class ClassicMainView: SkinCanvasView {
             levels[i] = l
             peaks[i] = p
         }
-        if visChanged { invalidate(CGRect(x: 24, y: 43, width: 76, height: 16)) }
+        if visChanged { renderVis() }
 
         // Time: when the second changes, or the pause blink flips.
         let t = showRemaining ? max(0, c.player.duration - c.player.currentTime) : c.player.currentTime
@@ -210,6 +250,35 @@ final class ClassicMainView: SkinCanvasView {
     }
 
     /// Playback state changed: redraw everything once (indicator, bars, time…).
+    override func updateLayer() {
+        super.updateLayer()
+        guard let layer else { return }
+        if visLayer.superlayer == nil {
+            visLayer.magnificationFilter = .nearest
+            visLayer.contentsGravity = .resize
+            visLayer.actions = ["contents": NSNull(), "position": NSNull(), "bounds": NSNull()]
+            layer.addSublayer(visLayer)
+        }
+        let r = Self.visRect
+        // The view is flipped, and so is its layer's geometry: top-left origin, in points.
+        visLayer.frame = CGRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale)
+        renderVis()
+    }
+
+    /// Draws the dots, bars / scope into the visualizer layer at skin resolution.
+    private func renderVis() {
+        guard visLayer.superlayer != nil, let c = controller,
+              let ctx = CGContext(data: nil, width: 76, height: 16, bitsPerComponent: 8, bytesPerRow: 0, space: Skin.canvasSpace,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return }
+        ctx.translateBy(x: 0, y: 16)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.interpolationQuality = .none
+        ctx.setShouldAntialias(false)
+        drawVisualizer(ctx, active: c.player.state == .playing, origin: .zero)
+        visLayer.contents = ctx.makeImage()
+    }
+
     func stateChanged() {
         if controller?.player.state != .playing {
             for i in 0..<19 { levels[i] = 0; peaks[i] = 0 }
@@ -222,9 +291,7 @@ final class ClassicMainView: SkinCanvasView {
         return c.title(for: i).count > 30
     }
 
-    private func invalidate(_ r: CGRect) {
-        setNeedsDisplay(NSRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale))
-    }
+    private func invalidate(_ r: CGRect) { invalidateSkin(r) }
 
     func resetMarquee() { marqueeOffset = 0; marqueeStart = animationTime }
 
@@ -257,7 +324,6 @@ final class ClassicMainView: SkinCanvasView {
         else if st == .paused { s.draw("playpaus", CGRect(x: 36, y: 0, width: 3, height: 9), at: CGPoint(x: 24, y: 28), in: ctx) }
 
         drawTime(ctx, c)
-        drawVisualizer(ctx, active: st == .playing)
 
         // Marquee.
         let title: String
@@ -338,16 +404,10 @@ final class ClassicMainView: SkinCanvasView {
         digit(m / 10, 48); digit(m % 10, 60); digit(sec / 10, 78); digit(sec % 10, 90)
     }
 
-    private func drawVisualizer(_ ctx: CGContext, active: Bool) {
-        let vc = skin.visColors
-        let origin = CGPoint(x: 24, y: 43)
-        // Background dots like Winamp's analyzer grid.
-        vc[1].setFill()
-        for y in stride(from: 1, to: 16, by: 2) {
-            for x in stride(from: 1, to: 76, by: 2) {
-                ctx.fill(CGRect(x: origin.x + CGFloat(x), y: origin.y + CGFloat(y), width: 1, height: 1))
-            }
-        }
+    private func drawVisualizer(_ ctx: CGContext, active: Bool, origin: CGPoint) {
+        let vc = skin.visCG
+        // Background dots like Winamp's analyzer grid (rendered once per skin).
+        if let dots = visDots() { Skin.blit(dots, CGRect(x: origin.x, y: origin.y, width: 76, height: 16), ctx) }
         if Analyzer.mode == .oscilloscope {
             // Winamp's scope: one dot per column, joined vertically, colored by distance from center (VISCOLOR 18-22).
             guard scope.count > 1 else { return }
@@ -357,7 +417,7 @@ final class ClassicMainView: SkinCanvasView {
                 let y = max(0, min(15, 8 - Int((v * 1.6 * 8).rounded())))
                 let from = lastY.map { min($0, y) } ?? y, to = lastY.map { max($0, y) } ?? y
                 for yy in from...to {
-                    ctx.setFillColor(vc[18 + min(4, abs(yy - 8) / 2)].cgColor)
+                    ctx.setFillColor(vc[18 + min(4, abs(yy - 8) / 2)])
                     ctx.fill(CGRect(x: origin.x + CGFloat(x), y: origin.y + CGFloat(yy), width: 1, height: 1))
                 }
                 lastY = y
@@ -370,15 +430,33 @@ final class ClassicMainView: SkinCanvasView {
             let h = Int((CGFloat(levels[i]) * 16).rounded())
             for r in 0..<h {
                 let row = 15 - r               // from top
-                ctx.setFillColor(vc[2 + row].cgColor)
+                ctx.setFillColor(vc[2 + row])
                 ctx.fill(CGRect(x: x, y: origin.y + CGFloat(row), width: 3, height: 1))
             }
             let py = 15 - min(15, Int((CGFloat(peaks[i]) * 16).rounded()))
             if peaks[i] > 0.02 {
-                ctx.setFillColor(vc[23].cgColor)
+                ctx.setFillColor(vc[23])
                 ctx.fill(CGRect(x: x, y: origin.y + CGFloat(py), width: 3, height: 1))
             }
         }
+    }
+
+    private var dotsCache: (skin: ObjectIdentifier, image: CGImage)?
+
+    /// The analyzer's dot grid as a 76×16 image (top-left origin, like the skin sheets).
+    private func visDots() -> CGImage? {
+        if let c = dotsCache, c.skin == ObjectIdentifier(skin) { return c.image }
+        guard let ctx = CGContext(data: nil, width: 76, height: 16, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: Skin.canvasSpace,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        ctx.setFillColor(skin.visCG[1])
+        for y in stride(from: 1, to: 16, by: 2) {
+            for x in stride(from: 1, to: 76, by: 2) { ctx.fill(CGRect(x: x, y: 15 - y, width: 1, height: 1)) }
+        }
+        guard let img = ctx.makeImage() else { return nil }
+        dotsCache = (ObjectIdentifier(skin), img)
+        return img
     }
 
     private func drawMarquee(_ ctx: CGContext, _ title: String) {

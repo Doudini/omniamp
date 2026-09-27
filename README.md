@@ -39,6 +39,13 @@ Press **RADIO** (or ⌘⌥R) to browse and search thousands of stations from [ra
 
 <p align="center"><img src="docs/radio.png" alt="The Internet Radio window: popular stations with logos, genres, countries and formats" width="700"></p>
 
+## Podcasts
+
+Press **PODCASTS** (or ⌘⌥P) to browse the top shows in your country or search the [Apple Podcasts](https://podcasts.apple.com) directory. Pick a show to see its episodes, subscribe to it, and play or add episodes to the playlist like any other track.
+- **Subscriptions:** new episodes are counted under SUBSCRIBED each time you open the window.
+- **Resume:** episodes continue where you stopped, and finished ones are marked as played.
+- **Playback:** episodes stream through the macOS player, so the EQ and visualizer don't apply to them.
+
 ## All features
 
 **Playback**
@@ -83,6 +90,7 @@ Press **RADIO** (or ⌘⌥R) to browse and search thousands of stations from [ra
 | `V` | Stop | | ← / → | Seek |
 | `B` | Next | | Space | Play / pause |
 | ⌘O | Add files or folder | | ⌘⌥R | Internet radio |
+| | | | ⌘⌥P | Podcasts |
 
 ## Get it
 
@@ -124,6 +132,7 @@ The app icon's source is `Resources/AppIcon.icon`. Open it in Icon Composer or e
 - **Fonts:** [Hack](https://github.com/source-foundry/Hack) and [Fira Code](https://github.com/tonsky/FiraCode), bundled as [Nerd Fonts](https://www.nerdfonts.com). Their licenses are in `fonts/`.
 - **Classic skin:** the base skin is Winamp 2.91's original skin by Nullsoft.
 - **Radio directory:** provided by the community-run [radio-browser.info](https://www.radio-browser.info).
+- **Podcast directory:** Apple's podcast search and charts.
 - **Screenshots:** the albums shown are fictional; their audio and covers were generated for these images.
 
 OmniAmp is an independent project and is not affiliated with Winamp or Nullsoft.
