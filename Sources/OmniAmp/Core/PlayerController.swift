@@ -60,10 +60,17 @@ final class PlayerController {
         player.setBitPerfect(d.bool(forKey: "bitPerfect"), exclusive: d.bool(forKey: "exclusiveAccess"))
         folders.rescanAll()   // pick up changes made while the app was closed
         setupRemoteCommands()
+        Scrobbler.shared.flushAll()   // send anything queued while offline / closed
         player.onStateChange = { [weak self] in
-            self?.schedulePreloadCheck()
-            self?.updateNowPlaying()
-            self?.ui?.playbackStateDidChange()
+            guard let self else { return }
+            switch self.player.state {
+            case .playing: Scrobbler.shared.playbackResumed()
+            case .paused: Scrobbler.shared.playbackPaused()
+            case .stopped: Scrobbler.shared.trackStarted(nil, duration: 0)
+            }
+            self.schedulePreloadCheck()
+            self.updateNowPlaying()
+            self.ui?.playbackStateDidChange()
         }
     }
 
@@ -341,6 +348,7 @@ final class PlayerController {
         preloadAttempted = false
         applyReplayGain()
         let ok = player.play(url: store.tracks[index].url, from: resumePosition(for: store.tracks[index]))
+        if ok { Scrobbler.shared.trackStarted(store.tracks[index], duration: store.tracks[index].duration ?? player.duration) }
         schedulePreloadCheck()
         ui?.currentTrackDidChange(old: old, new: index)
         updateNowPlaying()
@@ -464,6 +472,7 @@ final class PlayerController {
         if let n = new { dequeue(n) }
         if let o = old { forgetPosition(store.tracks.indices.contains(o) ? store.tracks[o].path : nil) }
         applyReplayGain()
+        Scrobbler.shared.trackStarted(currentTrack, duration: currentTrack?.duration ?? player.duration)
         schedulePreloadCheck()
         NSLog("OmniAmp: gapless advance to #%d", (new ?? -2) + 1)
         ui?.currentTrackDidChange(old: old, new: new)

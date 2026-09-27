@@ -39,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             showLook(mode)
         }
         NSApp.activate(ignoringOtherApps: true)
+        // Test hook: OMNIAMP_SETTINGS=1 opens the Settings window at launch.
+        if ProcessInfo.processInfo.environment["OMNIAMP_SETTINGS"] != nil { showSettings(nil) }
         // Test hook: OMNIAMP_HIDE=1 hides the app after launch (for measuring background playback).
         if ProcessInfo.processInfo.environment["OMNIAMP_HIDE"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.hide(nil) }
@@ -151,6 +153,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func pickInstalledSkin(_ sender: NSMenuItem) {
         if let u = sender.representedObject as? URL { loadSkin(u) }
+    }
+
+    private var settings: SettingsWindowController?
+
+    @objc private func showSettings(_ sender: Any?) {
+        if settings == nil { settings = SettingsWindowController() }
+        settings?.refresh()
+        settings?.showWindow(nil)
+        settings?.window?.makeKeyAndOrderFront(nil)
     }
 
     // MARK: Quick wins
@@ -579,6 +590,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About OmniAmp", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide OmniAmp", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(withTitle: "Quit OmniAmp", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")

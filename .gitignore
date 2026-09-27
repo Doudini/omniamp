@@ -9,3 +9,6 @@ OmniAmp.app/
 
 # Third-party Winamp skins (not ours to redistribute); drop your own .wsz in the repo root for local testing
 *.wsz
+
+# Local API keys (Last.fm), read by scripts/make-app.sh
+secrets.env

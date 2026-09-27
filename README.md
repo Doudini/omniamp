@@ -17,6 +17,7 @@ A small, fast, Winamp-inspired MP3/FLAC player for macOS, written in Swift with 
   - Optional exclusive (hog) access.
   - The device's original rate is restored on quit.
 - **Output device picker:** play to any output device, or follow the system default.
+- **Scrobbling** to **Last.fm** and **ListenBrainz** (Settings, ⌘,): Now Playing updates, standard scrobble rules, and an offline queue. Logins are stored in the Keychain.
 - **Gapless playback** between tracks that share a sample format.
 - **ReplayGain** (track or album mode, with clipping protection), **stop after current** (⇧V), a **sleep timer** that fades out, **resume position** for long files and audiobooks, **always on top**, and a visualizer that cycles spectrum → oscilloscope → off.
 - **10-band equalizer** with preamp and presets, available in both looks.
@@ -34,6 +35,18 @@ swift test             # unit tests
 ./scripts/make-app.sh  # release build → OmniAmp.app (icon: `swift scripts/make-icon.swift` after editing Resources/omniamp.svg)
 open OmniAmp.app
 ```
+
+### Last.fm API key (optional)
+
+Last.fm requires every app to have its own API key, so a build made from this repo has scrobbling to Last.fm disabled until you add one. ListenBrainz works without it.
+
+1. Create a free API account at <https://www.last.fm/api/account/create>.
+2. Put the key and secret in a `secrets.env` file in the repo root. Git ignores this file, so it is never committed:
+   ```sh
+   LASTFM_API_KEY=your_key
+   LASTFM_SECRET=your_secret
+   ```
+3. Run `./scripts/make-app.sh`. The key is built into your `OmniAmp.app`.
 
 To use classic skins, drag any `.wsz` onto the window or use View → Skins → Load Skin…. Thousands of skins are available at the [Winamp Skin Museum](https://skins.webamp.org).
 

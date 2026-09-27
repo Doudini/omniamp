@@ -4,6 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build -c release
 APP=OmniAmp.app
+# Optional, never committed: secrets.env with LASTFM_API_KEY=… and LASTFM_SECRET=… (see README).
+LASTFM_API_KEY=""; LASTFM_SECRET=""
+[[ -f secrets.env ]] && source secrets.env
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/OmniAmp" "$APP/Contents/MacOS/OmniAmp"
@@ -24,6 +27,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.microbot.omniamp</string>
   <key>CFBundleExecutable</key><string>OmniAmp</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>LastFMAPIKey</key><string>${LASTFM_API_KEY}</string>
+  <key>LastFMSecret</key><string>${LASTFM_SECRET}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>CFBundleVersion</key><string>1</string>
