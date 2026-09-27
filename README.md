@@ -1,6 +1,6 @@
 # OmniAmp
 
-**It really whips the llama's ass, again.** OmniAmp is a Winamp-style music player for macOS that is fast, light and native. Drop in a folder of 10,000 tracks and they appear instantly. Audio is gapless and can be bit-perfect. Idle CPU use is 0%.
+OmniAmp is a tiny, simple music player for macOS, inspired by Winamp.
 
 It's written in Swift with AppKit and AVAudioEngine and has no third-party dependencies.
 
@@ -10,20 +10,6 @@ It's written in Swift with AppKit and AVAudioEngine and has no third-party depen
   <img src="docs/classic.png" alt="OmniAmp's classic look with the original Winamp 2.91 base skin: main window, equalizer and playlist" width="338">
 </p>
 <p align="center"><sub>The modern look (left) and the classic look with the original Winamp 2.91 skin (right).</sub></p>
-
-## Why OmniAmp
-
-- 🚀 **Playlists stay fast at any size.** 10,000 tracks show up in about 0.2 s, and a relaunch restores them in about 20 ms. Tags load in parallel in the background.
-- 🎧 **For people who care how their music sounds:**
-  - gapless playback and a 10-band EQ
-  - a bit-perfect mode that switches your DAC to each file's sample rate
-  - ReplayGain, CUE sheets, and 24-bit/96 kHz FLAC shown as exactly that
-- 🪶 **Uses almost no power.** 0% CPU when idle, well under 1% while playing in the background, and about 40 MB of memory.
-- 🦙 **Two looks in one app.** Switch any time from the View menu:
-  - a modern look with album art and phosphor-screen color themes
-  - a pixel-perfect classic look that loads real Winamp 2.x `.wsz` skins
-- 📻 **Thousands of internet radio stations,** with logos, favorites and live song titles.
-- ⌨️ **Your fingers still know it.** `Z X C V B`, `J` to jump to a track, media keys.
 
 ## The modern look
 
@@ -56,7 +42,7 @@ Press **RADIO** (or ⌘⌥R) to browse and search thousands of stations from [ra
 ## All features
 
 **Playback**
-- **Formats:** MP3, FLAC, ALAC/AAC (M4A), WAV (including RF64), AIFF and CAF, with fast built-in tag readers. The display shows exactly what's playing, e.g. "FLAC 24-bit / 96 kHz".
+- **Formats:** MP3, FLAC, ALAC/AAC (M4A), WAV (including RF64), AIFF and CAF, with built-in tag readers. The display shows exactly what's playing, e.g. "FLAC 24-bit / 96 kHz".
 - **Gapless playback** between tracks that share a sample format.
 - **Bit-perfect mode** (Output menu):
   - Matches the output device to each file's sample rate.
@@ -73,7 +59,7 @@ Press **RADIO** (or ⌘⌥R) to browse and search thousands of stations from [ra
   - always on top
 
 **Playlist**
-- **Instant loading.** The playlist is cached, and tags are read in parallel.
+- **Large folders:** drop in a whole music library; the playlist is kept between launches.
 - **Editing:** drag to reorder, a play queue (Q), sorting, and removal of duplicates and missing files.
 - **Watched folders:** the playlist follows your music folders live. New files appear next to their folder-mates, deleted files disappear and edited files are re-tagged. Your folder structure is never touched.
 - **Playlist files:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists.
@@ -84,7 +70,7 @@ Press **RADIO** (or ⌘⌥R) to browse and search thousands of stations from [ra
 - **[Last.fm](https://www.last.fm) and [ListenBrainz](https://listenbrainz.org)** (Settings, ⌘,): Now Playing updates, standard scrobble rules and an offline queue. Logins are stored in the macOS Keychain.
 
 **Look and feel**
-- **Visualizer:** cycles spectrum → oscilloscope → off, and pauses when you can't see it.
+- **Visualizer:** cycles spectrum → oscilloscope → off.
 - **Now Playing and media keys:** macOS Now Playing and the keyboard media keys work.
 
 ## Keyboard shortcuts

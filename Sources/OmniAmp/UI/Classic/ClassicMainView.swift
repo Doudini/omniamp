@@ -16,20 +16,33 @@ final class ClassicWindow: NSWindow {
 }
 
 /// Base for skinned views: flipped, draws in skin pixels scaled by `scale`, no smoothing.
+///
+/// Like Winamp itself, the skin is composited on the CPU into one small bitmap that becomes the layer's
+/// contents; Core Animation scales it up with nearest-neighbour filtering. Drawing hundreds of sprites
+/// straight into a 2×–4× view made the GPU keep a texture per sprite (~65 MB for the three windows).
 class SkinCanvasView: NSView {
     var skin: Skin { didSet { needsDisplay = true } }
     var scale: CGFloat { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
+
+    /// Bitmap pixels per skin pixel. Sprite-only views use 1 (the real skin resolution); views with
+    /// vector text override this to render at full screen resolution.
+    var renderScale: CGFloat { 1 }
+
+    private var canvas: CGContext?
 
     init(skin: Skin, scale: CGFloat) {
         self.skin = skin
         self.scale = scale
         super.init(frame: .zero)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
         registerForDraggedTypes([.fileURL])
     }
     required init?(coder: NSCoder) { fatalError() }
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var wantsUpdateLayer: Bool { true }
 
     /// Mouse location in skin pixels.
     func skinPoint(_ event: NSEvent) -> CGPoint {
@@ -37,12 +50,37 @@ class SkinCanvasView: NSView {
         return CGPoint(x: p.x / scale, y: p.y / scale)
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsDisplay = true
+    }
+
+    override func updateLayer() {
+        guard let layer, bounds.width > 0, bounds.height > 0 else { return }
+        let rs = renderScale
+        let w = Int((bounds.width / scale * rs).rounded(.up)), h = Int((bounds.height / scale * rs).rounded(.up))
+        if canvas?.width != w || canvas?.height != h {
+            canvas = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                               space: CGColorSpaceCreateDeviceRGB(),
+                               bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        }
+        guard let ctx = canvas else { return }
+        ctx.saveGState()
+        ctx.clear(CGRect(x: 0, y: 0, width: w, height: h))
+        // Flipped, in skin pixels.
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: rs, y: -rs)
         ctx.interpolationQuality = .none
         ctx.setShouldAntialias(false)
-        ctx.scaleBy(x: scale, y: scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
         drawSkin(ctx)
+        NSGraphicsContext.restoreGraphicsState()
+        ctx.restoreGState()
+        layer.contents = ctx.makeImage()
+        layer.contentsGravity = .resize
+        layer.magnificationFilter = .nearest
+        layer.minificationFilter = .nearest
     }
 
     func drawSkin(_ ctx: CGContext) {}

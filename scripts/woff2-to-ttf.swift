@@ -2,6 +2,10 @@
 //
 // Why: macOS must decompress a WOFF2 font into RAM (~16 MB per Nerd Font), but it memory-maps a TTF from
 // disk and only pages in the glyphs it uses. The app ships TTFs built from fonts/*.woff2 by make-app.sh.
+//
+// It also adds an OpenType 'meta' table declaring the fonts' languages (Latin). Without one, CoreText works
+// them out by testing the character set against every language it knows, and keeps ~370 character-set
+// bitmaps in memory for it (~3 MB per app, measured).
 import CoreText
 import Foundation
 
@@ -38,6 +42,17 @@ for path in args.dropLast() {
     for tag in tags {
         guard let data = CTFontCopyTable(font, CTFontTableTag(tag), CTFontTableOptions(rawValue: 0)) as Data? else { continue }
         tables.append((tag, [UInt8](data)))
+    }
+    let metaTag: UInt32 = 0x6D65_7461 // 'meta'
+    if !tables.contains(where: { $0.tag == metaTag }) {
+        // meta v1: header, then data maps for 'dlng' (design languages) and 'slng' (supported languages).
+        let langs = Array("Latn".utf8)
+        let maps: [UInt32] = [0x646C_6E67, 0x736C_6E67] // 'dlng', 'slng'
+        var meta = be32(1) + be32(0) + be32(0) + be32(UInt32(maps.count))
+        var dataOffset = UInt32(16 + 12 * maps.count)
+        for tag in maps { meta += be32(tag) + be32(dataOffset) + be32(UInt32(langs.count)); dataOffset += UInt32(langs.count) }
+        for _ in maps { meta += langs }
+        tables.append((metaTag, meta))
     }
     tables.sort { $0.tag < $1.tag }
 

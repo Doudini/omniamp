@@ -33,13 +33,24 @@ final class Skin {
             if ext == "bmp" || ext == "png" {
                 if let src = CGImageSourceCreateWithData(data as CFData, nil),
                    let img = CGImageSourceCreateImageAtIndex(src, 0, nil) {
-                    images[base] = img
+                    images[base] = Self.decoded(img)
                 }
             }
         }
         guard images["main"] != nil else { throw SkinError.missingMain }
         if let d = zip.entries["pledit.txt"] { parsePledit(Self.text(d)) }
         if let d = zip.entries["viscolor.txt"] { parseViscolor(Self.text(d)) }
+    }
+
+    /// Decode once into 32-bit BGRA (the screen's native format). ImageIO's BMP images are lazy: without this,
+    /// every blit re-decodes (and RLE-unpacks) the whole sheet.
+    static func decoded(_ img: CGImage) -> CGImage {
+        guard let ctx = CGContext(data: nil, width: img.width, height: img.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return img }
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: img.width, height: img.height))
+        return ctx.makeImage() ?? img
     }
 
     func has(_ file: String) -> Bool { images[file] != nil }

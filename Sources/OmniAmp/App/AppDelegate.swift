@@ -82,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func showLook(_ m: Mode, persist: Bool = true) {
         look?.dismantle()
         look = nil
+        MemoryTrim.soon(after: 3)   // launch, or the old look's windows and images
         switch m {
         case .modern:
             let w = ModernWindowController(controller: controller)

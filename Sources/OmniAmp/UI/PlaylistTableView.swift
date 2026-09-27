@@ -2,6 +2,11 @@ import AppKit
 
 /// Table with Winamp-ish key handling and drop support.
 final class PlaylistTableView: NSTableView {
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        keepDrawingOnCPU()
+    }
+
     var onActivate: (() -> Void)?
     var onDelete: (() -> Void)?
     /// ⌥↑ / ⌥↓: move the selection up/down.

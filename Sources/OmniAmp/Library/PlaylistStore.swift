@@ -180,8 +180,9 @@ final class PlaylistStore {
             DispatchQueue.concurrentPerform(iterations: chunks) { c in
                 var local: [(Int, TagInfo)] = []
                 local.reserveCapacity(chunk)
+                let buffer = TagReadBuffer()
                 for w in work[(c * chunk)..<min((c + 1) * chunk, work.count)] {
-                    local.append((w.id, TagReader.read(path: w.path, fileSize: w.size)))
+                    local.append((w.id, TagReader.read(path: w.path, fileSize: w.size, buffer: buffer)))
                 }
                 self.pendingLock.lock()
                 self.pending.append(contentsOf: local.map { (id: $0.0, info: $0.1) })
@@ -195,6 +196,7 @@ final class PlaylistStore {
                     self.flushTimer = nil
                     NSLog("OmniAmp: tags for %d files in %.3fs", work.count, Date().timeIntervalSince(self.loadStart))
                     self.onTagLoadingFinished?()
+                    MemoryTrim.soon()
                 }
             }
         }

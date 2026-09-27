@@ -13,6 +13,8 @@ final class ClassicPlaylistView: SkinCanvasView {
     /// Size in skin pixels.
     var skinSize = CGSize(width: 275, height: 232) { didSet { invalidateIntrinsicContentSize(); clampScroll(); needsDisplay = true } }
     override var intrinsicContentSize: NSSize { NSSize(width: skinSize.width * scale, height: skinSize.height * scale) }
+    /// Vector text: render at full screen resolution.
+    override var renderScale: CGFloat { scale * (window?.backingScaleFactor ?? 2) }
 
     private(set) var selection = IndexSet()   // rows
     private var anchor: Int?

@@ -134,6 +134,7 @@ final class HoverCard {
 /// INFO drawer: art + all metadata for the playing track (or the one selected in the playlist), or an
 /// ON AIR view for radio. Lines wrap instead of being cut off, and the drawer asks for the height it needs.
 final class ModernInfoView: NSView {
+
     weak var controller: PlayerController?
     var onReveal: ((String) -> Void)?
     /// Content changed size: the window re-reads `preferredHeight(forWidth:)`.
@@ -165,16 +166,26 @@ final class ModernInfoView: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        wantsLayer = true
         build()
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override func draw(_ dirtyRect: NSRect) {
-        let p = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
-        Theme.lcd.setFill(); p.fill()
-        NSGradient(starting: NSColor.white.withAlphaComponent(0.03), ending: .clear)?
-            .draw(in: NSRect(x: 0, y: bounds.height * 0.6, width: bounds.width, height: bounds.height * 0.4), angle: -90)
-        NSColor.black.setStroke(); p.stroke()
+    // The LCD background is a gradient layer (no backing bitmap): faint sheen at the top, black edge.
+    override func makeBackingLayer() -> CALayer { CAGradientLayer() }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { styleBackground() }
+    private func styleBackground() {
+        guard let g = layer as? CAGradientLayer else { return }
+        let sheen = Theme.lcd.blended(withFraction: 0.03, of: .white) ?? Theme.lcd
+        g.colors = [sheen, Theme.lcd, Theme.lcd].map(\.cgColor)
+        g.locations = [0, 0.4, 1]
+        g.startPoint = CGPoint(x: 0.5, y: 1)
+        g.endPoint = CGPoint(x: 0.5, y: 0)
+        g.cornerRadius = 4
+        g.masksToBounds = true
+        g.borderWidth = 1
+        g.borderColor = NSColor.black.cgColor
     }
 
     /// Wrapping label: up to `lines` lines, the last one truncated if the text is longer still.
@@ -281,6 +292,7 @@ final class ModernInfoView: NSView {
     override func layout() {
         setWrapWidths(bounds.width)
         super.layout()
+        styleBackground()
     }
 
     /// Show a track (index into the playlist). `pinned` = chosen in the playlist rather than now playing.

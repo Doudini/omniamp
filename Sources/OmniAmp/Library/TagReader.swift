@@ -30,29 +30,52 @@ struct TagInfo: Equatable {
     }
 }
 
+/// A read buffer to reuse across files. Tag loading reads the head of every file in a folder; a fresh
+/// 128 KB allocation per file (10,000 files = over a gigabyte of churn) left ~300 MB of freed-but-dirty
+/// malloc pages that macOS took a minute to reclaim.
+final class TagReadBuffer {
+    fileprivate var bytes = [UInt8](repeating: 0, count: TagReader.headSize)
+}
+
 /// Minimal, fast tag reader: reads only the head (and for ID3v1 the tail) of a file.
 enum TagReader {
     static let headSize = 128 * 1024
 
-    static func read(path: String, fileSize: Int64) -> TagInfo {
-        guard let fh = FileHandle(forReadingAtPath: path) else { return TagInfo() }
-        defer { try? fh.close() }
-        let head = (try? fh.read(upToCount: headSize)) ?? Data()
+    static func read(path: String, fileSize: Int64, buffer: TagReadBuffer? = nil) -> TagInfo {
+        autoreleasepool { readHead(path: path, fileSize: fileSize, buffer: buffer ?? TagReadBuffer()) }
+    }
+
+    private static func readHead(path: String, fileSize: Int64, buffer: TagReadBuffer) -> TagInfo {
+        let fd = open(path, O_RDONLY)
+        guard fd >= 0 else { return TagInfo() }
+        defer { close(fd) }
+        let n = buffer.bytes.withUnsafeMutableBytes { p -> Int in
+            var got = 0
+            while got < p.count {
+                let r = Darwin.read(fd, p.baseAddress! + got, p.count - got)
+                if r <= 0 { break }
+                got += r
+            }
+            return got
+        }
+        // Full buffer (any real audio file): parse it in place, no copy.
+        let head = n == buffer.bytes.count ? buffer.bytes : Array(buffer.bytes[0..<n])
         let ext = (path as NSString).pathExtension.lowercased()
         if ext == "flac" || head.starts(with: [0x66, 0x4C, 0x61, 0x43]) {
-            return parseFLAC(Array(head))
+            return parseFLAC(head)
         }
         // Container formats may keep tags/indexes anywhere in the file, so they seek.
         let magic = Array(head.prefix(12))
         if magic.count == 12 {
             let tag4 = String(decoding: magic[0..<4], as: UTF8.self), form = String(decoding: magic[8..<12], as: UTF8.self)
+            let fh = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
             if (tag4 == "RIFF" || tag4 == "RF64") && form == "WAVE" { return ContainerTags.wav(fh, fileSize: fileSize) }
             if tag4 == "FORM" && (form == "AIFF" || form == "AIFC") { return ContainerTags.aiff(fh, fileSize: fileSize) }
             if String(decoding: magic[4..<8], as: UTF8.self) == "ftyp" { return ContainerTags.mp4(fh, fileSize: fileSize) }
         }
         if ext != "mp3" {
             // Raw AAC, CAF and other odd files: let Core Audio work it out (slower, but rare).
-            var info = parseID3Tag(Array(head))
+            var info = parseID3Tag(head)
             let ca = ContainerTags.coreAudioInfo(path: path)
             info.duration = ca.duration
             info.sampleRate = ca.sampleRate
@@ -60,11 +83,11 @@ enum TagReader {
             if let d = info.duration, d > 0 { info.bitrate = Int(Double(fileSize) * 8 / d / 1000) }
             return info
         }
-        var info = parseMP3(Array(head), fileSize: fileSize)
+        var info = parseMP3(head, fileSize: fileSize)
         if info.title == nil, fileSize > 128 {
-            try? fh.seek(toOffset: UInt64(fileSize - 128))
-            if let tail = try? fh.read(upToCount: 128) {
-                let v1 = parseID3v1(Array(tail))
+            var tail = [UInt8](repeating: 0, count: 128)
+            if tail.withUnsafeMutableBytes({ pread(fd, $0.baseAddress, 128, off_t(fileSize - 128)) }) == 128 {
+                let v1 = parseID3v1(tail)
                 info.title = info.title ?? v1.title
                 info.artist = info.artist ?? v1.artist
                 info.album = info.album ?? v1.album

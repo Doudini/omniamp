@@ -75,6 +75,7 @@ final class MarqueeView: NSView {
 
 /// Top panel for the modern look.
 final class ModernPanelView: NSView {
+
     weak var controller: PlayerController?
     var onToggleEQ: (() -> Void)?
     var onToggleInfo: (() -> Void)?
@@ -107,16 +108,24 @@ final class ModernPanelView: NSView {
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .duringViewResize
         build()
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override func draw(_ dirtyRect: NSRect) {
-        NSGradient(starting: Theme.panelTop, ending: Theme.panelBottom)?.draw(in: bounds, angle: -90)
-        NSColor.white.withAlphaComponent(0.08).setFill()
-        NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
-        NSColor.black.setFill()
-        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
+    // The background is a gradient layer (no backing bitmap): top highlight line, gradient, black bottom line.
+    override func makeBackingLayer() -> CALayer { CAGradientLayer() }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { styleBackground() }
+    private func styleBackground() {
+        guard let g = layer as? CAGradientLayer, bounds.height > 2 else { return }
+        let px = NSNumber(value: Double(1 / bounds.height))
+        let top = Theme.panelTop.blended(withFraction: 0.08, of: .white) ?? Theme.panelTop
+        g.colors = [top, top, Theme.panelTop, Theme.panelBottom, NSColor.black, NSColor.black].map(\.cgColor)
+        g.locations = [0, px, px, NSNumber(value: 1 - px.doubleValue), NSNumber(value: 1 - px.doubleValue), 1]
+        g.startPoint = CGPoint(x: 0.5, y: 1)
+        g.endPoint = CGPoint(x: 0.5, y: 0)
     }
 
     private func build() {
@@ -291,6 +300,7 @@ final class ModernPanelView: NSView {
             leftWidth = c
         }
         super.layout()
+        styleBackground()
         let narrow = bounds.width < 520
         if narrow != compact {
             compact = narrow
