@@ -77,7 +77,16 @@ final class MarqueeView: NSView {
 final class ModernPanelView: NSView {
     weak var controller: PlayerController?
     var onToggleEQ: (() -> Void)?
+    var onToggleInfo: (() -> Void)?
+    /// Cover clicked: show the playing track's info.
+    var onArtClick: (() -> Void)?
     private(set) var eqButton: ModernButton!
+    private(set) var infoButton: ModernButton!
+    /// Album art of the playing track, framed inside the right LCD box.
+    let art = ArtView()
+    private let hoverCard = HoverCard()
+    private var hoverWork: DispatchWorkItem?
+    private var artPath: String?
 
     private let leftBox = LCDBox()
     private let rightBox = LCDBox()
@@ -117,10 +126,17 @@ final class ModernPanelView: NSView {
         addSubview(leftBox)
         addSubview(rightBox)
         [stateLabel, time, spectrum].forEach(leftBox.addSubview)
-        [marquee, infoLabel, volIcon, volume, badge].forEach(rightBox.addSubview)
+        [art, marquee, infoLabel, volIcon, volume, badge].forEach(rightBox.addSubview)
+        art.onHover = { [weak self] inside in self?.hover(inside) }
+        art.onClick = { [weak self] in self?.hover(false); self?.onArtClick?() }
+        art.toolTip = nil
         badge.translatesAutoresizingMaskIntoConstraints = false
         badge.font = Fonts.hack(9, bold: true)
-        badge.alignment = .right
+        badge.alignment = .left
+        badge.lineBreakMode = .byTruncatingTail
+        infoLabel.lineBreakMode = .byTruncatingTail
+        badge.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        infoLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         stateLabel.font = Theme.icon(10)
         stateLabel.textColor = Theme.green
@@ -161,12 +177,16 @@ final class ModernPanelView: NSView {
         eqButton = ModernButton(glyph: "", label: "EQ", target: self, action: #selector(eqTapped))
         eqButton.toolTip = "Equalizer"
         addSubview(eqButton)
+        infoButton = ModernButton(glyph: "", label: "INFO", target: self, action: #selector(infoTapped))
+        infoButton.toolTip = "Track and album info"
+        addSubview(infoButton)
 
         topConstraint = leftBox.topAnchor.constraint(equalTo: topAnchor, constant: 10)
         NSLayoutConstraint.activate([
             topConstraint,
             leftBox.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            leftBox.widthAnchor.constraint(equalToConstant: 158),
+            leftBox.widthAnchor.constraint(lessThanOrEqualToConstant: 158),
+            leftBox.widthAnchor.constraint(greaterThanOrEqualToConstant: 118),
             leftBox.heightAnchor.constraint(equalToConstant: 88),
 
             stateLabel.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 8),
@@ -185,21 +205,28 @@ final class ModernPanelView: NSView {
             rightBox.topAnchor.constraint(equalTo: leftBox.topAnchor),
             rightBox.heightAnchor.constraint(equalTo: leftBox.heightAnchor),
 
-            marquee.leadingAnchor.constraint(equalTo: rightBox.leadingAnchor, constant: 4),
+            art.leadingAnchor.constraint(equalTo: rightBox.leadingAnchor, constant: 6),
+            art.topAnchor.constraint(equalTo: rightBox.topAnchor, constant: 6),
+            art.bottomAnchor.constraint(equalTo: rightBox.bottomAnchor, constant: -6),
+            art.widthAnchor.constraint(equalTo: art.heightAnchor),
+            marquee.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 4),
             marquee.trailingAnchor.constraint(equalTo: rightBox.trailingAnchor, constant: -4),
             marquee.topAnchor.constraint(equalTo: rightBox.topAnchor, constant: 6),
             marquee.heightAnchor.constraint(equalToConstant: 22),
 
-            infoLabel.leadingAnchor.constraint(equalTo: rightBox.leadingAnchor, constant: 8),
+            infoLabel.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 8),
+            infoLabel.trailingAnchor.constraint(lessThanOrEqualTo: rightBox.trailingAnchor, constant: -6),
             infoLabel.topAnchor.constraint(equalTo: marquee.bottomAnchor, constant: 2),
-            badge.leadingAnchor.constraint(equalTo: rightBox.leadingAnchor, constant: 8),
+            badge.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 8),
+            badge.trailingAnchor.constraint(lessThanOrEqualTo: rightBox.trailingAnchor, constant: -6),
             badge.topAnchor.constraint(equalTo: infoLabel.bottomAnchor, constant: 1),
 
-            volIcon.leadingAnchor.constraint(equalTo: rightBox.leadingAnchor, constant: 8),
+            volIcon.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 8),
             volIcon.centerYAnchor.constraint(equalTo: repeatButton.centerYAnchor),
             volume.leadingAnchor.constraint(equalTo: volIcon.trailingAnchor, constant: 4),
             volume.centerYAnchor.constraint(equalTo: repeatButton.centerYAnchor),
-            volume.widthAnchor.constraint(equalToConstant: 84),
+            volume.widthAnchor.constraint(lessThanOrEqualToConstant: 84),
+            volume.widthAnchor.constraint(greaterThanOrEqualToConstant: 40),
             volume.heightAnchor.constraint(equalToConstant: 16),
 
             repeatButton.trailingAnchor.constraint(equalTo: rightBox.trailingAnchor, constant: -6),
@@ -223,6 +250,9 @@ final class ModernPanelView: NSView {
             eqButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             eqButton.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
             eqButton.widthAnchor.constraint(equalToConstant: 44),
+            infoButton.trailingAnchor.constraint(equalTo: eqButton.leadingAnchor, constant: -4),
+            infoButton.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
+            infoButton.widthAnchor.constraint(equalToConstant: 50),
         ])
     }
 
@@ -242,14 +272,69 @@ final class ModernPanelView: NSView {
         marquee.tick()
     }
 
+    /// Narrow windows (< 520 pt): smaller time, format on two lines, icon-only toggles.
+    private(set) var compact = false
+    private var leftWidth: NSLayoutConstraint?
+
+    override func layout() {
+        if leftWidth == nil {
+            // Left display takes ~30% of the width between 118 and 158 pt.
+            let c = leftBox.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.3)
+            c.priority = .defaultHigh
+            c.isActive = true
+            leftWidth = c
+        }
+        super.layout()
+        let narrow = bounds.width < 520
+        if narrow != compact {
+            compact = narrow
+            shuffleButton.compact = narrow
+            repeatButton.compact = narrow
+            updateInfoLines()
+        }
+        let size: CGFloat = leftBox.frame.width >= 150 ? 30 : 24
+        if time.font.pointSize != size { time.font = Fonts.hack(size, bold: true); time.needsDisplay = true }
+    }
+
+    /// Format line(s) and the bit-perfect badge. Compact: line 2 of the format replaces the badge row.
+    private func updateInfoLines() {
+        guard let c = controller else { return }
+        let lines = c.currentIndex.map { c.formatLines(for: $0) } ?? ("", "")
+        let b = c.outputBadge
+        let amber = NSColor(calibratedRed: 1, green: 0.7, blue: 0.2, alpha: 1)
+        badge.toolTip = b.map { $0.ok ? "\($0.text): samples reach \(c.player.deviceName) unchanged." : "\($0.text): \(c.player.deviceName) does not support this sample rate; macOS resamples." }
+        if compact {
+            infoLabel.stringValue = lines.0
+            badge.font = Fonts.hack(10)
+            badge.stringValue = (b.map { $0.ok ? "\u{25C6} " : "\u{25B2} " } ?? "") + lines.1
+            badge.textColor = b.map { $0.ok ? Theme.green : amber } ?? infoLabel.textColor
+        } else {
+            infoLabel.stringValue = [lines.0, lines.1].filter { !$0.isEmpty }.joined(separator: " · ")
+            badge.font = Fonts.hack(9, bold: true)
+            badge.stringValue = b.map { ($0.ok ? "\u{25C6} " : "\u{25B2} ") + $0.text } ?? ""
+            badge.textColor = b.map { $0.ok ? Theme.green : amber } ?? Theme.green
+        }
+    }
+
     func refreshTrackInfo() {
         guard let c = controller else { return }
         if let i = c.currentIndex, i < c.tracks.count {
             marquee.text = c.title(for: i)
-            infoLabel.stringValue = c.formatDescription
+            updateInfoLines()
+            let path = c.tracks[i].path
+            if path != artPath {
+                artPath = path
+                art.image = ArtworkStore.shared.cached(path)?.thumb
+                ArtworkStore.shared.load(path) { [weak self] e in
+                    guard let self, self.artPath == path else { return }
+                    self.art.image = e.thumb
+                }
+            }
         } else {
             marquee.text = "OmniAmp · drop a folder to start"
-            infoLabel.stringValue = ""
+            updateInfoLines()
+            artPath = nil
+            art.image = nil
         }
     }
 
@@ -261,14 +346,7 @@ final class ModernPanelView: NSView {
         volume.alphaValue = c.player.volumeAdjustable ? 1 : 0.35
         volume.isEnabled = c.player.volumeAdjustable
         volume.toolTip = c.player.bitPerfect ? (c.player.volumeAdjustable ? "Device volume (bit-perfect mode)" : "Fixed at 100% in bit-perfect mode") : nil
-        if let b = c.outputBadge {
-            let glyph = b.ok ? "\u{25C6} " : "\u{25B2} "
-            badge.stringValue = glyph + b.text
-            badge.textColor = b.ok ? Theme.green : NSColor(calibratedRed: 1, green: 0.7, blue: 0.2, alpha: 1)
-            badge.toolTip = b.ok ? "Samples reach \(c.player.deviceName) unchanged." : "\(c.player.deviceName) does not support this sample rate; macOS resamples."
-        } else {
-            badge.stringValue = ""
-        }
+        updateInfoLines()
     }
 
     // MARK: Actions
@@ -282,5 +360,25 @@ final class ModernPanelView: NSView {
     @objc private func shuffleTapped() { controller?.toggleShuffle() }
     @objc private func repeatTapped() { controller?.toggleRepeat() }
     @objc private func eqTapped() { onToggleEQ?() }
+    @objc private func infoTapped() { onToggleInfo?() }
+
+    /// Hover the art for a big version (after a short delay, so passing the mouse over it doesn't flash).
+    private func hover(_ inside: Bool) {
+        hoverWork?.cancel()
+        guard inside else { hoverCard.hide(); return }
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, let c = self.controller, let i = c.currentIndex, i < c.tracks.count, let win = self.window else { return }
+            let t = c.tracks[i]
+            let e = ArtworkStore.shared.cached(t.path)
+            let d = e?.details
+            var lines = [d?.album ?? t.album, [d?.albumArtist ?? d?.artist ?? t.artist, d?.year].compactMap { $0 }.joined(separator: " · ")]
+                .compactMap { $0 }.filter { !$0.isEmpty }
+            if lines.isEmpty { lines = [t.displayTitle] }
+            let anchor = win.convertToScreen(self.art.convert(self.art.bounds, to: nil))
+            self.hoverCard.show(path: t.path, thumb: e?.thumb, lines: lines.joined(separator: "\n"), near: anchor)
+        }
+        hoverWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: w)
+    }
     @objc private func seekReleased() { controller?.seek(fraction: seek.value) }
 }

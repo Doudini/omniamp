@@ -593,8 +593,19 @@ final class PlayerController {
     }
 
     /// Human readable format, e.g. "FLAC 24-bit / 96 kHz" or "MP3 320 kbps · 44.1 kHz".
-    var formatDescription: String {
-        guard let t = currentTrack else { return "" }
+    var formatDescription: String { currentIndex.map { formatDescription(for: $0) } ?? "" }
+
+    /// Format line for any track; the playing one also gets live info (actual rate, channels).
+    func formatDescription(for index: Int) -> String {
+        let l = formatLines(for: index)
+        return [l.0, l.1].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// The format split in two, for narrow layouts: ("FLAC 16-bit / 44.1 kHz", "801 kbps · stereo").
+    func formatLines(for index: Int) -> (String, String) {
+        guard index < store.tracks.count else { return ("", "") }
+        let t = store.tracks[index]
+        let playing = index == currentIndex && player.state != .stopped
         let ext = (t.path as NSString).pathExtension.lowercased()
         let lossless = t.bitDepth != nil
         let codec: String
@@ -607,16 +618,31 @@ final class PlayerController {
         case "aac": codec = "AAC"
         default: codec = ext.uppercased()
         }
-        let sr = currentTrack?.sampleRate ?? Int(player.sampleRate)
+        let sr = t.sampleRate ?? (playing ? Int(player.sampleRate) : 0)
         let khz = sr > 0 ? (sr % 1000 == 0 ? "\(sr / 1000) kHz" : String(format: "%.1f kHz", Double(sr) / 1000)) : ""
-        let ch = player.channelCount == 1 ? "mono" : (player.channelCount == 2 ? "stereo" : (player.channelCount > 2 ? "\(player.channelCount) ch" : ""))
-        let parts: [String]
-        if lossless, let bits = t.bitDepth {
-            parts = ["\(codec) \(bits)-bit / \(khz)", currentKbps.map { "\($0) kbps" } ?? "", ch]
-        } else {
-            parts = ["\(codec) \(currentKbps.map { "\($0) kbps" } ?? "")", khz, ch]
+        let channels = playing ? player.channelCount : 0
+        let ch = channels == 1 ? "mono" : (channels == 2 ? "stereo" : (channels > 2 ? "\(channels) ch" : ""))
+        let kbps = t.bitrate ?? t.duration.flatMap { $0 > 0 ? Int(Double(t.size) * 8 / $0 / 1000) : nil }
+        func join(_ p: [String]) -> String {
+            p.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " · ")
         }
-        return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " · ")
+        if lossless, let bits = t.bitDepth {
+            return (join(["\(codec) \(bits)-bit / \(khz)"]), join([kbps.map { "\($0) kbps" } ?? "", ch]))
+        }
+        return (join(["\(codec) \(kbps.map { "\($0) kbps" } ?? "")"]), join([khz, ch]))
+    }
+
+    /// Tracks of the same album in the playlist (same album tag, and same folder or artist).
+    func albumSummary(for index: Int) -> (count: Int, duration: Double)? {
+        guard index < store.tracks.count, let album = store.tracks[index].album, !album.isEmpty else { return nil }
+        let t = store.tracks[index]
+        let dir = (t.path as NSString).deletingLastPathComponent
+        var n = 0, d = 0.0
+        for o in store.tracks where o.album == album && ((o.path as NSString).deletingLastPathComponent == dir || o.artist == t.artist) {
+            n += 1
+            d += o.duration ?? 0
+        }
+        return (n, d)
     }
 
     var statusText: String {

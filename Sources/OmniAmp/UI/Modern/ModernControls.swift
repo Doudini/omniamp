@@ -3,7 +3,16 @@ import AppKit
 /// Beveled hardware-style button showing a Nerd Font glyph and/or a label.
 final class ModernButton: NSControl {
     var glyph: String
-    var label: String?
+    var label: String? { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
+    private var fullLabel: String?
+    /// Icon-only when true (narrow windows); the label moves into the tooltip.
+    var compact = false {
+        didSet {
+            guard compact != oldValue, !glyph.isEmpty else { return }
+            if compact { fullLabel = label; label = nil; if toolTip == nil { toolTip = fullLabel?.capitalized } }
+            else { label = fullLabel }
+        }
+    }
     var isToggle = false
     var isOn = false { didSet { needsDisplay = true } }
     var glyphSize: CGFloat = 12

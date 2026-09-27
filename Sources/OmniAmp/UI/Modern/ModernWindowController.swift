@@ -5,17 +5,28 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     private let controller: PlayerController
     private let panel = ModernPanelView()
     private let eqView = ModernEQView()
-    private var eqHeight: NSLayoutConstraint!
-    private var eqGap: NSLayoutConstraint!
-    private var eqVisible: Bool {
-        get { UserDefaults.standard.bool(forKey: "modernEQVisible") }
-        set { UserDefaults.standard.set(newValue, forKey: "modernEQVisible") }
+    private let infoView = ModernInfoView()
+    /// One drawer slot under the panel, shared by EQ and INFO (only one is open at a time).
+    private let drawerHost = NSView()
+    private var drawerHeight: NSLayoutConstraint!
+    private var drawerGap: NSLayoutConstraint!
+    private enum Drawer: String { case none, eq, info }
+    private var drawer: Drawer {
+        get {
+            if let s = UserDefaults.standard.string(forKey: "modernDrawer"), let d = Drawer(rawValue: s) { return d }
+            return UserDefaults.standard.bool(forKey: "modernEQVisible") ? .eq : .none
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "modernDrawer") }
     }
+    /// Track shown in INFO when the user picked one in the playlist (stable ID); nil = follow playback.
+    private var pinnedInfoID: Int?
     private let table = PlaylistTableView()
     private let scroll = NSScrollView()
     private let filterField = NSSearchField()
     private let statusLabel = NSTextField(labelWithString: "")
     private var clock: DisplayClock!
+    private var addBtn: ModernButton!
+    private var clrBtn: ModernButton!
     private var tick = 0
     var onClose: (() -> Void)?
     /// Right-click menu for the playlist (built by the app delegate).
@@ -36,7 +47,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         window.titleVisibility = .hidden
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = Theme.background
-        window.minSize = NSSize(width: 440, height: 340)
+        window.minSize = NSSize(width: 360, height: 340)
         super.init(window: window)
         window.delegate = self
         if !window.setFrameUsingName("OmniAmpMain") { window.center() }
@@ -44,8 +55,13 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         buildUI()
         panel.controller = controller
         eqView.controller = controller
-        panel.onToggleEQ = { [weak self] in self?.toggleEQ() }
-        applyEQVisibility()
+        infoView.controller = controller
+        infoView.onReveal = { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: $0)]) }
+        panel.onToggleEQ = { [weak self] in self?.toggle(.eq) }
+        panel.onToggleInfo = { [weak self] in self?.pinnedInfoID = nil; self?.toggle(.info) }
+        panel.onArtClick = { [weak self] in self?.artClicked() }
+        windowDidResize(Notification(name: NSWindow.didResizeNotification))
+        applyDrawer()
         eqView.refresh()
         controller.ui = self
         playlistDidReload()
@@ -123,8 +139,16 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         scroll.layer?.borderColor = NSColor.black.cgColor
         scroll.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(scroll)
-        eqView.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(eqView)
+        drawerHost.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(drawerHost)
+        for v in [eqView, infoView] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            drawerHost.addSubview(v)
+            NSLayoutConstraint.activate([
+                v.topAnchor.constraint(equalTo: drawerHost.topAnchor), v.bottomAnchor.constraint(equalTo: drawerHost.bottomAnchor),
+                v.leadingAnchor.constraint(equalTo: drawerHost.leadingAnchor), v.trailingAnchor.constraint(equalTo: drawerHost.trailingAnchor),
+            ])
+        }
 
         filterField.placeholderString = "Jump to…  (J)"
         filterField.font = Fonts.hack(11)
@@ -139,18 +163,19 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         statusLabel.textColor = Theme.playlistText
         statusLabel.alignment = .right
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusLabel.lineBreakMode = .byTruncatingHead
         root.addSubview(statusLabel)
 
-        let addBtn = ModernButton(glyph: Fonts.Icon.plus, label: "ADD", target: self, action: #selector(addTapped))
-        let clrBtn = ModernButton(glyph: Fonts.Icon.trash, label: "CLEAR", target: self, action: #selector(clearTapped))
+        addBtn = ModernButton(glyph: Fonts.Icon.plus, label: "ADD", target: self, action: #selector(addTapped))
+        clrBtn = ModernButton(glyph: Fonts.Icon.trash, label: "CLEAR", target: self, action: #selector(clearTapped))
         addBtn.glyphSize = 10; clrBtn.glyphSize = 10
         root.addSubview(addBtn)
         root.addSubview(clrBtn)
 
         let titlebarHeight: CGFloat = 28
-        eqHeight = eqView.heightAnchor.constraint(equalToConstant: 0)
-        eqGap = scroll.topAnchor.constraint(equalTo: eqView.bottomAnchor, constant: 0)
+        drawerHeight = drawerHost.heightAnchor.constraint(equalToConstant: 0)
+        drawerGap = scroll.topAnchor.constraint(equalTo: drawerHost.bottomAnchor, constant: 0)
         NSLayoutConstraint.activate([
             titleLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             titleLabel.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
@@ -159,11 +184,11 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             panel.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             panel.trailingAnchor.constraint(equalTo: root.trailingAnchor),
 
-            eqView.topAnchor.constraint(equalTo: panel.bottomAnchor, constant: 8),
-            eqView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
-            eqView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
-            eqHeight,
-            eqGap,
+            drawerHost.topAnchor.constraint(equalTo: panel.bottomAnchor, constant: 8),
+            drawerHost.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
+            drawerHost.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
+            drawerHeight,
+            drawerGap,
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
             scroll.bottomAnchor.constraint(equalTo: filterField.topAnchor, constant: -8),
@@ -177,7 +202,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
             filterField.leadingAnchor.constraint(equalTo: clrBtn.trailingAnchor, constant: 10),
             filterField.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
-            filterField.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
+            filterField.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
 
             statusLabel.leadingAnchor.constraint(equalTo: filterField.trailingAnchor, constant: 10),
             statusLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
@@ -188,6 +213,15 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
 
     /// The title column takes whatever width is left, so the number and time columns always stay visible.
+    /// Bottom bar: icon-only ADD/CLEAR in narrow windows.
+    func windowDidResize(_ notification: Notification) {
+        // Also fires while the saved frame is restored in init, before the UI exists.
+        let narrow = (window?.frame.width ?? 600) < 520
+        addBtn?.compact = narrow
+        clrBtn?.compact = narrow
+        infoView.compact = narrow
+    }
+
     private func fitColumns() {
         guard table.tableColumns.count == 3 else { return }
         let fixed = table.tableColumns[0].width + table.tableColumns[2].width + table.intercellSpacing.width * 3
@@ -214,6 +248,8 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
     func currentTrackDidChange(old: Int?, new: Int?) {
         panel.refreshTrackInfo()
+        pinnedInfoID = nil
+        refreshInfo()
         var rows = IndexSet()
         for i in [old, new].compactMap({ $0 }) {
             if let r = controller.row(forTrackIndex: i), r < table.numberOfRows { rows.insert(r) }
@@ -222,16 +258,42 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         if let n = new, let r = controller.row(forTrackIndex: n) { table.scrollRowToVisible(r) }
     }
 
-    private func toggleEQ() {
-        eqVisible.toggle()
-        applyEQVisibility()
+    private func toggle(_ d: Drawer) {
+        drawer = drawer == d ? .none : d
+        applyDrawer()
     }
 
-    private func applyEQVisibility() {
-        eqView.isHidden = !eqVisible
-        eqHeight.constant = eqVisible ? 150 : 0
-        eqGap.constant = eqVisible ? 8 : 0
-        panel.eqButton.isOn = eqVisible
+    /// Cover click: open INFO on the playing track; if INFO shows a selected row, switch back to the playing
+    /// track; if it already shows the playing track, close it.
+    private func artClicked() {
+        if drawer == .info && pinnedInfoID == nil {
+            toggle(.info)
+        } else {
+            pinnedInfoID = nil
+            if drawer != .info { drawer = .info; applyDrawer() } else { refreshInfo() }
+        }
+    }
+
+    private func applyDrawer() {
+        let d = drawer
+        eqView.isHidden = d != .eq
+        infoView.isHidden = d != .info
+        drawerHost.isHidden = d == .none
+        drawerHeight.constant = d == .none ? 0 : (d == .info ? 168 : 150)
+        drawerGap.constant = d == .none ? 0 : 8
+        panel.eqButton.isOn = d == .eq
+        panel.infoButton.isOn = d == .info
+        if d == .info { refreshInfo() }
+    }
+
+    private func refreshInfo() {
+        guard drawer == .info else { return }
+        if let id = pinnedInfoID, let i = controller.store.index(ofID: id) {
+            infoView.show(index: i, pinned: true)
+        } else {
+            pinnedInfoID = nil
+            infoView.show(index: controller.currentIndex, pinned: false)
+        }
     }
 
     func optionsDidChange() {
@@ -330,6 +392,20 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { controller.rowCount }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { PlaylistRowView() }
+
+    /// Clicking a row shows it in INFO; the playing track takes over again when playback moves on.
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard drawer == .info, let type = NSApp.currentEvent?.type,
+              [.leftMouseDown, .leftMouseUp, .keyDown].contains(type) else { return }
+        let rows = table.selectedRowIndexes
+        if rows.count == 1, let r = rows.first, r < controller.rowCount {
+            let i = controller.trackIndex(forRow: r)
+            pinnedInfoID = i == controller.currentIndex ? nil : controller.store.id(at: i)
+        } else {
+            pinnedInfoID = nil
+        }
+        refreshInfo()
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let id = tableColumn?.identifier else { return nil }

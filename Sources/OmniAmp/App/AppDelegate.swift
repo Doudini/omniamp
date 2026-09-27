@@ -29,7 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         Fonts.registerBundled()
         controller = PlayerController()
         buildMenu()
-        showLook(ProcessInfo.processInfo.environment["OMNIAMP_MODE"].flatMap(Mode.init(rawValue:)) ?? mode)
+        // OMNIAMP_MODE (tests) picks a look for this run only; it must not overwrite the user's choice.
+        if let forced = ProcessInfo.processInfo.environment["OMNIAMP_MODE"].flatMap(Mode.init(rawValue:)) {
+            showLook(forced, persist: false)
+        } else {
+            showLook(mode)
+        }
         NSApp.activate(ignoringOtherApps: true)
         // Test hook: OMNIAMP_HIDE=1 hides the app after launch (for measuring background playback).
         if ProcessInfo.processInfo.environment["OMNIAMP_HIDE"] != nil {
@@ -68,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: Looks
 
-    private func showLook(_ m: Mode) {
+    private func showLook(_ m: Mode, persist: Bool = true) {
         look?.dismantle()
         look = nil
         switch m {
@@ -81,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             look = makeClassicLook()
             if look == nil { return showLook(.modern) }
         }
-        mode = m
+        if persist { mode = m }
         look?.show()
     }
 
