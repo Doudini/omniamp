@@ -33,7 +33,8 @@ enum LibraryCache {
               var p = try? PropertyListDecoder().decode(Payload.self, from: data) else { return nil }
         if p.version < currentVersion {
             // v2 added ReplayGain: re-read tags once (fast, in the background).
-            for i in p.tracks.indices { p.tracks[i].tagsLoaded = false }
+            // Only files: radio stations and podcast episodes have no tags to read, and their names would be lost.
+            for i in p.tracks.indices where !p.tracks[i].isRemote { p.tracks[i].tagsLoaded = false }
             p.version = currentVersion
         }
         return p

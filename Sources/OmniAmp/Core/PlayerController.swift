@@ -7,6 +7,8 @@ protocol PlayerUI: AnyObject {
     func playlistRowsDidUpdate(_ trackIndices: IndexSet)
     func currentTrackDidChange(old: Int?, new: Int?)
     func optionsDidChange()
+    /// Volume or EQ changed (many times a second while dragging): refresh only what shows them.
+    func mixDidChange()
     /// Playing / paused / stopped changed.
     func playbackStateDidChange()
     /// Track index under the UI's selection, used by Play when nothing is loaded.
@@ -53,6 +55,7 @@ final class PlayerController {
         }
         player.onTrackFinished = { [weak self] in self?.trackFinished() }
         player.onGaplessAdvance = { [weak self] in self?.gaplessAdvanced() }
+        player.onPreloadDropped = { [weak self] in self?.preloaded = nil; self?.preloadAttempted = false }
         player.apply(eqSettings)
         player.onStreamChange = { [weak self] in
             guard let self, let c = self.currentIndex else { return }
@@ -454,7 +457,8 @@ final class PlayerController {
 
     func previous() {
         guard !store.tracks.isEmpty else { return }
-        if player.currentTime > 3, let c = currentIndex { play(index: c, recordHistory: false); return }
+        // Past 3 s, Previous restarts the track, but not a live station (that would just reconnect it).
+        if player.currentTime > 3, let c = currentIndex, !store.tracks[c].isStream { play(index: c, recordHistory: false); return }
         while shuffle, let h = history.popLast() {
             if let i = store.index(ofID: h) { play(index: i, recordHistory: false); return }
         }
@@ -546,7 +550,7 @@ final class PlayerController {
         eqSettings = s
         player.apply(s)
         Equalizer.save(s)
-        ui?.optionsDidChange()
+        ui?.mixDidChange()
     }
 
     func applyPreset(_ p: Equalizer.Preset) {
@@ -581,7 +585,7 @@ final class PlayerController {
 
     func setVolume(_ v: Float) {
         player.volume = v
-        ui?.optionsDidChange()
+        ui?.mixDidChange()
     }
 
     func changeVolume(by delta: Float) { setVolume(player.volume + delta) }

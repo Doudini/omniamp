@@ -96,15 +96,19 @@ struct CueSheet {
         let fm = FileManager.default
         let clean = name.replacingOccurrences(of: "\\", with: "/")
         let direct = clean.hasPrefix("/") ? URL(fileURLWithPath: clean) : dir.appendingPathComponent(clean)
-        if fm.fileExists(atPath: direct.path) { return direct }
-        let files = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
-        let want = (clean as NSString).lastPathComponent.lowercased()
-        if let f = files.first(where: { $0.lowercased() == want }) { return dir.appendingPathComponent(f) }
-        let stem = (want as NSString).deletingPathExtension
+        // Always answer with the name as it is on disk: on a case-insensitive volume "ALBUM.FLAC" exists
+        // for album.flac, but the scanner lists album.flac, and the two must match to replace its row.
+        let parent = direct.deletingLastPathComponent()
+        let files = (try? fm.contentsOfDirectory(atPath: parent.path)) ?? []
+        let name = direct.lastPathComponent
+        if let f = files.first(where: { $0 == name }) ?? files.first(where: { $0.lowercased() == name.lowercased() }) {
+            return parent.appendingPathComponent(f)
+        }
+        let stem = (name.lowercased() as NSString).deletingPathExtension
         if let f = files.first(where: {
             ($0.lowercased() as NSString).deletingPathExtension == stem
                 && FolderScanner.audioExtensions.contains(($0 as NSString).pathExtension.lowercased())
-        }) { return dir.appendingPathComponent(f) }
+        }) { return parent.appendingPathComponent(f) }
         return nil
     }
 

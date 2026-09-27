@@ -7,11 +7,14 @@ protocol LookController: PlayerUI {
     func dismantle()
     /// Always on top.
     func setFloating(_ on: Bool)
+    /// One of this look's own windows (the Winamp keys only apply there).
+    func owns(_ window: NSWindow) -> Bool
 }
 
 extension ModernWindowController: LookController {
     func show() { showWindow(nil) }
     func setFloating(_ on: Bool) { window?.level = on ? .floating : .normal }
+    func owns(_ window: NSWindow) -> Bool { window === self.window }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
@@ -93,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func showLook(_ m: Mode, persist: Bool = true) {
         look?.dismantle()
         look = nil
+        if !controller.filterQuery.isEmpty { controller.setFilter("") }   // the new look has no field showing it
         MemoryTrim.soon(after: 3)   // launch, or the old look's windows and images
         switch m {
         case .modern:
@@ -362,11 +366,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return true
     }
 
-    /// Winamp keys, active unless a text field is being edited.
+    /// Winamp keys, in the player's own windows (not the radio/podcast lists or open panels), unless a text
+    /// field is being edited. Held keys don't repeat, except the seek arrows.
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
-            guard let self, let c = self.controller else { return ev }
-            if ev.window?.firstResponder is NSText { return ev } // typing in the filter
+            guard let self, let c = self.controller, let w = ev.window, self.look?.owns(w) == true else { return ev }
+            if w.firstResponder is NSText { return ev } // typing in the filter
+            if ev.isARepeat, ev.keyCode != 123, ev.keyCode != 124 { return nil }
             let mods = ev.modifierFlags.intersection([.command, .control, .option])
             guard mods.isEmpty else { return ev }
             switch ev.charactersIgnoringModifiers?.lowercased() {

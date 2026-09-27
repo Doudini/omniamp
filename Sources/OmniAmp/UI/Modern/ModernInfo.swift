@@ -136,6 +136,8 @@ final class HoverCard {
         }
     }
 
+    deinit { panel.orderOut(nil) }
+
     func hide() {
         path = nil
         NSAnimationContext.runAnimationGroup({ $0.duration = 0.1; panel.animator().alphaValue = 0 }) { [weak self] in
@@ -346,9 +348,10 @@ final class ModernInfoView: NSView {
         // Basics from the playlist right away; full tags + art fill in when loaded.
         apply(index: i, details: ArtworkStore.shared.cached(t.path)?.details, thumb: ArtworkStore.shared.cached(t.path)?.thumb,
               artPixels: ArtworkStore.shared.cached(t.path)?.artPixels)
+        let id = c.store.id(at: i)   // the list may be reordered before the tags arrive
         ArtworkStore.shared.load(t.path) { [weak self] e in
-            guard let self, self.shownPath == t.path else { return }
-            self.apply(index: i, details: e.details, thumb: e.thumb, artPixels: e.artPixels)
+            guard let self, self.shownPath == t.path, let j = self.controller?.store.index(ofID: id) else { return }
+            self.apply(index: j, details: e.details, thumb: e.thumb, artPixels: e.artPixels)
             self.onContentChange?()
         }
         onContentChange?()

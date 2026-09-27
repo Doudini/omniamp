@@ -371,6 +371,11 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         }
     }
 
+    func mixDidChange() {
+        eqView.refresh()
+        panel.refreshOptions()
+    }
+
     func optionsDidChange() {
         fitColumns()
         eqView.refresh()
@@ -394,8 +399,9 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
     private func setSearchVisible(_ on: Bool) {
         filterField.isHidden = !on
-        filterHiddenWidth.isActive = !on
-        filterMinWidth.isActive = on
+        // Deactivate before activating: both at once conflict (0 wide vs. a minimum width).
+        if on { filterHiddenWidth.isActive = false; filterMinWidth.isActive = true }
+        else { filterMinWidth.isActive = false; filterHiddenWidth.isActive = true }
     }
 
     /// Hide the search field again once it's empty and no longer being typed in.
@@ -471,6 +477,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     /// Tear down without quitting (used when switching looks).
     func dismantle() {
         clock.stop()
+        panel.dismissHoverCard()
         window?.delegate = nil
         window?.close()
     }

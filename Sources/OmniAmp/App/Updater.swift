@@ -210,14 +210,15 @@ final class UpdateUI {
         guard !busy else { progressPanel?.makeKeyAndOrderFront(nil); return }
         busy = true
         Task { @MainActor in
-            defer { busy = false }
+            var installing = false
+            defer { if !installing { busy = false } }   // a started install keeps it busy until it ends
             do {
                 let r = try await Updater.latest()
                 guard Updater.isNewer(r.version, than: Updater.currentVersion) else {
                     alert("You're up to date", "OmniAmp \(Updater.currentVersion) is the latest version.")
                     return
                 }
-                offer(r)
+                installing = offer(r)
             } catch {
                 alert("Couldn't check for updates", error.localizedDescription)
             }
@@ -234,7 +235,8 @@ final class UpdateUI {
         if a.runModal() == .alertSecondButtonReturn, let page { NSWorkspace.shared.open(page) }
     }
 
-    private func offer(_ r: Release) {
+    /// Returns true if the install started.
+    private func offer(_ r: Release) -> Bool {
         let a = NSAlert()
         a.messageText = "OmniAmp \(r.version) is available"
         var notes = r.notes.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -245,10 +247,11 @@ final class UpdateUI {
         a.addButton(withTitle: "Not Now")
         NSApp.activate(ignoringOtherApps: true)
         switch a.runModal() {
-        case .alertFirstButtonReturn: install(r)
+        case .alertFirstButtonReturn: install(r); return true
         case .alertSecondButtonReturn: NSWorkspace.shared.open(r.page)
         default: break
         }
+        return false
     }
 
     typealias Release = Updater.Release

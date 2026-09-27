@@ -99,3 +99,22 @@ final class RadioTests: XCTestCase {
         XCTAssertEqual(FolderScanner.scan([out]).map(\.path), tracks.map(\.path))
     }
 }
+
+final class CacheUpgradeTests: XCTestCase {
+    func testOlderCacheKeepsStationNames() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-cacheup-\(UUID().uuidString)")
+        setenv("OMNIAMP_CACHE_DIR", dir.path, 1)
+        defer { unsetenv("OMNIAMP_CACHE_DIR"); try? FileManager.default.removeItem(at: dir) }
+        var file = Track(path: "/music/a.flac", size: 1, mtime: 0)
+        file.title = "Song"
+        file.tagsLoaded = true
+        let station = Track.stream("https://example.com/live.mp3", name: "Llama FM", logo: nil)
+        var old = LibraryCache.Payload(tracks: [file, station])
+        old.version = LibraryCache.currentVersion - 1
+        LibraryCache.save(old)
+        let p = try XCTUnwrap(LibraryCache.load())
+        XCTAssertFalse(p.tracks[0].tagsLoaded, "files are re-read after an upgrade")
+        XCTAssertTrue(p.tracks[1].tagsLoaded, "stations have nothing to re-read")
+        XCTAssertEqual(p.tracks[1].displayTitle, station.displayTitle)
+    }
+}

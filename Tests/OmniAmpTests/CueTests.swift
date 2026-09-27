@@ -78,6 +78,34 @@ final class CueTests: XCTestCase {
         XCTAssertEqual(Set(tracks.map(\.key)).count, 4, "each CUE track has its own identity")
     }
 
+    func testFolderScanMatchesCueWithDifferentCase() throws {
+        // Windows rips: the sheet says "Portishead - Dummy.wav", the file is "PORTISHEAD - DUMMY.wav".
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("PORTISHEAD - DUMMY.wav").path, contents: Data([0]))
+        try sheet.write(to: dir.appendingPathComponent("Dummy.cue"), atomically: true, encoding: .utf8)
+        let tracks = FolderScanner.scan([dir])
+        XCTAssertEqual(tracks.map(\.title), ["Mysterons", "Sour Times", "Strangers"], "no whole-file row next to the splits")
+        XCTAssertEqual(tracks.first.map { ($0.path as NSString).lastPathComponent }, "PORTISHEAD - DUMMY.wav")
+    }
+
+    func testSavedPlaylistKeepsCueTracks() throws {
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("Portishead - Dummy.flac").path, contents: Data([0]))
+        try sheet.write(to: dir.appendingPathComponent("Dummy.cue"), atomically: true, encoding: .utf8)
+        let tracks = FolderScanner.scan([dir])
+        let m3u = dir.appendingPathComponent("list.m3u")
+        try PlaylistFile.writeM3U([tracks[2], tracks[0]], to: m3u)
+        let back = FolderScanner.scan([m3u])
+        XCTAssertEqual(back.map(\.title), ["Strangers", "Mysterons"], "the splits, in playlist order")
+        XCTAssertEqual(back.map(\.key), [tracks[2].key, tracks[0].key])
+        XCTAssertEqual(back[1].cueEnd, 302)
+
+        // Without the sheet: rebuilt from the saved range and title.
+        try FileManager.default.removeItem(at: dir.appendingPathComponent("Dummy.cue"))
+        let bare = FolderScanner.scan([m3u])
+        XCTAssertEqual(bare.map(\.cueStart), [tracks[2].cueStart, 0])
+        XCTAssertEqual(bare[1].cueEnd, 302)
+        XCTAssertEqual(bare[1].cueNumber, 1)
+    }
+
     func testDuplicatesKeepCueTracks() {
         setenv("OMNIAMP_CACHE_DIR", dir.path, 1)
         defer { unsetenv("OMNIAMP_CACHE_DIR") }

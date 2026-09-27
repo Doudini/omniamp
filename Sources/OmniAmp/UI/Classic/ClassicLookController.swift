@@ -149,6 +149,10 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
         playlistWindow.setFrame(NSRect(x: x, y: y - s.height, width: s.width, height: s.height), display: true)
     }
 
+    func owns(_ window: NSWindow) -> Bool {
+        window === mainWindow || window === playlistWindow || window === eqWindow || window === jumpPanel
+    }
+
     private func attach(_ w: NSWindow) {
         positionDocked()
         mainWindow.addChildWindow(w, ordered: .above)
@@ -249,6 +253,7 @@ extension ClassicLookController: PlayerUI {
     }
 
     func optionsDidChange() { mainView.needsDisplay = true; playlistView.needsDisplay = true; eqView.needsDisplay = true }
+    func mixDidChange() { mainView.needsDisplay = true; eqView.needsDisplay = true }
 
     var selectedTrackIndices: IndexSet { playlistView.selectedTrackIndices }
 
@@ -281,6 +286,12 @@ extension ClassicLookController: PlayerUI {
             f.delegate = self
             p.contentView?.addSubview(f)
             p.isReleasedWhenClosed = false
+            // Closed with its X button: drop the filter too (it would stay on with nothing showing it).
+            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: p, queue: .main) { [weak self] _ in
+                guard let self, !self.controller.filterQuery.isEmpty else { return }
+                self.jumpField?.stringValue = ""
+                self.controller.setFilter("")
+            }
             jumpPanel = p
             jumpField = f
         }

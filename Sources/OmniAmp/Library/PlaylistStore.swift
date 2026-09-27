@@ -213,6 +213,7 @@ final class PlaylistStore {
     private func loadMissingTags() {
         var work: [(id: Int, path: String, size: Int64)] = []
         for (i, t) in tracks.enumerated() where !t.tagsLoaded && !inFlight.contains(ids[i]) {
+            if t.isRemote { tracks[i].tagsLoaded = true; continue }   // nothing to read; keep its title
             work.append((ids[i], t.path, t.size))
             inFlight.insert(ids[i])
         }

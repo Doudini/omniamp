@@ -103,6 +103,23 @@ final class TagReaderTests: XCTestCase {
         XCTAssertEqual(info.duration ?? 0, 10, accuracy: 0.001)
     }
 
+    func testScannerFollowsSymlinksWithoutLooping() throws {
+        let fm = FileManager.default
+        let real = tmp.appendingPathComponent("real"), lib = tmp.appendingPathComponent("lib")
+        try fm.createDirectory(at: real.appendingPathComponent("Album"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: lib, withIntermediateDirectories: true)
+        fm.createFile(atPath: real.appendingPathComponent("Album/1.mp3").path, contents: Data([0]))
+        fm.createFile(atPath: real.appendingPathComponent("single.flac").path, contents: Data([0, 0]))
+        try fm.createSymbolicLink(at: lib.appendingPathComponent("Album"), withDestinationURL: real.appendingPathComponent("Album"))
+        try fm.createSymbolicLink(at: lib.appendingPathComponent("single.flac"), withDestinationURL: real.appendingPathComponent("single.flac"))
+        try fm.createSymbolicLink(at: lib.appendingPathComponent("Album/loop"), withDestinationURL: lib)   // lib/Album/loop → lib
+        let names = FolderScanner.scan([lib]).map { $0.path.components(separatedBy: "/lib/").last ?? "" }
+        XCTAssertEqual(names, ["single.flac", "Album/1.mp3"])
+        XCTAssertEqual(FolderScanner.scan([lib]).first?.size, 2, "size of the link's target")
+        // A linked folder dropped in directly.
+        XCTAssertEqual(FolderScanner.scan([lib.appendingPathComponent("Album")]).map(\.path).first.map { ($0 as NSString).lastPathComponent }, "1.mp3")
+    }
+
     func testScannerFindsNestedFilesSorted() throws {
         let sub = tmp.appendingPathComponent("b/c", isDirectory: true)
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)

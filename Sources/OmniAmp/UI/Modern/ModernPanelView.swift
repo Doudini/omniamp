@@ -214,6 +214,8 @@ final class ModernPanelView: NSView {
     /// Album art of the playing track, framed inside the right LCD box.
     let art = ArtView()
     private let hoverCard = HoverCard()
+    /// The look is going away: don't leave the cover card floating over the new one.
+    func dismissHoverCard() { hoverCard.hide() }
     private var hoverWork: DispatchWorkItem?
     private var artPath: String?
 

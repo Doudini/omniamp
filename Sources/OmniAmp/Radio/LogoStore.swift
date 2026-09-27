@@ -9,7 +9,9 @@ final class LogoStore {
     private var memory: [String: CGImage] = [:]
     private var order: [String] = []
     private var waiting: [String: [(CGImage?) -> Void]] = [:]
-    private var failed = Set<String>()
+    /// When a logo last failed: not asked again for a while (a dead link), but retried later (offline, a server hiccup).
+    private var failed: [String: Date] = [:]
+    private static let retryAfter: TimeInterval = 300
     private let capacity = 200
 
     private static var dir: URL = {
@@ -26,7 +28,8 @@ final class LogoStore {
 
     /// Calls back on the main queue with the logo (nil if there is none or it can't be loaded).
     func load(_ url: String?, completion: @escaping (CGImage?) -> Void) {
-        guard let url, !url.isEmpty, !failed.contains(url), let remote = URL(string: url) else { completion(nil); return }
+        guard let url, !url.isEmpty, let remote = URL(string: url),
+              failed[url].map({ Date().timeIntervalSince($0) > Self.retryAfter }) ?? true else { completion(nil); return }
         if let img = memory[url] { completion(img); return }
         if waiting[url] != nil { waiting[url]!.append(completion); return }
         waiting[url] = [completion]
@@ -43,6 +46,7 @@ final class LogoStore {
                 }
             }
             let img = data.flatMap { Self.decode($0) }
+            if img == nil { try? FileManager.default.removeItem(at: disk) }   // don't keep serving an unreadable file
             await MainActor.run { self.finish(url, img) }
         }
     }
@@ -58,10 +62,11 @@ final class LogoStore {
     private func finish(_ url: String, _ img: CGImage?) {
         if let img {
             memory[url] = img
+            failed.removeValue(forKey: url)
             order.append(url)
             if order.count > capacity { memory.removeValue(forKey: order.removeFirst()) }
         } else {
-            failed.insert(url)
+            failed[url] = Date()
         }
         waiting.removeValue(forKey: url)?.forEach { $0(img) }
     }

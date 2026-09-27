@@ -156,7 +156,6 @@ final class AudioPlayer {
 
     private var stream: StreamSource?
     private var streamURL: URL?
-    private let bufferedFrames = OSAllocatedUnfairLock(initialState: AVAudioFramePosition(0))
     private var streamStarted = false
     private var reconnects = 0
     /// True while waiting for enough audio (start, or after the connection stalled).
@@ -240,6 +239,7 @@ final class AudioPlayer {
             },
         ]
         p.play()
+        scheduleIdleStop()
         onStreamChange?()
     }
 
@@ -307,6 +307,7 @@ final class AudioPlayer {
         if start > 0 { p.seek(to: CMTime(seconds: start, preferredTimescale: 600)) }
         p.play()
         state = .playing
+        scheduleIdleStop()
         onStreamChange?()
     }
 
@@ -336,7 +337,8 @@ final class AudioPlayer {
         stream = src
         streamFormat = nil
         streamStarted = false
-        bufferedFrames.withLock { $0 = 0 }
+        // Per connection: completions of an earlier connection's buffers must not count against this one.
+        let bufferedFrames = OSAllocatedUnfairLock(initialState: AVAudioFramePosition(0))
         isBuffering = true
         src.onInfo = { [weak self, weak src] info in
             DispatchQueue.main.async {
@@ -363,10 +365,10 @@ final class AudioPlayer {
                 guard let self, let src, self.stream === src, let f = self.streamFormat,
                       f.channelCount == buf.format.channelCount, f.sampleRate == buf.format.sampleRate else { return }
                 let frames = AVAudioFramePosition(buf.frameLength)
-                let total = self.bufferedFrames.withLock { $0 += frames; return $0 }
+                let total = bufferedFrames.withLock { $0 += frames; return $0 }
                 self.node.scheduleBuffer(buf) { [weak self] in
                     guard let self else { return }
-                    let left = self.bufferedFrames.withLock { $0 -= frames; return $0 }
+                    let left = bufferedFrames.withLock { $0 -= frames; return $0 }
                     if left <= 0 { DispatchQueue.main.async { if self.stream === src, self.state == .playing { self.isBuffering = true } } }
                 }
                 // Start (or leave the stall) once 2 s are queued.
@@ -390,7 +392,9 @@ final class AudioPlayer {
         src.onEnd = { [weak self, weak src] error in
             DispatchQueue.main.async {
                 guard let self, self.stream === src, self.state == .playing else { return }
-                // Dropped connection: retry a few times before giving up.
+                // Dropped connection: retry a few times before giving up. A connection that played for a
+                // while earns the retries back (a long session can see several unrelated drops).
+                if let t = self.clockStart, CACurrentMediaTime() - t > 60 { self.reconnects = 0 }
                 if self.reconnects < 3, let u = self.streamURL {
                     self.reconnects += 1
                     NSLog("OmniAmp: stream ended (%@), reconnecting (%d/3)", error?.localizedDescription ?? "closed", self.reconnects)
@@ -553,14 +557,8 @@ final class AudioPlayer {
 
     /// nil = follow the system default output.
     func setOutputDevice(uid: String?) {
-        guard uid != outputUID || uid == nil else { return }
-        releaseDevice(deviceID)
         outputUID = uid
-        pointEngineAtDevice()
-        // The system players (HLS/Opus radio, podcast episodes) play outside the engine: move them too.
-        let deviceUID = AudioDevices.device(id: deviceID)?.uid
-        systemPlayer?.audioOutputDeviceUniqueID = deviceUID
-        episodePlayer?.audioOutputDeviceUniqueID = deviceUID
+        pointEngineAtDevice()   // no-op if it resolves to the device already in use (keeps hog and rate)
     }
 
     func setBitPerfect(_ on: Bool, exclusive excl: Bool) {
@@ -594,8 +592,13 @@ final class AudioPlayer {
         guard target != 0, target != deviceID else { return }
         let t = currentTime, wasState = state
         engine.stop()
+        releaseDevice(deviceID)   // exclusive access and a switched rate stay behind otherwise
         deviceID = target
         restart(at: t, wasState: wasState, matchRate: bitPerfect)
+        // The system players (HLS/Opus radio, podcast episodes) play outside the engine: move them too.
+        let deviceUID = AudioDevices.device(id: deviceID)?.uid
+        systemPlayer?.audioOutputDeviceUniqueID = deviceUID
+        episodePlayer?.audioOutputDeviceUniqueID = deviceUID
         onOutputChange?()
     }
 
@@ -647,6 +650,14 @@ final class AudioPlayer {
         if awaitingRateSettle {
             // Expected: the device finished switching rate / taking exclusive access.
             settleComplete()
+            return
+        }
+        if idled, !engine.isRunning {
+            // Idle, e.g. the device reconfigured after we gave back exclusive access: just rebuild, stay stopped.
+            bindOutputUnit()
+            rebuildGraph()
+            if let f = current?.file { connect(format: f.processingFormat) }
+            onOutputChange?()
             return
         }
         NSLog("OmniAmp: audio configuration changed (device %.0f Hz), restarting", deviceRate)
@@ -760,8 +771,33 @@ final class AudioPlayer {
         if state != .stopped { seek(to: t) } // reschedules only the current track
     }
 
+    /// Paused, stopped, or playing outside the engine (podcasts, HLS radio) for a few seconds: stop the engine.
+    /// A running output costs battery, and in exclusive mode it keeps the device from every other app.
+    private var idleStop: DispatchWorkItem?
+    private func scheduleIdleStop() {
+        idleStop?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, self.engine.isRunning, !self.awaitingRateSettle,
+                  self.state != .playing || self.episodePlayer != nil || self.systemPlayer != nil else { return }
+            dlog("idle: stopping the engine")
+            self.idled = true
+            self.engine.stop()
+            _ = AudioDevices.setHog(self.deviceID, false)
+            if self.upcoming != nil { self.upcoming = nil; self.onPreloadDropped?() }
+        }
+        idleStop = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: w)
+    }
+
+    /// The engine was stopped for idling (not by a device change): nothing to restart.
+    private var idled = false
+
+    /// The queued gapless track was dropped (the engine idled out while paused): queue it again.
+    var onPreloadDropped: (() -> Void)?
+
     func pause() {
         guard state == .playing else { return }
+        defer { scheduleIdleStop() }
         if let p = episodePlayer { p.pause(); state = .paused; return }
         if isStreaming {
             // Radio: pausing stops the stream (a live broadcast can't be paused); play restarts it.
@@ -782,6 +818,15 @@ final class AudioPlayer {
         guard state == .paused else { return }
         if let p = episodePlayer { p.play(); state = .playing; return }
         if let u = streamURL, !isStreaming { playStream(url: u); return }
+        if !engine.isRunning, var c = current {
+            // The engine idled out while paused and dropped the schedule: start again where we paused.
+            c.startFrame = min(c.trackStart + AVAudioFramePosition(clockBase * c.sampleRate), max(c.trackStart, c.trackEnd - 1))
+            current = c
+            stopNode()
+            state = .playing
+            beginPlayback()
+            return
+        }
         startEngineIfNeeded()
         guard playNode() else { return }
         if !awaitingRateSettle { clockStart = CACurrentMediaTime() }
@@ -798,6 +843,7 @@ final class AudioPlayer {
         clockStart = nil
         state = .stopped
         spectrum.reset()
+        scheduleIdleStop()
     }
 
     func seek(to seconds: Double) {
@@ -819,7 +865,7 @@ final class AudioPlayer {
         guard playNode() else { return }
         startClock()
         state = .playing
-        if wasPaused { node.pause(); freezeClock(); state = .paused }
+        if wasPaused { node.pause(); freezeClock(); state = .paused; scheduleIdleStop() }
     }
 
     // MARK: Scheduling
@@ -847,6 +893,7 @@ final class AudioPlayer {
         } else {
             state = .stopped
             onTrackFinished?()
+            if state == .stopped { scheduleIdleStop() }
         }
     }
 
@@ -895,6 +942,7 @@ final class AudioPlayer {
             }
             return false
         }
+        idled = false
         let h = updateHog()
         dlog("engine started, hogTaken=\(h), running=\(engine.isRunning)")
         return h

@@ -199,6 +199,8 @@ final class SpectrumView: NSView {
         scopeLine.backgroundColor = Theme.phosphorGhost.cgColor
         scopeGlow.frame = bounds
         scopeTrace.frame = bounds
+        scopeGlow.contentsScale = scale    // shape layers render at 1× unless told (blurry trace on Retina)
+        scopeTrace.contentsScale = scale
         scopeGlow.strokeColor = Theme.phosphor.withAlphaComponent(0.25).cgColor
         scopeTrace.strokeColor = Theme.phosphor.cgColor
         let labelColor = Theme.phosphorDim.cgColor
