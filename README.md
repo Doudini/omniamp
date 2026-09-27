@@ -121,6 +121,8 @@ After that it opens normally. The DMG includes these steps as a text file. In th
 
 Last.fm and ListenBrainz scrobbling work out of the box (Settings, ⌘,).
 
+**Updates:** choose **OmniAmp → Check for Updates…**. OmniAmp never checks by itself. When a newer release is available, it downloads it, checks it against GitHub's checksum and its code signature, installs it and relaunches. (0.2 has no updater yet, so get 0.3 from the Releases page once.)
+
 ### Build from source
 
 You need macOS 14 or later and Xcode (Swift 6).
@@ -156,6 +158,18 @@ swift test             # unit tests
 ```
 
 The app icon's source is `Resources/AppIcon.icon`. Open it in Icon Composer or edit its SVG, then run `./scripts/make-icon.sh`. The ideas we're saving for later are in [BACKLOG.md](BACKLOG.md).
+
+### Signing and releases (maintainers)
+
+`make-app.sh` signs with a self-signed **OmniAmp Code Signing** certificate when it's in your login keychain, and falls back to ad-hoc signing otherwise. With the certificate, every build counts as the same app. macOS then stops asking for the password before OmniAmp can read its saved logins, and Check for Updates only installs updates signed with the same certificate. To create it:
+
+1. Open **Keychain Access** and choose **Keychain Access → Certificate Assistant → Create a Certificate…**
+2. Name **OmniAmp Code Signing**, Identity Type **Self-Signed Root**, Certificate Type **Code Signing**, and tick **Let me override defaults**. Continue.
+3. Set **Validity Period** to **3650** days, keep the other defaults and continue to **Create** (keychain: **login**).
+4. Check: `security find-identity -p codesigning` lists "OmniAmp Code Signing".
+5. Back up the certificate with its private key (**File → Export Items…** as .p12). Releases have to keep using this certificate.
+
+Then `./scripts/release.sh 0.3` builds the DMG and publishes the GitHub release that Check for Updates finds.
 
 ## Credits
 

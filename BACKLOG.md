@@ -24,8 +24,5 @@ Ideas we want but have deferred. Roughly ordered by value within each group.
 - **DSD**: DoP plus DSD→PCM conversion. On hold until it can be tested on a DSD-capable DAC.
 
 ## Distribution
-- **Stable code signing (Keychain prompt)**: builds are signed ad-hoc, so every rebuild counts as a new app, and macOS asks for the login password before OmniAmp can read the Last.fm/ListenBrainz login in the Keychain.
-  - For local builds: sign with a self-signed "OmniAmp Local Signing" code-signing certificate (Keychain Access → Certificate Assistant); `make-app.sh` should use it when it exists.
-  - For sharing: a Developer ID signature plus notarization, which also fixes the prompt on other people's Macs after updates.
-- **Signed and notarized release**: a DMG, possibly a Homebrew cask.
-- **Auto-updates.**
+- **Notarized release**: a Developer ID signature and notarization (needs a paid Apple Developer account) would remove the "Open Anyway" step at first install. Builds are self-signed with the OmniAmp certificate for now (README → Signing), and updates are manual (OmniAmp → Check for Updates…).
+- **Homebrew cask.**

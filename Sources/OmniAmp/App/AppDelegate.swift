@@ -615,6 +615,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // MARK: Menu
 
     @objc private func find(_ sender: Any?) { look?.focusFilter() }
+    /// Only when asked: there are no automatic update checks.
+    @objc private func checkForUpdates(_ sender: Any?) { UpdateUI.shared.check() }
+
     @objc private func openDoc(_ sender: Any?) { controller.showOpenPanel(for: NSApp.keyWindow) }
     @objc private func openFiles(_ sender: Any?) { controller.showOpenPanel(for: NSApp.keyWindow, kind: .files) }
     @objc private func openFolder(_ sender: Any?) { controller.showOpenPanel(for: NSApp.keyWindow, kind: .folder) }
@@ -674,6 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About OmniAmp", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
