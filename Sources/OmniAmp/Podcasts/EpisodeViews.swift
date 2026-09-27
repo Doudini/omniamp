@@ -69,7 +69,8 @@ final class EpisodeArtCell: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(_ artwork: String?) {
+    func show(_ full: String?) {
+        let artwork = LogoStore.thumbnail(full)
         url = artwork
         art.image = LogoStore.shared.cached(artwork, size: .small)
         guard art.image == nil, artwork != nil else { return }

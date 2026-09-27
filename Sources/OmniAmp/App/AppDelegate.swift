@@ -81,7 +81,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func application(_ application: NSApplication, open urls: [URL]) {
         guard controller != nil, viewMenu != nil else { openedBeforeLaunch += urls; return }
         if let s = urls.first(where: { $0.pathExtension.lowercased() == "wsz" }) { loadSkin(s) }
-        let media = urls.filter { $0.pathExtension.lowercased() != "wsz" }
+        for o in urls where o.pathExtension.lowercased() == "opml" {   // podcast subscriptions from another app
+            showPodcasts(nil)
+            podcasts?.importOPML(o)
+        }
+        let media = urls.filter { !["wsz", "opml"].contains($0.pathExtension.lowercased()) }
         if !media.isEmpty { controller.add(media) }
     }
 

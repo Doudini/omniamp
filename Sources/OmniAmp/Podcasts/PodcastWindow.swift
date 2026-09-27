@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// Podcast browser in the modern look: top shows per country, search, subscriptions (with new-episode
 /// counts), and the selected show's episodes. Episodes play like any track and remember their position.
@@ -167,7 +168,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         search.font = Fonts.hack(11)
         search.target = self
         search.action = #selector(searchChanged)
-        search.sendsWholeSearchString = true
+        search.sendsWholeSearchString = false   // search as you type (the field waits for a pause)
+        search.sendsSearchStringImmediately = false
         if country.numberOfItems == 0 {
             country.addItems(withTitles: Self.countries.map(\.0))
             let here = Locale.current.region?.identifier ?? "US"
@@ -226,11 +228,6 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         status.textColor = Theme.phosphorDim.blended(withFraction: 0.4, of: Theme.phosphor)
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        // Just a credit: a link to podcasts.apple.com would open the Podcasts app.
-        let credit = NSTextField(labelWithString: "directory: Apple Podcasts")
-        credit.font = Fonts.hack(9)
-        credit.textColor = Theme.phosphorDim
-        credit.toolTip = "Search and top charts come from Apple's public podcast directory; episodes come straight from each show's feed."
         notesButton = ModernButton(glyph: Fonts.Icon.info, label: "NOTES", target: self, action: #selector(toggleNotes))
         notesButton.isOn = !notes.isHidden
         notesButton.toolTip = "Show notes of the selected episode"
@@ -244,9 +241,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         add.toolTip = "Add the selected episodes to the playlist"
         play.toolTip = "Play now (double-click)"
 
-        let feedButton = ModernButton(glyph: Fonts.Icon.plus, label: "FEED", target: self, action: #selector(addFeed))
+        let feedButton = ModernButton(glyph: Fonts.Icon.plus, label: "FEED", target: self, action: #selector(feedMenu(_:)))
         feedButton.glyphSize = 10
-        feedButton.toolTip = "Subscribe to a podcast by its feed URL"
+        feedButton.toolTip = "Add a podcast by its feed URL, or import / export your subscriptions (OPML)"
         feedButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
         let top = NSStackView(views: [topButton, subscribedButton, search, country, feedButton])
         top.spacing = 6
@@ -256,7 +253,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         folderButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
         let header = NSStackView(views: [showTitle, NSView(), folderButton, subscribeButton])
         header.spacing = 8
-        let bottom = NSStackView(views: [status, NSView(), credit, notesButton, downloadButton, playedButton, add, play])
+        let bottom = NSStackView(views: [status, NSView(), notesButton, downloadButton, playedButton, add, play])
         bottom.spacing = 6
         let root = NSView()
         for v in [title, top, panes, bottom] as [NSView] {
@@ -450,23 +447,59 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             selectFirstShowIfNeeded()
             return
         }
-        status.stringValue = "Loading…"
         let cc = countryCode
+        let dir = PodcastDirectory.shared
+        // The last chart shows at once (a fresh one replaces it if it's old).
+        let showingCached = q.isEmpty && dir.cachedTop(country: cc) != nil
+        if q.isEmpty, let cached = dir.cachedTop(country: cc) {
+            setShows(cached.shows, status: "\(cached.shows.count) podcasts · top chart")
+            if cached.fresh { return }
+        } else {
+            status.stringValue = q.isEmpty ? "Loading the top chart…" : "Searching…"
+        }
         loadTask = Task { @MainActor in
             do {
-                let list = q.isEmpty ? try await PodcastDirectory.shared.top(country: cc)
-                                     : try await PodcastDirectory.shared.search(q, country: cc)
+                if q.isEmpty {
+                    let list = try await dir.top(country: cc)
+                    guard !Task.isCancelled else { return }
+                    setShows(list, status: list.isEmpty ? "No podcasts found." : "\(list.count) podcasts · top chart",
+                             keepSelection: showingCached)   // a background refresh: don't jump
+                    return
+                }
+                // Apple answers in a blink; fyyd can take 10 s: show Apple's, then add fyyd's.
+                var appleFailed: Error?
+                do {
+                    let list = try await dir.searchApple(q, country: cc)
+                    guard !Task.isCancelled else { return }
+                    setShows(list, status: list.isEmpty ? "Searching more directories…" : "\(list.count) podcasts · searching more…")
+                } catch {
+                    appleFailed = error
+                }
+                let extra = (try? await dir.searchFyyd(q)) ?? []
                 guard !Task.isCancelled else { return }
-                shows = list
-                showsTable.reloadData()
-                scrollToTop(showsScroll)
-                status.stringValue = list.isEmpty ? "No podcasts found." : "\(list.count) podcasts" + (q.isEmpty ? " · top chart" : "")
-                selectFirstShowIfNeeded()
+                if let appleFailed, extra.isEmpty { throw appleFailed }
+                let merged = PodcastDirectory.merge(appleFailed == nil ? shows : [], extra)
+                if merged.count != shows.count || appleFailed != nil { setShows(merged, status: "", keepSelection: true) }
+                status.stringValue = shows.isEmpty ? "No podcasts found." : "\(shows.count) podcasts"
             } catch {
                 guard !Task.isCancelled else { return }
                 status.stringValue = "Couldn't reach the podcast directory: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// Show a list of podcasts on the left; `keepSelection` when only adding to it (late search results).
+    private func setShows(_ list: [PodcastShow], status text: String, keepSelection: Bool = false) {
+        let selected = keepSelection ? currentShow : nil
+        shows = list
+        showsTable.reloadData()
+        if let sel = selected, let r = shows.firstIndex(of: sel) {
+            showsTable.selectRowIndexes([r], byExtendingSelection: false)
+        } else if !keepSelection {
+            scrollToTop(showsScroll)
+        }
+        status.stringValue = text
+        selectFirstShowIfNeeded()
     }
 
     /// After a reload, show the first rows (the clip view otherwise keeps its old offset).
@@ -707,6 +740,70 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         open(show)
         status.stringValue = library.isSubscribed(show) ? "Subscribed to “\(show.title)”." : "Found “\(show.title)”: press SUBSCRIBE to keep it."
+    }
+
+    @objc private func feedMenu(_ sender: NSView) {
+        let m = NSMenu()
+        m.addItem(withTitle: "Add by Feed URL…", action: #selector(addFeed), keyEquivalent: "").target = self
+        m.addItem(.separator())
+        m.addItem(withTitle: "Import Subscriptions (OPML)…", action: #selector(chooseOPML), keyEquivalent: "").target = self
+        let exp = m.addItem(withTitle: "Export Subscriptions (OPML)…", action: library.subscriptions.isEmpty ? nil : #selector(exportOPML),
+                            keyEquivalent: "")
+        exp.target = self
+        m.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
+    // MARK: OPML
+
+    @objc private func chooseOPML() {
+        guard let w = window else { return }
+        let p = NSOpenPanel()
+        p.allowedContentTypes = [.init(filenameExtension: "opml") ?? .xml, .xml]
+        p.allowsOtherFileTypes = true
+        p.message = "Choose an OPML file exported from another podcast app."
+        p.prompt = "Import"
+        p.beginSheetModal(for: w) { [weak self] r in
+            guard r == .OK, let u = p.url else { return }
+            self?.importOPML(u)
+        }
+    }
+
+    /// Subscribe to every show in an OPML file (also when one is opened from Finder).
+    func importOPML(_ url: URL) {
+        guard let data = try? Data(contentsOf: url) else { status.stringValue = "Couldn't read \(url.lastPathComponent)."; return }
+        let list = PodcastOPML.read(data)
+        guard !list.isEmpty else { status.stringValue = "No podcasts found in \(url.lastPathComponent)."; return }
+        let added = library.subscribe(list)
+        showingSubscriptions = true
+        search.stringValue = ""
+        load()
+        let already = list.count - added
+        status.stringValue = "Imported \(added) show\(added == 1 ? "" : "s")" + (already > 0 ? " (\(already) already subscribed)" : "") + ". Loading their episodes…"
+        // Covers, authors and episodes come with each feed.
+        Task { @MainActor in
+            await withTaskGroup(of: Void.self) { group in
+                for s in list { group.addTask { _ = try? await PodcastLibrary.shared.episodes(s) } }
+            }
+            if showingSubscriptions { load() }
+            status.stringValue = "Imported \(added) show\(added == 1 ? "" : "s")" + (already > 0 ? " (\(already) already subscribed)" : "") + "."
+        }
+    }
+
+    @objc private func exportOPML() {
+        guard let w = window else { return }
+        let p = NSSavePanel()
+        p.allowedContentTypes = [.init(filenameExtension: "opml") ?? .xml]
+        p.nameFieldStringValue = "OmniAmp Podcasts.opml"
+        p.message = "Your \(library.subscriptions.count) subscriptions, for another podcast app or as a backup."
+        p.beginSheetModal(for: w) { [weak self] r in
+            guard let self, r == .OK, let u = p.url else { return }
+            do {
+                try PodcastOPML.write(self.library.subscriptions).write(to: u, options: .atomic)
+                self.status.stringValue = "Exported \(self.library.subscriptions.count) subscriptions to \(u.lastPathComponent)."
+            } catch {
+                self.status.stringValue = "Couldn't save: \(error.localizedDescription)"
+            }
+        }
     }
 
     @objc private func addFeed() {
@@ -990,11 +1087,11 @@ final class ShowCell: NSView {
         badge.textColor = Theme.phosphor
         badge.stringValue = newCount > 0 ? "● \(newCount) new" : (subscribed ? Fonts.Icon.rss : "")
         if subscribed, newCount == 0 { badge.font = Theme.icon(10); badge.textColor = Theme.phosphorDim }
-        artwork = s.artwork
-        art.image = LogoStore.shared.cached(s.artwork)
+        let want = LogoStore.thumbnail(s.artwork)   // small file, small decode: the list shows 36 pt covers
+        artwork = want
+        art.image = LogoStore.shared.cached(want, size: .small)
         guard art.image == nil else { return }
-        let want = s.artwork
-        LogoStore.shared.load(want) { [weak self] img in
+        LogoStore.shared.load(want, size: .small) { [weak self] img in
             guard let self, self.artwork == want else { return }
             self.art.image = img
         }

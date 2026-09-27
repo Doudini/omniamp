@@ -24,6 +24,13 @@ final class LogoStore {
         dir.appendingPathComponent(Insecure.SHA1.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined())
     }
 
+    /// Apple's artwork addresses name their size (…/600x600bb.jpg): ask for 120 px for list rows, a tenth of
+    /// the download. Other addresses are left alone (they're decoded small anyway).
+    static func thumbnail(_ url: String?) -> String? {
+        guard let url, url.contains("mzstatic.com") else { return url }
+        return url.replacingOccurrences(of: "/\\d+x\\d+(bb|cc)\\.(jpg|png|webp)$", with: "/120x120bb.$2", options: .regularExpression)
+    }
+
     /// Row thumbnails (podcast episodes) are decoded small: ~64 px instead of 280 is a 20th of the memory.
     enum Size { case regular, small }
     private static func key(_ url: String, _ size: Size) -> String { size == .regular ? url : "small|" + url }

@@ -37,25 +37,129 @@ final class PodcastDirectory {
     static let shared = PodcastDirectory()
     var transport: HTTPTransport = URLSessionTransport()
 
-    private func get(_ url: URL) async throws -> Data {
+    private func get(_ url: URL, timeout: TimeInterval = 15) async throws -> Data {
         var req = URLRequest(url: url)
         req.setValue("OmniAmp/1.0", forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 15
+        req.timeoutInterval = timeout
         let (data, status) = try await transport.send(req)
         guard (200..<300).contains(status) else { throw ScrobbleError.http(status, "podcast directory") }
         return data
     }
 
-    /// Shows matching `term` (title, author…) in a country's store.
-    func search(_ term: String, country: String) async throws -> [PodcastShow] {
+    // Search goes to Apple (fast, the country's store) and fyyd (a free directory strong on German-language and
+    // independent shows, but it can take 10+ s). The window shows Apple's results at once and adds fyyd's
+    // when they come; results are kept for a while so going back to a search is instant.
+
+    private var searchCache: [String: (at: Date, shows: [PodcastShow])] = [:]
+    private static let searchMaxAge: TimeInterval = 30 * 60
+
+    @MainActor
+    private func cachedSearch(_ key: String, _ fetch: () async throws -> [PodcastShow]) async throws -> [PodcastShow] {
+        if let c = searchCache[key], Date().timeIntervalSince(c.at) < Self.searchMaxAge { return c.shows }
+        let shows = try await fetch()
+        if searchCache.count > 40 { searchCache.removeAll() }
+        searchCache[key] = (Date(), shows)
+        return shows
+    }
+
+    /// fyyd also matches episode texts, which brings in unrelated shows: keep those whose title or author
+    /// has every word searched for.
+    static func relevant(_ shows: [PodcastShow], to term: String) -> [PodcastShow] {
+        let words = term.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        guard !words.isEmpty else { return shows }
+        return shows.filter { s in
+            let hay = (s.title + " " + s.author).lowercased()
+            return words.allSatisfy { hay.contains($0) }
+        }
+    }
+
+    /// `extra` shows not already in `first` (same feed, or same title and author).
+    static func merge(_ first: [PodcastShow], _ extra: [PodcastShow]) -> [PodcastShow] {
+        func feedKey(_ s: String) -> String {
+            var k = s.lowercased()
+            for p in ["https://", "http://", "www."] where k.hasPrefix(p) { k.removeFirst(p.count) }
+            while k.hasSuffix("/") { k.removeLast() }
+            return k
+        }
+        func nameKey(_ s: PodcastShow) -> String { (s.title + "|" + s.author).lowercased().filter { $0.isLetter || $0.isNumber || $0 == "|" } }
+        var feeds = Set(first.map { feedKey($0.feedURL) }), names = Set(first.map(nameKey))
+        var out = first
+        for s in extra where !feeds.contains(feedKey(s.feedURL)) && !names.contains(nameKey(s)) {
+            out.append(s)
+            feeds.insert(feedKey(s.feedURL))
+            names.insert(nameKey(s))
+        }
+        return out
+    }
+
+    /// fyyd.de search (no key needed), only the shows that really match; gives up after 10 s.
+    @MainActor
+    func searchFyyd(_ term: String) async throws -> [PodcastShow] {
+        try await cachedSearch("fyyd|" + term.lowercased()) {
+            var c = URLComponents(string: "https://api.fyyd.de/0.2/search/podcast")!
+            c.queryItems = [URLQueryItem(name: "term", value: term), URLQueryItem(name: "count", value: "50")]
+            return Self.relevant(Self.decodeFyyd(try await get(c.url!, timeout: 10)), to: term)
+        }
+    }
+
+    static func decodeFyyd(_ data: Data) -> [PodcastShow] {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let list = root["data"] as? [[String: Any]] else { return [] }
+        return list.compactMap { r in
+            guard let feed = (r["xmlURL"] as? String)?.trimmingCharacters(in: .whitespaces), !feed.isEmpty,
+                  let title = (r["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
+            let art = [r["layoutImageURL"], r["imgURL"], r["smallImageURL"]].compactMap { $0 as? String }.first { !$0.isEmpty }
+            return PodcastShow(feedURL: feed, title: title, author: (r["author"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                               artwork: art, genre: nil)
+        }
+    }
+
+    /// Apple's search in a country's store.
+    @MainActor
+    func searchApple(_ term: String, country: String) async throws -> [PodcastShow] {
+        try await cachedSearch("apple|\(country)|" + term.lowercased()) { try await fetchApple(term, country: country) }
+    }
+
+    private func fetchApple(_ term: String, country: String) async throws -> [PodcastShow] {
         var c = URLComponents(string: "https://itunes.apple.com/search")!
         c.queryItems = [URLQueryItem(name: "media", value: "podcast"), URLQueryItem(name: "term", value: term),
                         URLQueryItem(name: "limit", value: "100"), URLQueryItem(name: "country", value: country)]
         return Self.decodeLookup(try await get(c.url!))
     }
 
-    /// A country's top shows, in chart order.
+    // Top charts are kept on disk per country: the chart service takes ~2 s, and it changes slowly.
+    private struct Chart: Codable { var fetched: Double; var shows: [PodcastShow] }
+    private var charts: [String: Chart] = [:]
+    private static let chartMaxAge: TimeInterval = 6 * 3600
+
+    private func chartFile(_ country: String) -> URL {
+        let d = LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("Podcasts/charts", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d.appendingPathComponent(country.lowercased() + ".json")
+    }
+
+    /// The last chart we have for a country, however old (shown at once while a fresh one loads).
+    @MainActor
+    func cachedTop(country: String) -> (shows: [PodcastShow], fresh: Bool)? {
+        if charts[country] == nil, let d = try? Data(contentsOf: chartFile(country)), let c = try? JSONDecoder().decode(Chart.self, from: d) {
+            charts[country] = c
+        }
+        guard let c = charts[country], !c.shows.isEmpty else { return nil }
+        return (c.shows, Date().timeIntervalSince1970 - c.fetched < Self.chartMaxAge)
+    }
+
+    /// A country's top shows, in chart order (from the cache when it's recent enough).
+    @MainActor
     func top(country: String) async throws -> [PodcastShow] {
+        if let c = cachedTop(country: country), c.fresh { return c.shows }
+        let shows = try await fetchTop(country: country)
+        let chart = Chart(fetched: Date().timeIntervalSince1970, shows: shows)
+        charts[country] = chart
+        try? JSONEncoder().encode(chart).write(to: chartFile(country), options: .atomic)
+        return shows
+    }
+
+    private func fetchTop(country: String) async throws -> [PodcastShow] {
         let chart = URL(string: "https://rss.marketingtools.apple.com/api/v2/\(country.lowercased())/podcasts/top/100/podcasts.json")!
         let ids = Self.decodeChartIDs(try await get(chart))
         guard !ids.isEmpty else { return [] }
@@ -315,6 +419,34 @@ final class PodcastLibrary {
         save(subscriptions, "subscriptions.json")
     }
 
+    /// Subscribe to several shows at once (OPML import). Returns how many were new.
+    @discardableResult
+    func subscribe(_ list: [PodcastShow]) -> Int {
+        var added = 0
+        for s in list where !isSubscribed(s) && !s.feedURL.isEmpty {
+            subscriptions.append(s)
+            added += 1
+        }
+        subscriptions.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        save(subscriptions, "subscriptions.json")
+        return added
+    }
+
+    /// A subscribed feed was read: fill in what the subscription lacks (an imported show only has its name),
+    /// and start its "new" count from what's out now.
+    private func completeSubscription(_ feed: String, title: String, author: String, artwork: String?, newest: Double?) {
+        guard let i = subscriptions.firstIndex(where: { $0.feedURL == feed }) else { return }
+        var s = subscriptions[i]
+        if s.title.isEmpty || s.title == feed, !title.isEmpty { s.title = title }
+        if s.author.isEmpty { s.author = author }
+        if s.artwork == nil { s.artwork = artwork }
+        if s != subscriptions[i] {
+            subscriptions[i] = s
+            save(subscriptions, "subscriptions.json")
+        }
+        if seen[feed] == nil, let newest { seen[feed] = newest; save(seen, "seen.json") }
+    }
+
     // Episodes
 
     private func feedFile(_ feed: String) -> URL {
@@ -342,12 +474,14 @@ final class PodcastLibrary {
         req.timeoutInterval = 20
         let (data, status) = try await transport.send(req)
         guard (200..<300).contains(status) else { throw ScrobbleError.http(status, "podcast feed") }
-        let eps = await Task.detached(priority: .utility) {
-            PodcastFeedParser.parse(data).episodes.sorted { ($0.published ?? 0) > ($1.published ?? 0) }
+        let (eps, channel) = await Task.detached(priority: .utility) { () -> ([PodcastEpisode], (title: String, author: String, artwork: String?)) in
+            let p = PodcastFeedParser.parse(data)
+            return (p.episodes.sorted { ($0.published ?? 0) > ($1.published ?? 0) }, (p.title, p.author, p.artwork))
         }.value
         let c = FeedCache(fetched: Date().timeIntervalSince1970, episodes: eps)
         feeds[show.feedURL] = c
         try? JSONEncoder().encode(c).write(to: feedFile(show.feedURL), options: .atomic)
+        completeSubscription(show.feedURL, title: channel.title, author: channel.author, artwork: channel.artwork, newest: eps.first?.published)
         return eps
     }
 

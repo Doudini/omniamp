@@ -70,6 +70,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>LSHandlerRank</key><string>Owner</string>
       <key>CFBundleTypeExtensions</key><array><string>wsz</string></array>
     </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Podcast Subscriptions (OPML)</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>CFBundleTypeExtensions</key><array><string>opml</string></array>
+    </dict>
   </array>
 </dict>
 </plist>
