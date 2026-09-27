@@ -5,9 +5,9 @@ OmniAmp is a tiny, simple music player for macOS, inspired by Winamp.
 It's written in Swift with AppKit and AVAudioEngine and has no third-party dependencies.
 
 <p align="center">
-  <img src="docs/modern.png" alt="OmniAmp's modern look: LCD display, album art, INFO drawer and playlist" width="430">
+  <img src="docs/modern.png" alt="OmniAmp's modern look in the Blue theme: 7-segment time display, spectrum, album art, hi-fi keys and playlist" width="330">
   &nbsp;&nbsp;
-  <img src="docs/classic.png" alt="OmniAmp's classic look with the original Winamp 2.91 base skin: main window, equalizer and playlist" width="338">
+  <img src="docs/classic.png" alt="OmniAmp's classic look with the original Winamp 2.91 base skin: main window, equalizer and playlist" width="337">
 </p>
 <p align="center"><sub>The modern look (left) and the classic look with the original Winamp 2.91 skin (right).</sub></p>
 
@@ -22,7 +22,7 @@ A resizable native window with an LCD-style display, album art and the Hack Nerd
 
 The **INFO** drawer shows full tags, the file format, the album and cover art. The **EQ** drawer has the 10-band equalizer with presets.
 
-<p align="center"><img src="docs/themes.png" alt="Amber, Blue, Cyan and Monochrome themes with the EQ and INFO drawers"></p>
+<p align="center"><img src="docs/themes.png" alt="Green, Amber, Cyan and Monochrome themes with the INFO and EQ drawers"></p>
 
 ## The classic look
 
@@ -46,6 +46,8 @@ Press **PODCASTS** (or ⌘⌥P) to browse the top shows in your country or searc
 - **Subscriptions:** new episodes are counted under SUBSCRIBED each time you open the window.
 - **Resume:** episodes continue where you stopped, and finished ones are marked as played.
 - **Speed:** 1× to 2× (Controls → Podcast Speed), remembered per show, without changing the pitch.
+
+<p align="center"><img src="docs/podcasts.png" alt="The Podcasts window: top shows with artwork, and the selected show's episodes with dates and lengths" width="700"></p>
 - **Playback:** episodes stream through the macOS player, so the EQ and visualizer don't apply to them.
 - **Any feed:** **+ FEED** subscribes to shows that aren't in the directory, including private or paid feeds with a personal link.
 
