@@ -67,6 +67,17 @@ struct Track: Codable, Sendable {
         return t
     }
 
+    /// An audio file on the web (added by URL): seekable and resumable like an episode, but without a show.
+    static func webFile(_ url: String, title: String) -> Track {
+        var t = episode(url, title: title, show: "", artwork: nil, duration: nil, published: nil, summary: nil)
+        t.artist = nil
+        t.album = nil
+        return t
+    }
+
+    /// A web file added by URL rather than a podcast episode (both play the same way).
+    var isWebFile: Bool { isEpisode && podcast?.isEmpty == true }
+
     var fileStem: String { (path as NSString).lastPathComponent.replacingOccurrences(of: "." + (path as NSString).pathExtension, with: "") }
 
     var displayTitle: String {

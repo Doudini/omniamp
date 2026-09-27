@@ -163,7 +163,11 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         add.toolTip = "Add the selected episodes to the playlist"
         play.toolTip = "Play now (double-click)"
 
-        let top = NSStackView(views: [topButton, subscribedButton, search, country])
+        let feedButton = ModernButton(glyph: Fonts.Icon.plus, label: "FEED", target: self, action: #selector(addFeed))
+        feedButton.glyphSize = 10
+        feedButton.toolTip = "Subscribe to a podcast by its feed URL"
+        feedButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        let top = NSStackView(views: [topButton, subscribedButton, search, country, feedButton])
         top.spacing = 6
         let header = NSStackView(views: [showTitle, NSView(), subscribeButton])
         header.spacing = 8
@@ -286,6 +290,47 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         let r = showsTable.selectedRow
         guard r >= 0, r < shows.count, shows[r] != currentShow else { return }
         open(shows[r])
+    }
+
+    /// Show a podcast found by URL (Add URL or + FEED), subscribing to it if asked.
+    func present(_ show: PodcastShow, subscribe: Bool) {
+        if subscribe, !library.isSubscribed(show) { library.toggleSubscription(show) }
+        if library.isSubscribed(show) {
+            showingSubscriptions = true
+            search.stringValue = ""
+            load()
+            if let r = shows.firstIndex(where: { $0.feedURL == show.feedURL }) {
+                showsTable.selectRowIndexes([r], byExtendingSelection: false)
+                showsTable.scrollRowToVisible(r)
+            }
+        } else {
+            showsTable.deselectAll(nil)
+        }
+        open(show)
+        status.stringValue = library.isSubscribed(show) ? "Subscribed to “\(show.title)”." : "Found “\(show.title)”: press SUBSCRIBE to keep it."
+    }
+
+    @objc private func addFeed() {
+        AddURL.ask(title: "Add a Podcast by URL", message: "Paste the show's RSS feed (also private or paid feeds with a personal link) or an Apple Podcasts link.",
+                   button: "Subscribe", in: window) { [weak self] text in
+            self?.status.stringValue = "Checking the link…"
+            Task { @MainActor in
+                guard let self else { return }
+                do {
+                    switch try await URLProbe.probe(text) {
+                    case .podcast(let show): self.present(show, subscribe: true)
+                    case .station, .stations:
+                        self.status.stringValue = "That's a radio stream: add it with + URL in Internet Radio."
+                    case .file(let url, let title):
+                        self.controller.addEpisode(.webFile(url, title: title))
+                        self.status.stringValue = "That's a single audio file: added “\(title)” to the playlist."
+                    }
+                } catch {
+                    self.status.stringValue = ""
+                    AddURL.show(error, in: self.window)
+                }
+            }
+        }
     }
 
     private func open(_ show: PodcastShow) {

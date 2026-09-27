@@ -383,7 +383,7 @@ final class ModernInfoView: NSView {
         albumTitle.isHidden = albumTitle.stringValue.isEmpty
         albumTitle.toolTip = nil
         let played = PodcastLibrary.shared.isPlayed(t.path) ? "played" : ""
-        numbers.stringValue = ["PODCAST", TimeFormat.mmss(t.duration), played].filter { !$0.isEmpty }.joined(separator: " · ")
+        numbers.stringValue = [t.isWebFile ? "WEB" : "PODCAST", TimeFormat.mmss(t.duration), played].filter { !$0.isEmpty }.joined(separator: " · ")
         numbers.isHidden = false
         credits.isHidden = true
         if let err = c.player.streamError, i == c.currentIndex, c.player.state == .stopped {

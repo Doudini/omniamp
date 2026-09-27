@@ -169,10 +169,13 @@ final class PlayerController {
         }
     }
 
-    func showOpenPanel(for window: NSWindow?) {
+    enum OpenKind { case filesOrFolders, files, folder }
+
+    func showOpenPanel(for window: NSWindow?, kind: OpenKind = .filesOrFolders) {
         let p = NSOpenPanel()
-        p.canChooseDirectories = true
-        p.canChooseFiles = true
+        p.canChooseDirectories = kind != .files
+        p.canChooseFiles = kind != .folder
+        p.prompt = kind == .folder ? "Add Folder" : "Add"
         p.allowsMultipleSelection = true
         p.allowedContentTypes = [.audio, .folder, .m3uPlaylist, .init(filenameExtension: "pls") ?? .m3uPlaylist,
                                  .init(filenameExtension: "m3u8") ?? .m3uPlaylist, .init(filenameExtension: "flac") ?? .audio]
@@ -832,7 +835,7 @@ final class PlayerController {
             let ext = (t.url.path as NSString).pathExtension.uppercased()
             let codec = ["MP3", "M4A", "AAC", "MP4", "OGG", "OPUS", "WAV"].contains(ext) ? (ext == "M4A" || ext == "MP4" ? "AAC" : ext) : ""
             let date = t.published.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .omitted) } ?? ""
-            return (["PODCAST", codec].filter { !$0.isEmpty }.joined(separator: " "), date)
+            return ([t.isWebFile ? "WEB" : "PODCAST", codec].filter { !$0.isEmpty }.joined(separator: " "), date)
         }
         let playing = index == currentIndex && player.state != .stopped
         let ext = (t.path as NSString).pathExtension.lowercased()

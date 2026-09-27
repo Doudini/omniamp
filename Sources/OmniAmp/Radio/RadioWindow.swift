@@ -128,7 +128,11 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
         add.toolTip = "Add to the playlist"
         play.toolTip = "Play now (double-click)"
 
-        let top = NSStackView(views: [popularButton, favoritesButton, search, genre, country])
+        let urlButton = ModernButton(glyph: Fonts.Icon.plus, label: "URL", target: self, action: #selector(addCustom))
+        urlButton.glyphSize = 10
+        urlButton.toolTip = "Add a station by its stream or playlist URL (saved in Favorites)"
+        urlButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        let top = NSStackView(views: [popularButton, favoritesButton, search, genre, country, urlButton])
         top.spacing = 6
         let bottom = NSStackView(views: [status, NSView(), credit, fav, add, play])
         bottom.spacing = 6
@@ -203,13 +207,50 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
         guard let s = selected else { return }
         let i = controller.addStation(url: s.url, name: s.name, logo: s.favicon, tags: s.summary)
         controller.play(index: i)
-        RadioBrowser.shared.countClick(s.uuid)
+        if !s.uuid.hasPrefix("custom:") { RadioBrowser.shared.countClick(s.uuid) }
     }
 
     @objc private func addSelected() {
         guard let s = selected else { return }
         controller.addStation(url: s.url, name: s.name, logo: s.favicon, tags: s.summary)
         status.stringValue = "Added “\(s.name)” to the playlist."
+    }
+
+    /// A station that isn't in the directory: probe the link, then keep it in Favorites.
+    @objc private func addCustom() {
+        AddURL.ask(title: "Add a Station by URL", message: "Paste a stream address, or a .pls / .m3u link from the station's website.",
+                   in: window) { [weak self] text in
+            self?.status.stringValue = "Checking the link…"
+            Task { @MainActor in
+                guard let self else { return }
+                do {
+                    let found: [URLProbe.Station]
+                    switch try await URLProbe.probe(text) {
+                    case .station(let url, let name): found = [URLProbe.Station(url: url, name: name)]
+                    case .stations(let list): found = list
+                    case .podcast:
+                        self.status.stringValue = "That's a podcast feed: add it with + FEED in Podcasts."
+                        return
+                    case .file(let url, let title):
+                        self.controller.addEpisode(.webFile(url, title: title))
+                        self.status.stringValue = "That's an audio file, not a live station: added “\(title)” to the playlist."
+                        return
+                    }
+                    for s in found {
+                        let st = RadioStation.custom(url: s.url, name: s.name ?? AddURL.fallbackName(s.url))
+                        if !RadioFavorites.contains(st) { RadioFavorites.toggle(st) }
+                    }
+                    self.showingFavorites = true
+                    self.search.stringValue = ""
+                    self.load()
+                    self.status.stringValue = found.count == 1 ? "Added “\(found[0].name ?? AddURL.fallbackName(found[0].url))” to Favorites."
+                                                               : "Added \(found.count) stations to Favorites."
+                } catch {
+                    self.status.stringValue = ""
+                    AddURL.show(error, in: self.window)
+                }
+            }
+        }
     }
 
     @objc private func toggleFavorite() {

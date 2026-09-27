@@ -8,6 +8,7 @@ final class ClassicPlaylistView: SkinCanvasView {
     /// Menus built by the app delegate: right-click, MISC (sort) and LIST buttons.
     var contextMenu: (() -> NSMenu)?
     var miscMenu: (() -> NSMenu)?
+    var addMenu: (() -> NSMenu)?
     var listMenu: (() -> NSMenu)?
 
     /// Size in skin pixels.
@@ -275,7 +276,9 @@ final class ClassicPlaylistView: SkinCanvasView {
     private func bottomButton(_ p: CGPoint, _ c: PlayerController) {
         let W = skinSize.width, H = skinSize.height
         let y = H - 30
-        if CGRect(x: 14, y: y, width: 22, height: 18).contains(p) { c.showOpenPanel(for: window) }            // ADD
+        if CGRect(x: 14, y: y, width: 22, height: 18).contains(p) {                                           // ADD
+            if let m = addMenu?() { popMenu(m, at: CGPoint(x: 14, y: y)) } else { c.showOpenPanel(for: window) }
+        }
         else if CGRect(x: 43, y: y, width: 22, height: 18).contains(p) { removeSelected() }                   // REM
         else if CGRect(x: 72, y: y, width: 22, height: 18).contains(p) {                                    // SEL
             selection = IndexSet(integersIn: 0..<rowCount); needsDisplay = true

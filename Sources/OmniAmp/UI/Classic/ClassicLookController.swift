@@ -253,7 +253,8 @@ extension ClassicLookController: PlayerUI {
     var selectedTrackIndices: IndexSet { playlistView.selectedTrackIndices }
 
     /// Playlist menus, supplied by the app delegate.
-    func setPlaylistMenus(context: @escaping () -> NSMenu, misc: @escaping () -> NSMenu, list: @escaping () -> NSMenu) {
+    func setPlaylistMenus(add: @escaping () -> NSMenu, context: @escaping () -> NSMenu, misc: @escaping () -> NSMenu, list: @escaping () -> NSMenu) {
+        playlistView.addMenu = add
         playlistView.contextMenu = context
         playlistView.miscMenu = misc
         playlistView.listMenu = list

@@ -28,6 +28,11 @@ struct RadioStation: Codable, Equatable {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    /// A station added by URL (not from the directory).
+    static func custom(url: String, name: String) -> RadioStation {
+        RadioStation(uuid: "custom:" + url, name: name, url: url, tags: "", country: "", countryCode: "", codec: "URL", bitrate: 0, favicon: nil)
+    }
+
     var genreLabel: String { tags.split(separator: ",").prefix(3).map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: ", ") }
 }
 

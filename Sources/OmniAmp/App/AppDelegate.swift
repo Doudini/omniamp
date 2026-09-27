@@ -91,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             w.playlistMenu = { [weak self] in self?.makePlaylistContextMenu() ?? NSMenu() }
             w.onRadio = { [weak self] in self?.showRadio(nil) }
             w.onPodcasts = { [weak self] in self?.showPodcasts(nil) }
+            w.addMenuProvider = { [weak self] in self?.makeAddMenu() ?? NSMenu() }
             look = w
         case .classic:
             look = makeClassicLook()
@@ -113,7 +114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let look = ClassicLookController(controller: controller, skin: skin, scale: SkinLibrary.scale)
         look.menuProvider = { [weak self] in self?.makeOptionsMenu() ?? NSMenu() }
         look.onSkinDropped = { [weak self] u in self?.loadSkin(u) }
-        look.setPlaylistMenus(context: { [weak self] in self?.makePlaylistContextMenu() ?? NSMenu() },
+        look.setPlaylistMenus(add: { [weak self] in self?.makeAddMenu() ?? NSMenu() },
+                              context: { [weak self] in self?.makePlaylistContextMenu() ?? NSMenu() },
                               misc: { [weak self] in self?.makeSortMenu() ?? NSMenu() },
                               list: { [weak self] in self?.makeListMenu() ?? NSMenu() })
         return look
@@ -232,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func makeOptionsMenu() -> NSMenu {
         let m = NSMenu()
         m.addItem(withTitle: "Add Files or Folder…", action: #selector(openDoc(_:)), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Add URL…", action: #selector(addURL(_:)), keyEquivalent: "").target = self
         m.addItem(withTitle: "Jump to File…", action: #selector(find(_:)), keyEquivalent: "").target = self
         m.addItem(withTitle: "Internet Radio…", action: #selector(showRadio(_:)), keyEquivalent: "").target = self
         m.addItem(withTitle: "Podcasts…", action: #selector(showPodcasts(_:)), keyEquivalent: "").target = self
@@ -607,6 +610,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func find(_ sender: Any?) { look?.focusFilter() }
     @objc private func openDoc(_ sender: Any?) { controller.showOpenPanel(for: NSApp.keyWindow) }
+    @objc private func openFiles(_ sender: Any?) { controller.showOpenPanel(for: NSApp.keyWindow, kind: .files) }
+    @objc private func openFolder(_ sender: Any?) { controller.showOpenPanel(for: NSApp.keyWindow, kind: .folder) }
+
+    /// The ADD button's menu (both looks), like Winamp's ADD FILE / ADD DIR / ADD URL.
+    func makeAddMenu() -> NSMenu {
+        let m = NSMenu(title: "Add")
+        m.addItem(withTitle: "Add Files…", action: #selector(openFiles(_:)), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Add Folder…", action: #selector(openFolder(_:)), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Add URL…", action: #selector(addURL(_:)), keyEquivalent: "").target = self
+        return m
+    }
+
+    /// Add URL: a stream, a station playlist, a podcast feed / Apple Podcasts link, or a web audio file.
+    @objc func addURL(_ sender: Any?) {
+        let window = NSApp.keyWindow ?? NSApp.mainWindow
+        AddURL.ask(title: "Add URL",
+                   message: "A radio stream, a .pls / .m3u playlist, a podcast feed or Apple Podcasts link, or an audio file on the web.",
+                   in: window) { [weak self] text in
+            Task { @MainActor in
+                guard let self else { return }
+                do {
+                    self.handle(try await URLProbe.probe(text))
+                } catch {
+                    AddURL.show(error, in: window)
+                }
+            }
+        }
+    }
+
+    private func handle(_ result: URLProbe.Result) {
+        var added: Int?
+        switch result {
+        case .station(let url, let name):
+            added = controller.addStation(url: url, name: name ?? AddURL.fallbackName(url))
+        case .stations(let list):
+            for s in list {
+                let i = controller.addStation(url: s.url, name: s.name ?? AddURL.fallbackName(s.url))
+                if added == nil { added = i }
+            }
+        case .file(let url, let title):
+            added = controller.addEpisode(.webFile(url, title: title))
+        case .podcast(let show):
+            showPodcasts(nil)
+            podcasts?.present(show, subscribe: false)
+        }
+        // Like Winamp's Open Location: start it if nothing is playing.
+        if let i = added, controller.player.state == .stopped { controller.play(index: i) }
+    }
     @objc private func clear(_ sender: Any?) { controller.clear() }
     @objc private func volUp(_ sender: Any?) { controller.changeVolume(by: 0.05) }
     @objc private func volDown(_ sender: Any?) { controller.changeVolume(by: -0.05) }
@@ -628,6 +679,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Add Files or Folder…", action: #selector(openDoc(_:)), keyEquivalent: "o").target = self
+        fileMenu.addItem(withTitle: "Add URL…", action: #selector(addURL(_:)), keyEquivalent: "l").target = self
         let radio = fileMenu.addItem(withTitle: "Internet Radio…", action: #selector(showRadio(_:)), keyEquivalent: "r")
         radio.keyEquivalentModifierMask = [.command, .option]
         radio.target = self

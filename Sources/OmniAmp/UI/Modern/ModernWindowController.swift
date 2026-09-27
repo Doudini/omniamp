@@ -31,6 +31,8 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     /// Opens the Internet Radio window (set by the app delegate).
     var onRadio: (() -> Void)?
     var onPodcasts: (() -> Void)?
+    /// ADD opens a small menu: files, folder, URL.
+    var addMenuProvider: (() -> NSMenu)?
     private var tick = 0
     var onClose: (() -> Void)?
     /// Right-click menu for the playlist (built by the app delegate).
@@ -378,7 +380,12 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
     @objc private func radioTapped() { onRadio?() }
     @objc private func podcastsTapped() { onPodcasts?() }
-    @objc private func addTapped() { controller.showOpenPanel(for: window) }
+    @objc private func addTapped() {
+        guard let menu = addMenuProvider?() else { controller.showOpenPanel(for: window); return }
+        // Opens upwards from the button, like Winamp's ADD pop-out.
+        let y = addBtn.isFlipped ? -menu.size.height - 2 : addBtn.bounds.height + menu.size.height + 2
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: y), in: addBtn)
+    }
 
     @objc private func tableDoubleClick() {
         guard table.clickedRow >= 0 else { return }
