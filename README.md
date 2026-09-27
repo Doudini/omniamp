@@ -1,49 +1,119 @@
 # OmniAmp
 
-A small, fast, Winamp-inspired MP3/FLAC player for macOS, written in Swift with AppKit and AVAudioEngine. It has no third-party dependencies.
+**It really whips the llama's ass, again.** OmniAmp is a Winamp-style music player for macOS that is fast, light and native. Drop in a folder of 10,000 tracks and they appear instantly. Audio is gapless and can be bit-perfect. Idle CPU use is 0%.
 
-<p align="center"><img src="docs/screenshot.png" alt="OmniAmp modern look with album art and the INFO drawer" width="527"></p>
+It's written in Swift with AppKit and AVAudioEngine and has no third-party dependencies.
 
-## Features
+<p align="center">
+  <img src="docs/modern.png" alt="OmniAmp's modern look: LCD display, album art, INFO drawer and playlist" width="430">
+  &nbsp;&nbsp;
+  <img src="docs/classic.png" alt="OmniAmp's classic look with the original Winamp 2.91 base skin: main window, equalizer and playlist" width="338">
+</p>
+<p align="center"><sub>The modern look (left) and the classic look with the original Winamp 2.91 skin (right).</sub></p>
 
-- **Instant playlists:** drop a folder and 10,000 tracks show up in about 0.2 s. Tags are read in parallel in the background, and the playlist is cached, so relaunching restores it in about 20 ms.
-- **Two looks,** switchable from the View menu:
-  - **Modern:** a resizable native window with an LCD-style display, album art, an INFO drawer and the Hack Nerd Font. Color themes are inspired by old monochrome monitors: Green (default), Amber, Blue, Cyan/Teal and Monochrome.
-  - **Classic:** loads real Winamp 2.x `.wsz` skins with pixel-exact main, equalizer and playlist windows at 1×–4× size.
-- **Formats:** MP3, FLAC, ALAC/AAC (M4A), WAV (including RF64), AIFF and CAF, all with fast built-in tag readers and bit depth shown (e.g. "FLAC 24-bit / 96 kHz").
-- **Bit-perfect mode** (Output menu):
-  - Switches the output device to each file's sample rate, so macOS doesn't resample.
-  - Bypasses the EQ and software volume; volume goes to the device's hardware control if it has one.
-  - Optional exclusive (hog) access.
-  - The device's original rate is restored on quit.
-- **Output device picker:** play to any output device, or follow the system default.
-- **Scrobbling** to **Last.fm** and **ListenBrainz** (Settings, ⌘,): Now Playing updates, standard scrobble rules, and an offline queue. Logins are stored in the Keychain.
-- **CUE sheets:** a single-file album rip (FLAC, WAV, ALAC…) plus its `.cue` shows up as separate tracks that play gaplessly. Old Windows-1252 cue files work, and so do cues that still point at the original `.wav`.
-- **Internet radio** (RADIO button, ⌘⌥R): browse and search thousands of stations (radio-browser.info) by genre and country, with station logos and favorites.
-  - MP3/AAC/AAC+ Icecast and SHOUTcast streams play through OmniAmp's own engine, with the EQ and visualizer.
-  - HLS and Ogg/Opus stations play through the macOS player.
-  - Live song titles, and stations (including logos) save in `.m3u`/`.pls` playlists.
+## Why OmniAmp
+
+- 🚀 **Playlists stay fast at any size.** 10,000 tracks show up in about 0.2 s, and a relaunch restores them in about 20 ms. Tags load in parallel in the background.
+- 🎧 **For people who care how their music sounds:**
+  - gapless playback and a 10-band EQ
+  - a bit-perfect mode that switches your DAC to each file's sample rate
+  - ReplayGain, CUE sheets, and 24-bit/96 kHz FLAC shown as exactly that
+- 🪶 **Uses almost no power.** 0% CPU when idle, well under 1% while playing in the background, and about 40 MB of memory.
+- 🦙 **Two looks in one app.** Switch any time from the View menu:
+  - a modern look with album art and phosphor-screen color themes
+  - a pixel-perfect classic look that loads real Winamp 2.x `.wsz` skins
+- 📻 **Thousands of internet radio stations,** with logos, favorites and live song titles.
+- ⌨️ **Your fingers still know it.** `Z X C V B`, `J` to jump to a track, media keys.
+
+## The modern look
+
+A resizable native window with an LCD-style display, album art and the Hack Nerd Font. Pick one of five color themes inspired by old monochrome monitors:
+- Green (default)
+- Amber
+- Blue
+- Cyan/Teal
+- Monochrome
+
+The **INFO** drawer shows full tags, the file format, the album and cover art. The **EQ** drawer has the 10-band equalizer with presets.
+
+<p align="center"><img src="docs/themes.png" alt="Amber, Blue, Cyan and Monochrome themes with the EQ and INFO drawers"></p>
+
+## The classic look
+
+Real Winamp 2.x skins: pixel-exact main, equalizer and playlist windows at 1×–4× size.
+- **Built-in skin:** OmniAmp ships with the original Winamp 2.91 base skin.
+- **Your own skins:** drag any `.wsz` onto the window, or use View → Skins → Load Skin….
+- **Where to find more:** thousands of skins are at the [Winamp Skin Museum](https://skins.webamp.org).
+
+## Internet radio
+
+Press **RADIO** (or ⌘⌥R) to browse and search thousands of stations from [radio-browser.info](https://www.radio-browser.info). Filter by genre and country, star your favorites, and add stations to the playlist like any other track. Stations are saved in `.m3u`/`.pls` files along with their logos.
+- **MP3/AAC/AAC+ (Icecast and SHOUTcast):** play through OmniAmp's own engine, so the EQ and visualizer work. The INFO drawer shows the song currently on air.
+- **HLS and Ogg/Opus:** play through the macOS player.
+
+<p align="center"><img src="docs/radio.png" alt="The Internet Radio window: popular stations with logos, genres, countries and formats" width="700"></p>
+
+## All features
+
+**Playback**
+- **Formats:** MP3, FLAC, ALAC/AAC (M4A), WAV (including RF64), AIFF and CAF, with fast built-in tag readers. The display shows exactly what's playing, e.g. "FLAC 24-bit / 96 kHz".
 - **Gapless playback** between tracks that share a sample format.
-- **ReplayGain** (track or album mode, with clipping protection), **stop after current** (⇧V), a **sleep timer** that fades out, **resume position** for long files and audiobooks, **always on top**, and a visualizer that cycles spectrum → oscilloscope → off.
-- **10-band equalizer** with preamp and presets, available in both looks.
-- **Watched folders:** the playlist follows your music folders live. New files are added next to their folder-mates, deleted files are removed and edited files are re-tagged, and tracks you removed by hand stay removed. Your folder structure is never touched.
-- **Playlists:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists.
-- **Winamp keys** (`Z X C V B`, `J` to jump to a file), media keys and Now Playing.
+- **Bit-perfect mode** (Output menu):
+  - Matches the output device to each file's sample rate.
+  - Bypasses the EQ and software volume, and uses the device's hardware volume when it has one.
+  - Optional exclusive (hog) access.
+  - Restores the device's original rate on quit.
+- **Output device picker:** play to any output, or follow the system default.
+- **ReplayGain:** track or album mode, with clipping protection.
+- **CUE sheets:** a single-file album rip plus its `.cue` shows up as separate tracks that play gaplessly. Old Windows-1252 cue files work too.
+- **Timers and toggles:**
+  - stop after current (⇧V)
+  - a sleep timer that fades out
+  - resume position for long files and audiobooks
+  - always on top
 
-## Build
+**Playlist**
+- **Instant loading.** The playlist is cached, and tags are read in parallel.
+- **Editing:** drag to reorder, a play queue (Q), sorting, and removal of duplicates and missing files.
+- **Watched folders:** the playlist follows your music folders live. New files appear next to their folder-mates, deleted files disappear and edited files are re-tagged. Your folder structure is never touched.
+- **Playlist files:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists.
+- **Jump to file (J):** type to search. Enter plays the result and clears the search; ⇧Enter keeps the results.
+- **Display options:** choose the playlist font (Hack, Hack Compact or the classic font) and toggle track numbers.
 
-Requires macOS 14+ and Xcode / Swift 6.
+**Scrobbling**
+- **[Last.fm](https://www.last.fm) and [ListenBrainz](https://listenbrainz.org)** (Settings, ⌘,): Now Playing updates, standard scrobble rules and an offline queue. Logins are stored in the macOS Keychain.
+
+**Look and feel**
+- **Visualizer:** cycles spectrum → oscilloscope → off, and pauses when you can't see it.
+- **Now Playing and media keys:** macOS Now Playing and the keyboard media keys work.
+
+## Keyboard shortcuts
+
+| Key | Action | | Key | Action |
+|---|---|---|---|---|
+| `Z` | Previous | | `J` / ⌘F | Jump to track |
+| `X` | Play | | `Q` | Queue selected track |
+| `C` | Pause | | ⇧V | Stop after current |
+| `V` | Stop | | ← / → | Seek |
+| `B` | Next | | Space | Play / pause |
+| ⌘O | Add files or folder | | ⌘⌥R | Internet radio |
+
+## Get it
+
+OmniAmp is built from source for now; a signed download is planned. You need macOS 14 or later and Xcode (Swift 6).
 
 ```sh
-swift build            # debug build
-swift test             # unit tests
-./scripts/make-app.sh  # release build → OmniAmp.app (icon source: Resources/AppIcon.icon; open it in Icon Composer or edit its SVG, then `./scripts/make-icon.sh`)
+git clone https://github.com/Doudini/omniamp.git
+cd omniamp
+./scripts/make-app.sh   # release build → OmniAmp.app
 open OmniAmp.app
 ```
 
+Drag `OmniAmp.app` into `/Applications` to keep it.
+
 ### Last.fm API key (optional)
 
-Last.fm requires every app to have its own API key, so a build made from this repo has scrobbling to Last.fm disabled until you add one. ListenBrainz works without it.
+Last.fm requires every app to have its own API key, so a build made from this repo has Last.fm scrobbling disabled until you add one. ListenBrainz works without a key.
 
 1. Create a free API account at <https://www.last.fm/api/account/create>.
 2. Put the key and secret in a `secrets.env` file in the repo root. Git ignores this file, so it is never committed:
@@ -53,8 +123,21 @@ Last.fm requires every app to have its own API key, so a build made from this re
    ```
 3. Run `./scripts/make-app.sh`. The key is built into your `OmniAmp.app`.
 
-The classic look ships with Winamp 2.91's original base skin. To use other skins, drag any `.wsz` onto the window or use View → Skins → Load Skin…. Thousands of skins are available at the [Winamp Skin Museum](https://skins.webamp.org).
+## Development
 
-## Fonts
+```sh
+swift build            # debug build
+swift test             # unit tests
+./scripts/make-app.sh  # release app bundle
+```
 
-This repo bundles [Hack](https://github.com/source-foundry/Hack) and [Fira Code](https://github.com/tonsky/FiraCode) as [Nerd Fonts](https://www.nerdfonts.com). Their licenses are in `fonts/`.
+The app icon's source is `Resources/AppIcon.icon`. Open it in Icon Composer or edit its SVG, then run `./scripts/make-icon.sh`. The ideas we're saving for later are in [BACKLOG.md](BACKLOG.md).
+
+## Credits
+
+- **Fonts:** [Hack](https://github.com/source-foundry/Hack) and [Fira Code](https://github.com/tonsky/FiraCode), bundled as [Nerd Fonts](https://www.nerdfonts.com). Their licenses are in `fonts/`.
+- **Classic skin:** the base skin is Winamp 2.91's original skin by Nullsoft.
+- **Radio directory:** provided by the community-run [radio-browser.info](https://www.radio-browser.info).
+- **Screenshots:** the albums shown are fictional; their audio and covers were generated for these images.
+
+OmniAmp is an independent project and is not affiliated with Winamp or Nullsoft.
