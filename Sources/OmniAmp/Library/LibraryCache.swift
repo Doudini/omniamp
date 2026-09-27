@@ -14,9 +14,14 @@ enum LibraryCache {
         var repeatAll: Bool?
     }
 
+    /// True inside XCTest.
+    static let runningTests = NSClassFromString("XCTestCase") != nil
+
     static var fileURL: URL {
-        // OMNIAMP_CACHE_DIR lets test runs use a throwaway cache.
+        // OMNIAMP_CACHE_DIR lets test runs use a throwaway cache. Unit tests never use the real one, even when a
+        // delayed save fires after a test has reset the variable (that once wrote test tracks into the library).
         let dir = ProcessInfo.processInfo.environment["OMNIAMP_CACHE_DIR"].map { URL(fileURLWithPath: $0) }
+            ?? (runningTests ? FileManager.default.temporaryDirectory.appendingPathComponent("OmniAmp-tests", isDirectory: true) : nil)
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("OmniAmp", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

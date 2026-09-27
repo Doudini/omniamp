@@ -46,6 +46,7 @@ final class PlayerController {
 
     init() {
         store.delegate = self
+        store.onScanProgress = { [weak self] in self?.ui?.optionsDidChange() }
         store.onTagLoadingFinished = { [weak self] in
             self?.ui?.optionsDidChange()
             self?.scheduleSave()
@@ -156,17 +157,18 @@ final class PlayerController {
         let t0 = Date()
         if position != nil { invalidatePreload() }
         let currentID = currentIndex.map { store.id(at: $0) }
-        store.add(urls: urls, at: position) { [weak self] start, n in
+        store.add(urls: urls, at: position, onBatch: { [weak self] start, n in
             guard let self else { return }
             self.remapCurrent(currentID)
-            NSLog("OmniAmp: %d rows visible after %.3fs", n, Date().timeIntervalSince(t0))
-            // Start playing if nothing is loaded yet.
+            // Start playing the first track as soon as it shows up, if nothing is loaded yet.
             let autoplay = ProcessInfo.processInfo.environment["OMNIAMP_NO_AUTOPLAY"] == nil
             if autoplay, n > 0, self.player.state == .stopped, self.currentIndex == nil {
                 self.play(index: start)
             }
-            self.scheduleSave()
-        }
+        }, done: { [weak self] n in
+            NSLog("OmniAmp: %d rows visible after %.3fs", n, Date().timeIntervalSince(t0))
+            self?.scheduleSave()
+        })
     }
 
     enum OpenKind { case filesOrFolders, files, folder }
@@ -879,6 +881,10 @@ final class PlayerController {
 
     var statusText: String {
         let total = store.tracks.count
+        // While a folder is being added: how far along it is.
+        if store.scansInProgress > 0 {
+            return "Adding… \(store.scannedSoFar.formatted()) files"
+        }
         var s = visible == nil ? "\(total) tracks" : "\(rowCount)/\(total) tracks"
         let dur = store.totalDuration
         if dur > 0 { s += "  \(TimeFormat.mmss(dur))" }

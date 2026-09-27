@@ -97,3 +97,15 @@ final class QuickWinsTests: XCTestCase {
         XCTAssertEqual(SpectrumAnalyzer.meterLevel(0), 0)
     }
 }
+
+final class KeyStripTests: XCTestCase {
+    /// Tooltips are answered by the strip itself (a temporary owner string crashed AppKit when the tooltip showed).
+    func testTooltipsComeFromTheStrip() {
+        let strip = KeyStrip([.init(glyph: "a", tip: "Previous") {}, .init(glyph: "b", tip: "Play") {}])
+        strip.frame = NSRect(x: 0, y: 0, width: strip.intrinsicContentSize.width, height: 26)
+        strip.updateTrackingAreas()
+        strip.updateTrackingAreas()   // re-registering must not pile up
+        XCTAssertEqual(strip.view(strip, stringForToolTip: 0, point: NSPoint(x: 10, y: 13), userData: nil), "Previous")
+        XCTAssertEqual(strip.view(strip, stringForToolTip: 0, point: NSPoint(x: 45, y: 13), userData: nil), "Play")
+    }
+}

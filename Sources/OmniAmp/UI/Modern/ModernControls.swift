@@ -222,7 +222,7 @@ enum KeyFace {
 }
 
 /// A row of joined hi-fi keys in one housing (transport: back, play, pause, stop, next), or a single key.
-final class KeyStrip: NSControl {
+final class KeyStrip: NSControl, NSViewToolTipOwner {
     struct Key {
         var glyph: String
         var tip: String
@@ -258,7 +258,14 @@ final class KeyStrip: NSControl {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
-        for (i, k) in keys.enumerated() { addToolTip(keyRect(i), owner: k.tip as NSString, userData: nil) }
+        // One tooltip area per key, answered by this view. (AppKit doesn't retain a tooltip's owner, so the
+        // owner must live as long as the view: passing a temporary string crashed when the tooltip appeared.)
+        removeAllToolTips()
+        for i in keys.indices { addToolTip(keyRect(i), owner: self, userData: nil) }
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        index(at: point).map { keys[$0].tip } ?? ""
     }
 
     override func mouseMoved(with event: NSEvent) { hoverIndex = index(at: convert(event.locationInWindow, from: nil)) }
@@ -392,8 +399,11 @@ final class LEDKey: NSControl {
 final class ModernSlider: NSControl {
     /// Redraws only when the knob moves at least half a point (the seek bar updates every frame).
     var value: Double = 0 {
-        didSet { if abs(value - oldValue) * Double(max(1, bounds.width - knobWidth)) >= 0.5 { needsDisplay = true } }
+        // Measured against where the knob was last drawn: comparing with the previous value (a tiny step per
+        // tick) never added up to half a point, so the seek bar never moved during playback.
+        didSet { if abs(value - drawnValue) * Double(max(1, bounds.width - knobWidth)) >= 0.5 { needsDisplay = true } }
     }
+    private var drawnValue: Double = -1
     private(set) var isDragging = false
     /// Called continuously while dragging; `action` fires on mouse-up.
     var onChange: ((Double) -> Void)?
@@ -435,6 +445,7 @@ final class ModernSlider: NSControl {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        drawnValue = value
         let midY = bounds.midY
         let groove = NSRect(x: track.minX, y: midY - 2.5, width: track.width, height: 5)
         let gp = NSBezierPath(roundedRect: groove, xRadius: 2.5, yRadius: 2.5)

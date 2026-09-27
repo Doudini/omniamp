@@ -31,15 +31,19 @@ struct TagInfo: Equatable {
 }
 
 /// A read buffer to reuse across files. Tag loading reads the head of every file in a folder; a fresh
-/// 128 KB allocation per file (10,000 files = over a gigabyte of churn) left ~300 MB of freed-but-dirty
-/// malloc pages that macOS took a minute to reclaim.
+/// allocation per file (10,000 files = hundreds of MB of churn) left freed-but-dirty malloc pages that macOS
+/// took a minute to reclaim.
 final class TagReadBuffer {
     fileprivate var bytes = [UInt8](repeating: 0, count: TagReader.headSize)
 }
 
 /// Minimal, fast tag reader: reads only the head (and for ID3v1 the tail) of a file.
+///
+/// The head is 32 KB: one read on a network share (NFS/SMB fetch 32 KB+ per request). When the tags run past
+/// it, usually because cover art is embedded first, only the needed pieces are fetched with small positioned
+/// reads (ID3 text frames, FLAC stream info and comments, the first MPEG frame) and the art is skipped.
 enum TagReader {
-    static let headSize = 128 * 1024
+    static let headSize = 32 * 1024
 
     static func read(path: String, fileSize: Int64, buffer: TagReadBuffer? = nil) -> TagInfo {
         autoreleasepool { readHead(path: path, fileSize: fileSize, buffer: buffer ?? TagReadBuffer()) }
@@ -61,8 +65,9 @@ enum TagReader {
         // Full buffer (any real audio file): parse it in place, no copy.
         let head = n == buffer.bytes.count ? buffer.bytes : Array(buffer.bytes[0..<n])
         let ext = (path as NSString).pathExtension.lowercased()
+        let reader = PositionedReader(fd: fd, head: head)
         if ext == "flac" || head.starts(with: [0x66, 0x4C, 0x61, 0x43]) {
-            return parseFLAC(head)
+            return parseFLAC(compactFLAC(reader) ?? head)
         }
         // Container formats may keep tags/indexes anywhere in the file, so they seek.
         let magic = Array(head.prefix(12))
@@ -83,7 +88,13 @@ enum TagReader {
             if let d = info.duration, d > 0 { info.bitrate = Int(Double(fileSize) * 8 / d / 1000) }
             return info
         }
-        var info = parseMP3(head, fileSize: fileSize)
+        var info: TagInfo
+        if let (compact, skipped) = compactID3(reader) {
+            // The skipped bytes (cover art…) sit between the tag and the audio: keep the audio size right.
+            info = parseMP3(compact, fileSize: fileSize - Int64(skipped))
+        } else {
+            info = parseMP3(head, fileSize: fileSize)
+        }
         if info.title == nil, fileSize > 128 {
             var tail = [UInt8](repeating: 0, count: 128)
             if tail.withUnsafeMutableBytes({ pread(fd, $0.baseAddress, 128, off_t(fileSize - 128)) }) == 128 {
@@ -94,6 +105,88 @@ enum TagReader {
             }
         }
         return info
+    }
+
+    // MARK: Reading past the head
+
+    /// Bytes at any offset: from the head when they're in it, otherwise one positioned read.
+    struct PositionedReader {
+        let fd: Int32
+        let head: [UInt8]
+
+        func bytes(_ offset: Int, _ count: Int) -> [UInt8]? {
+            guard count > 0, offset >= 0 else { return count == 0 ? [] : nil }
+            if offset + count <= head.count { return Array(head[offset..<(offset + count)]) }
+            var out = [UInt8](repeating: 0, count: count)
+            let got = out.withUnsafeMutableBytes { pread(fd, $0.baseAddress, count, off_t(offset)) }
+            return got == count ? out : (got > 0 ? Array(out[0..<got]) : nil)
+        }
+    }
+
+    /// FLAC whose metadata runs past the head: a compact copy with just STREAMINFO and VORBIS_COMMENT
+    /// (pictures and padding skipped). nil when the head already holds everything.
+    static func compactFLAC(_ r: PositionedReader) -> [UInt8]? {
+        var p = 4, kept: [(UInt8, [UInt8])] = [], leftHead = false
+        for _ in 0..<128 {
+            guard let h = r.bytes(p, 4), h.count == 4 else { break }
+            let type = h[0] & 0x7F, isLast = h[0] & 0x80 != 0
+            let len = Int(h[1]) << 16 | Int(h[2]) << 8 | Int(h[3])
+            if p + 4 + len > r.head.count { leftHead = true }
+            if type == 0 || type == 4, len <= 1 << 20, let body = r.bytes(p + 4, len), body.count == len { kept.append((type, body)) }
+            p += 4 + len
+            if isLast { break }
+        }
+        guard leftHead, !kept.isEmpty else { return nil }
+        var out: [UInt8] = [0x66, 0x4C, 0x61, 0x43]
+        for (i, (type, body)) in kept.enumerated() {
+            out.append(type | (i == kept.count - 1 ? 0x80 : 0))
+            out += [UInt8(body.count >> 16 & 0xFF), UInt8(body.count >> 8 & 0xFF), UInt8(body.count & 0xFF)]
+            out += body
+        }
+        return out
+    }
+
+    /// MP3 whose ID3v2 tag runs past the head (cover art first, typically): a compact tag with only the text
+    /// frames, followed by the start of the audio. Returns it with the number of bytes left out, or nil when
+    /// the head already holds the tag and the first audio frame.
+    static func compactID3(_ r: PositionedReader) -> ([UInt8], Int)? {
+        let b = r.head
+        guard b.count >= 10, b[0] == 0x49, b[1] == 0x44, b[2] == 0x33 else { return nil }
+        let ver = b[3], flags = b[5]
+        let size = Int(b[6] & 0x7F) << 21 | Int(b[7] & 0x7F) << 14 | Int(b[8] & 0x7F) << 7 | Int(b[9] & 0x7F)
+        let audioStart = 10 + size + (flags & 0x10 != 0 ? 10 : 0)
+        guard audioStart + 4096 > b.count else { return nil }            // everything's in the head already
+        guard flags & 0x80 == 0, ver >= 2, ver <= 4 else { return nil }  // unsynchronised tags: rare, parse the head
+        var p = 10
+        if flags & 0x40 != 0, let e = r.bytes(p, 4), e.count == 4 {       // extended header
+            p += ver == 4 ? (Int(e[0] & 0x7F) << 21 | Int(e[1] & 0x7F) << 14 | Int(e[2] & 0x7F) << 7 | Int(e[3] & 0x7F))
+                          : (Int(e[0]) << 24 | Int(e[1]) << 16 | Int(e[2]) << 8 | Int(e[3])) + 4
+        }
+        let hdr = ver == 2 ? 6 : 10
+        var frames: [UInt8] = []
+        let tagEnd = 10 + size
+        for _ in 0..<512 {
+            guard p + hdr <= tagEnd, let h = r.bytes(p, hdr), h.count == hdr, h[0] != 0 else { break }
+            let len: Int
+            switch ver {
+            case 2: len = Int(h[3]) << 16 | Int(h[4]) << 8 | Int(h[5])
+            case 4: len = Int(h[4] & 0x7F) << 21 | Int(h[5] & 0x7F) << 14 | Int(h[6] & 0x7F) << 7 | Int(h[7] & 0x7F)
+            default: len = Int(h[4]) << 24 | Int(h[5]) << 16 | Int(h[6]) << 8 | Int(h[7])
+            }
+            guard len > 0, p + hdr + len <= tagEnd else { break }
+            // Text frames (T…, TXXX for ReplayGain) are all the reader uses; art (APIC/PIC) and the rest are skipped.
+            if h[0] == 0x54, len <= 256 * 1024, let body = r.bytes(p + hdr, len), body.count == len {
+                frames += h + body
+            }
+            p += hdr + len
+        }
+        guard let audio = r.bytes(audioStart, 8192), !audio.isEmpty else { return nil }
+        let n = frames.count
+        var out: [UInt8] = [0x49, 0x44, 0x33, ver, b[4], flags & ~0x50,   // no extended header / footer in the copy
+                            UInt8(n >> 21 & 0x7F), UInt8(n >> 14 & 0x7F), UInt8(n >> 7 & 0x7F), UInt8(n & 0x7F)]
+        out += frames
+        out += audio
+        return (out, audioStart - (10 + n))
     }
 
     // MARK: FLAC

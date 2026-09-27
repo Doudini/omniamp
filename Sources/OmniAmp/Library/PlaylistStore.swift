@@ -40,31 +40,78 @@ final class PlaylistStore {
         loadMissingTags()
     }
 
-    /// Stage 1 on a background thread, then insert (append if `at` is nil) and start stage 2.
-    /// Completion gets the insertion index and the number of tracks added.
-    func add(urls: [URL], at position: Int? = nil, completion: ((Int, Int) -> Void)? = nil) {
+    /// Folders being added right now (for the "Adding…" status).
+    private(set) var scansInProgress = 0
+    /// Files found so far by the scans in progress.
+    private(set) var scannedSoFar = 0
+    private var loadAllStart: Date?
+    /// Scanning started or finished, or found more files.
+    var onScanProgress: (() -> Void)?
+
+    /// Stage 1 on a background thread, handed over as it goes: rows are inserted (appended if `at` is nil)
+    /// a batch at a time, at most every 150 ms, and each batch starts stage 2 right away.
+    /// `onBatch` gets each batch's insertion index and size; `done` the total.
+    func add(urls: [URL], at position: Int? = nil, onBatch: ((Int, Int) -> Void)? = nil, done: ((Int) -> Void)? = nil) {
         let t0 = Date()
         let cached = Dictionary(tracks.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
-        DispatchQueue.global(qos: .userInitiated).async {
-            var found = FolderScanner.scan(urls)
-            // Reuse metadata we already know for identical files.
-            for i in found.indices {
-                if let c = cached[found[i].key], c.size == found[i].size, c.mtime == found[i].mtime, c.tagsLoaded {
-                    found[i] = c
-                }
-            }
-            let scanTime = Date().timeIntervalSince(t0)
+        scansInProgress += 1
+        if loadAllStart == nil { loadAllStart = t0 }
+        onScanProgress?()
+        var next = position   // where the next batch goes when inserting in the middle
+        var total = 0
+        var first = true
+
+        func deliver(_ found: [Track]) {
             DispatchQueue.main.async {
-                let at = min(max(0, position ?? self.tracks.count), self.tracks.count)
+                let at = min(max(0, next ?? self.tracks.count), self.tracks.count)
                 self.tracks.insert(contentsOf: found, at: at)
                 self.ids.insert(contentsOf: found.map { _ in self.allocID() }, at: at)
                 self.indexByID = nil
-                NSLog("OmniAmp: scanned %d files in %.3fs", found.count, scanTime)
+                if next != nil { next = at + found.count }
+                total += found.count
+                self.scannedSoFar += found.count
+                if first { NSLog("OmniAmp: first rows after %.3fs", Date().timeIntervalSince(t0)); first = false }
                 self.delegate?.playlistDidReload()
-                completion?(at, found.count)
+                onBatch?(at, found.count)
+                self.onScanProgress?()
                 self.loadMissingTags()
             }
         }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            var buffer: [Track] = []
+            var lastSend = Date.distantPast
+            FolderScanner.scan(urls) { batch in
+                // Reuse metadata we already know for identical files.
+                buffer += batch.map { t in
+                    if let c = cached[t.key], c.size == t.size, c.mtime == t.mtime, c.tagsLoaded { return c }
+                    return t
+                }
+                // First rows at once, then at most every 150 ms (keeps the table from reloading per folder).
+                if Date().timeIntervalSince(lastSend) >= 0.15 {
+                    deliver(buffer)
+                    buffer.removeAll()
+                    lastSend = Date()
+                }
+            }
+            if !buffer.isEmpty { deliver(buffer) }
+            let scanTime = Date().timeIntervalSince(t0)
+            DispatchQueue.main.async {
+                NSLog("OmniAmp: scanned %d files in %.3fs", total, scanTime)
+                self.scansInProgress -= 1
+                if self.scansInProgress == 0 { self.scannedSoFar = 0 }
+                self.onScanProgress?()
+                done?(total)
+                self.logIfAllLoaded()
+            }
+        }
+    }
+
+    /// When every scan and tag read has finished: one line for measuring whole loads.
+    private func logIfAllLoaded() {
+        guard scansInProgress == 0, activeLoads == 0, let s = loadAllStart else { return }
+        NSLog("OmniAmp: all loaded (rows and tags) after %.3fs", Date().timeIntervalSince(s))
+        loadAllStart = nil
     }
 
     func remove(at indexes: IndexSet) {
@@ -175,9 +222,12 @@ final class PlaylistStore {
         startFlushTimer()
 
         DispatchQueue.global(qos: .utility).async {
-            let chunk = 64
+            // Network shares: reads mostly wait on the server, so keep many in flight; local disks: one per core.
+            let remote = Self.isNetworkVolume(work[0].path)
+            let chunk = remote ? 8 : 64
             let chunks = (work.count + chunk - 1) / chunk
-            DispatchQueue.concurrentPerform(iterations: chunks) { c in
+            let lanes = remote ? 24 : ProcessInfo.processInfo.activeProcessorCount
+            Self.forEachConcurrently(chunks, lanes: lanes) { c in
                 var local: [(Int, TagInfo)] = []
                 local.reserveCapacity(chunk)
                 let buffer = TagReadBuffer()
@@ -196,10 +246,29 @@ final class PlaylistStore {
                     self.flushTimer = nil
                     NSLog("OmniAmp: tags for %d files in %.3fs", work.count, Date().timeIntervalSince(self.loadStart))
                     self.onTagLoadingFinished?()
+                    self.logIfAllLoaded()
                     MemoryTrim.soon()
                 }
             }
         }
+    }
+
+    static func isNetworkVolume(_ path: String) -> Bool {
+        (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal == false
+    }
+
+    /// Like concurrentPerform, but with a chosen width (concurrentPerform stops at the core count, which
+    /// leaves a network share mostly idle).
+    static func forEachConcurrently(_ n: Int, lanes: Int, _ body: @escaping (Int) -> Void) {
+        let group = DispatchGroup(), slots = DispatchSemaphore(value: max(1, lanes))
+        for i in 0..<n {
+            slots.wait()
+            DispatchQueue.global(qos: .utility).async(group: group) {
+                body(i)
+                slots.signal()
+            }
+        }
+        group.wait()
     }
 
     private func startFlushTimer() {
