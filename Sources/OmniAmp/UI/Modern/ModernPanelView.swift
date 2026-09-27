@@ -330,10 +330,20 @@ final class ModernPanelView: NSView {
             let path = c.tracks[i].path
             if path != artPath {
                 artPath = path
-                art.image = ArtworkStore.shared.cached(path)?.thumb
-                ArtworkStore.shared.load(path) { [weak self] e in
-                    guard let self, self.artPath == path else { return }
-                    self.art.image = e.thumb
+                let t = c.tracks[i]
+                if t.isStream {
+                    // Radio: the station logo takes the cover's place.
+                    art.image = LogoStore.shared.cached(t.logo)
+                    LogoStore.shared.load(t.logo) { [weak self] img in
+                        guard let self, self.artPath == path else { return }
+                        self.art.image = img
+                    }
+                } else {
+                    art.image = ArtworkStore.shared.cached(path)?.thumb
+                    ArtworkStore.shared.load(path) { [weak self] e in
+                        guard let self, self.artPath == path else { return }
+                        self.art.image = e.thumb
+                    }
                 }
             }
         } else {

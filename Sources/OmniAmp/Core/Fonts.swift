@@ -53,5 +53,8 @@ enum Fonts {
         static let plus = "\u{F067}"
         static let trash = "\u{F1F8}"
         static let search = "\u{F002}"
+        static let radio = "\u{F0439}"
+        static let starFilled = "\u{F005}"
+        static let starEmpty = "\u{F006}"
     }
 }

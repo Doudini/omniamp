@@ -20,12 +20,27 @@ struct Track: Codable, Sendable {
     var cueStart: Double?
     var cueEnd: Double?
     var cueNumber: Int?
+    /// Radio station logo URL.
+    var logo: String?
+    /// Radio: genre and country from the directory, e.g. "deep house, techno · Germany".
+    var stationTags: String?
 
     /// Identity in the playlist: CUE tracks share their file's path, so the start time is part of it.
     var key: String { cueStart.map { "\(path)#\($0)" } ?? path }
     var cueRange: (start: Double, end: Double?)? { cueStart.map { ($0, cueEnd) } }
 
-    var url: URL { URL(fileURLWithPath: path) }
+    /// Internet radio: the path is the stream's http(s) URL.
+    var isStream: Bool { path.hasPrefix("http://") || path.hasPrefix("https://") }
+    var url: URL { isStream ? (URL(string: path) ?? URL(fileURLWithPath: path)) : URL(fileURLWithPath: path) }
+
+    /// A radio station entry for the playlist.
+    static func stream(_ url: String, name: String?, logo: String? = nil) -> Track {
+        var t = Track(path: url, size: 0, mtime: 0)
+        t.title = name
+        t.logo = logo
+        t.tagsLoaded = true
+        return t
+    }
 
     var fileStem: String { (path as NSString).lastPathComponent.replacingOccurrences(of: "." + (path as NSString).pathExtension, with: "") }
 

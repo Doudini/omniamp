@@ -53,6 +53,11 @@ final class PlayerController {
         player.onTrackFinished = { [weak self] in self?.trackFinished() }
         player.onGaplessAdvance = { [weak self] in self?.gaplessAdvanced() }
         player.apply(eqSettings)
+        player.onStreamChange = { [weak self] in
+            guard let self, let c = self.currentIndex else { return }
+            self.ui?.playlistRowsDidUpdate([c])
+            self.updateNowPlaying()
+        }
         player.onOutputChange = { [weak self] in self?.ui?.optionsDidChange() }
         restore()
         let d = UserDefaults.standard
@@ -201,7 +206,17 @@ final class PlayerController {
         scheduleSave()
     }
 
-    /// Insert tracks that were already scanned (watched folders), keeping the current track.
+    /// Add a radio station to the end of the playlist (or find it if it's already there); returns its index.
+    @discardableResult
+    func addStation(url: String, name: String, logo: String? = nil, tags: String? = nil) -> Int {
+        if let i = store.tracks.firstIndex(where: { $0.path == url }) { return i }
+        var t = Track.stream(url, name: name, logo: logo)
+        t.stationTags = tags
+        insertScanned([t], at: store.tracks.count)
+        return store.tracks.count - 1
+    }
+
+        /// Insert tracks that were already scanned (watched folders), keeping the current track.
     func insertScanned(_ tracks: [Track], at position: Int) {
         invalidatePreload()
         let currentID = currentIndex.map { store.id(at: $0) }
@@ -282,10 +297,11 @@ final class PlayerController {
     /// Remove tracks whose files no longer exist. Calls back with the number removed.
     func removeDeadFiles(completion: ((Int) -> Void)? = nil) {
         let paths = store.tracks.map(\.path)
+        let streams = store.tracks.map(\.isStream)
         let ids = store.tracks.indices.map { store.id(at: $0) }
         DispatchQueue.global(qos: .userInitiated).async {
             let fm = FileManager.default
-            let dead = paths.indices.filter { !fm.fileExists(atPath: paths[$0]) }.map { ids[$0] }
+            let dead = paths.indices.filter { !streams[$0] && !fm.fileExists(atPath: paths[$0]) }.map { ids[$0] }
             DispatchQueue.main.async {
                 let idx = IndexSet(dead.compactMap { self.store.index(ofID: $0) })
                 if !idx.isEmpty { self.remove(trackIndices: idx) }
@@ -347,6 +363,13 @@ final class PlayerController {
         preloaded = nil
         preloadAttempted = false
         applyReplayGain()
+        if store.tracks[index].isStream {
+            player.playStream(url: store.tracks[index].url)
+            Scrobbler.shared.trackStarted(nil, duration: 0)   // radio isn't scrobbled
+            ui?.currentTrackDidChange(old: old, new: index)
+            updateNowPlaying()
+            return
+        }
         let ok = player.play(url: store.tracks[index].url, from: resumePosition(for: store.tracks[index]), range: store.tracks[index].cueRange)
         if ok { Scrobbler.shared.trackStarted(store.tracks[index], duration: store.tracks[index].duration ?? player.duration) }
         schedulePreloadCheck()
@@ -733,6 +756,16 @@ final class PlayerController {
 
     func title(for index: Int) -> String {
         let t = store.tracks[index]
+        if t.isStream {
+            // "3. Groove Salad — Artist - Title", plus BUFFERING while it fills up.
+            var s = "\(index + 1). \(t.title ?? player.streamInfo?.name ?? t.path)"
+            if index == currentIndex, player.isStreaming {
+                if player.isBuffering { s += " · BUFFERING…" } else if let st = player.streamTitle { s += " — \(st)" }
+            } else if index == currentIndex, let err = player.streamError {
+                s += " · couldn't connect: \(err)"
+            }
+            return s
+        }
         let d = t.duration.map { " (\(TimeFormat.mmss($0)))" } ?? ""
         return "\(index + 1). \(t.displayTitle)\(d)"
     }
@@ -740,6 +773,7 @@ final class PlayerController {
     /// Bitrate in kbps for display (FLAC: computed from size/duration).
     var currentKbps: Int? {
         guard let t = currentTrack else { return nil }
+        if t.isStream { return player.streamInfo?.bitrate }
         if let b = t.bitrate { return b }
         if let d = t.duration, d > 0 { return Int(Double(t.size) * 8 / d / 1000) }
         return nil
@@ -763,6 +797,13 @@ final class PlayerController {
     func formatLines(for index: Int) -> (String, String) {
         guard index < store.tracks.count else { return ("", "") }
         let t = store.tracks[index]
+        if t.isStream {
+            guard index == currentIndex, let i = player.streamInfo else { return ("Internet radio", "") }
+            let khz = i.sampleRate > 0 ? String(format: i.sampleRate.truncatingRemainder(dividingBy: 1000) == 0 ? "%.0f kHz" : "%.1f kHz", i.sampleRate / 1000) : ""
+            let ch = i.channels == 1 ? "mono" : (i.channels == 2 ? "stereo" : "")
+            return (["RADIO", i.codec, i.bitrate.map { "\($0) kbps" }].compactMap { $0 }.joined(separator: " "),
+                    [khz, ch].filter { !$0.isEmpty }.joined(separator: " · "))
+        }
         let playing = index == currentIndex && player.state != .stopped
         let ext = (t.path as NSString).pathExtension.lowercased()
         let lossless = t.bitDepth != nil
@@ -836,6 +877,16 @@ final class PlayerController {
         guard let t = currentTrack, player.state != .stopped else {
             center.nowPlayingInfo = nil
             center.playbackState = .stopped
+            return
+        }
+        if t.isStream {
+            center.nowPlayingInfo = [
+                MPMediaItemPropertyTitle: player.streamTitle ?? t.title ?? "Internet radio",
+                MPMediaItemPropertyArtist: t.title ?? player.streamInfo?.name ?? "",
+                MPNowPlayingInfoPropertyIsLiveStream: true,
+                MPNowPlayingInfoPropertyPlaybackRate: player.state == .playing ? 1.0 : 0.0,
+            ]
+            center.playbackState = player.state == .playing ? .playing : .paused
             return
         }
         center.nowPlayingInfo = [

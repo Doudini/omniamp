@@ -26,7 +26,9 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     private let statusLabel = NSTextField(labelWithString: "")
     private var clock: DisplayClock!
     private var addBtn: ModernButton!
-    private var clrBtn: ModernButton!
+    private var radioBtn: ModernButton!
+    /// Opens the Internet Radio window (set by the app delegate).
+    var onRadio: (() -> Void)?
     private var tick = 0
     var onClose: (() -> Void)?
     /// Right-click menu for the playlist (built by the app delegate).
@@ -57,6 +59,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         eqView.controller = controller
         infoView.controller = controller
         infoView.onReveal = { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: $0)]) }
+        infoView.onContentChange = { [weak self] in self?.fitInfoDrawer() }
         panel.onToggleEQ = { [weak self] in self?.toggle(.eq) }
         panel.onToggleInfo = { [weak self] in self?.pinnedInfoID = nil; self?.toggle(.info) }
         panel.onArtClick = { [weak self] in self?.artClicked() }
@@ -174,10 +177,11 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         root.addSubview(statusLabel)
 
         addBtn = ModernButton(glyph: Fonts.Icon.plus, label: "ADD", target: self, action: #selector(addTapped))
-        clrBtn = ModernButton(glyph: Fonts.Icon.trash, label: "CLEAR", target: self, action: #selector(clearTapped))
-        addBtn.glyphSize = 10; clrBtn.glyphSize = 10
+        radioBtn = ModernButton(glyph: Fonts.Icon.radio, label: "RADIO", target: self, action: #selector(radioTapped))
+        radioBtn.toolTip = "Internet radio (⌘⌥R)"
+        addBtn.glyphSize = 10; radioBtn.glyphSize = 11
         root.addSubview(addBtn)
-        root.addSubview(clrBtn)
+        root.addSubview(radioBtn)
 
         let titlebarHeight: CGFloat = 28
         drawerHeight = drawerHost.heightAnchor.constraint(equalToConstant: 0)
@@ -202,11 +206,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             addBtn.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             addBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
             addBtn.heightAnchor.constraint(equalToConstant: 22),
-            clrBtn.leadingAnchor.constraint(equalTo: addBtn.trailingAnchor, constant: 4),
-            clrBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
-            clrBtn.heightAnchor.constraint(equalToConstant: 22),
-
-            filterField.leadingAnchor.constraint(equalTo: clrBtn.trailingAnchor, constant: 10),
+            radioBtn.leadingAnchor.constraint(equalTo: addBtn.trailingAnchor, constant: 4),
+            radioBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
+            radioBtn.heightAnchor.constraint(equalToConstant: 22),
+            filterField.leadingAnchor.constraint(equalTo: radioBtn.trailingAnchor, constant: 10),
             filterField.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
             filterField.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
 
@@ -219,13 +222,14 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
 
     /// The title column takes whatever width is left, so the number and time columns always stay visible.
-    /// Bottom bar: icon-only ADD/CLEAR in narrow windows.
+    /// Bottom bar: icon-only ADD/RADIO in narrow windows.
     func windowDidResize(_ notification: Notification) {
         // Also fires while the saved frame is restored in init, before the UI exists.
         let narrow = (window?.frame.width ?? 600) < 520
         addBtn?.compact = narrow
-        clrBtn?.compact = narrow
+        radioBtn?.compact = narrow
         infoView.compact = narrow
+        fitInfoDrawer()
     }
 
     /// Number column: sized once for the longest number (so titles don't stagger), or hidden.
@@ -273,7 +277,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         } else {
             table.reloadData() // filtered view is small; keep it simple
         }
-        if let c = controller.currentIndex, trackIndices.contains(c) { panel.refreshTrackInfo() }
+        if let c = controller.currentIndex, trackIndices.contains(c) {
+            panel.refreshTrackInfo()
+            if pinnedInfoID == nil { refreshInfo() }   // e.g. radio: format and song title arrive after start
+        }
     }
 
     func currentTrackDidChange(old: Int?, new: Int?) {
@@ -309,11 +316,23 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         eqView.isHidden = d != .eq
         infoView.isHidden = d != .info
         drawerHost.isHidden = d == .none
-        drawerHeight.constant = d == .none ? 0 : (d == .info ? 184 : 150)
+        drawerHeight.constant = d == .none ? 0 : (d == .info ? infoHeight() : 150)
         drawerGap.constant = d == .none ? 0 : 8
         panel.eqButton.isOn = d == .eq
         panel.infoButton.isOn = d == .info
         if d == .info { refreshInfo() }
+    }
+
+    /// INFO takes the height its text needs (cover-high at least, 300 pt at most).
+    private func infoHeight() -> CGFloat {
+        let w = drawerHost.bounds.width > 0 ? drawerHost.bounds.width : (window?.contentView?.bounds.width ?? 540) - 20
+        return min(300, infoView.preferredHeight(forWidth: w))
+    }
+
+    private func fitInfoDrawer() {
+        guard drawer == .info, drawerHeight != nil else { return }
+        let h = infoHeight()
+        if abs(drawerHeight.constant - h) > 0.5 { drawerHeight.constant = h }
     }
 
     private func refreshInfo() {
@@ -348,8 +367,8 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
     // MARK: Actions
 
+    @objc private func radioTapped() { onRadio?() }
     @objc private func addTapped() { controller.showOpenPanel(for: window) }
-    @objc private func clearTapped() { filterField.stringValue = ""; controller.clear() }
 
     @objc private func tableDoubleClick() {
         guard table.clickedRow >= 0 else { return }

@@ -56,7 +56,8 @@ enum FolderScanner {
                 if let sheet = CueSheet.load(root) { out += sheet.tracks(cueURL: root).tracks }
             } else if PlaylistFile.isPlaylist(root) {
                 // Keep the playlist's own order; skip entries whose files are gone.
-                for url in PlaylistFile.read(root) {
+                for (url, title, logo) in PlaylistFile.entries(root) {
+                    if !url.isFileURL { out.append(.stream(url.absoluteString, name: title, logo: logo)); continue }
                     let v = try? url.resourceValues(forKeys: Set(keys))
                     guard v?.isRegularFile == true else { continue }
                     add(url, v)

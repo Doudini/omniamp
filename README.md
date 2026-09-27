@@ -19,6 +19,10 @@ A small, fast, Winamp-inspired MP3/FLAC player for macOS, written in Swift with 
 - **Output device picker:** play to any output device, or follow the system default.
 - **Scrobbling** to **Last.fm** and **ListenBrainz** (Settings, ⌘,): Now Playing updates, standard scrobble rules, and an offline queue. Logins are stored in the Keychain.
 - **CUE sheets:** a single-file album rip (FLAC, WAV, ALAC…) plus its `.cue` shows up as separate tracks that play gaplessly. Old Windows-1252 cue files work, and so do cues that still point at the original `.wav`.
+- **Internet radio** (RADIO button, ⌘⌥R): browse and search thousands of stations (radio-browser.info) by genre and country, with station logos and favorites.
+  - MP3/AAC/AAC+ Icecast and SHOUTcast streams play through OmniAmp's own engine, with the EQ and visualizer.
+  - HLS and Ogg/Opus stations play through the macOS player.
+  - Live song titles, and stations (including logos) save in `.m3u`/`.pls` playlists.
 - **Gapless playback** between tracks that share a sample format.
 - **ReplayGain** (track or album mode, with clipping protection), **stop after current** (⇧V), a **sleep timer** that fades out, **resume position** for long files and audiobooks, **always on top**, and a visualizer that cycles spectrum → oscilloscope → off.
 - **10-band equalizer** with preamp and presets, available in both looks.
@@ -33,7 +37,7 @@ Requires macOS 14+ and Xcode / Swift 6.
 ```sh
 swift build            # debug build
 swift test             # unit tests
-./scripts/make-app.sh  # release build → OmniAmp.app (icon: `swift scripts/make-icon.swift` after editing Resources/omniamp.svg)
+./scripts/make-app.sh  # release build → OmniAmp.app (icon source: Resources/AppIcon.icon; open it in Icon Composer or edit its SVG, then `./scripts/make-icon.sh`)
 open OmniAmp.app
 ```
 

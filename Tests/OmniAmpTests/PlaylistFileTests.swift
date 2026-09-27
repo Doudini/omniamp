@@ -19,7 +19,8 @@ final class PlaylistFileTests: XCTestCase {
         let text = "#EXTM3U\n#EXTINF:12,Someone - C\nmusic/c.mp3\n\(dir.path)/music/a.mp3\nmusic/missing.mp3\nhttp://radio.example/stream\n"
         try text.write(to: m3u, atomically: true, encoding: .utf8)
         let names = FolderScanner.scan([m3u]).map { ($0.path as NSString).lastPathComponent }
-        XCTAssertEqual(names, ["c.mp3", "a.mp3"])
+        // Missing files are dropped; the http entry is an internet radio station and is kept.
+        XCTAssertEqual(names, ["c.mp3", "a.mp3", "stream"])
 
         // Write it back out and read again.
         let tracks = FolderScanner.scan([m3u])

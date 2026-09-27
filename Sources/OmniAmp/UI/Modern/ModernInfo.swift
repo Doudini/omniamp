@@ -131,34 +131,36 @@ final class HoverCard {
     }
 }
 
-/// INFO drawer: big art + all metadata for the playing track (or the one selected in the playlist).
+/// INFO drawer: art + all metadata for the playing track (or the one selected in the playlist), or an
+/// ON AIR view for radio. Lines wrap instead of being cut off, and the drawer asks for the height it needs.
 final class ModernInfoView: NSView {
     weak var controller: PlayerController?
     var onReveal: ((String) -> Void)?
+    /// Content changed size: the window re-reads `preferredHeight(forWidth:)`.
+    var onContentChange: (() -> Void)?
 
     private let art = ArtView()
     private let modeLabel = NSTextField(labelWithString: "")
     private let stack = NSStackView()
     private let title = NSTextField(labelWithString: "")
-    private let byline = NSTextField(labelWithString: "")       // artist
-    private let albumTitle = NSTextField(labelWithString: "")   // album (year)
+    private let byline = NSTextField(labelWithString: "")       // artist (radio: current artist)
+    private let albumTitle = NSTextField(labelWithString: "")   // album (year) (radio: current song)
     private let numbers = NSTextField(labelWithString: "")
     private let credits = NSTextField(labelWithString: "")
     private let format = NSTextField(labelWithString: "")
     private let file = NSTextField(labelWithString: "")
     private let albumLine = NSTextField(labelWithString: "")
     private let comment = NSTextField(labelWithString: "")
+    private let rule = NSBox()
     private var revealButton: ModernButton!
     private var shownPath: String?
-    /// Full: the cover fills the drawer height. Compact (narrow windows): a smaller cover, so text gets room.
-    private var fullArt: [NSLayoutConstraint] = []
-    private var compactArt: [NSLayoutConstraint] = []
+    private var artSize: NSLayoutConstraint!
+    static let artFull: CGFloat = 120
+    static let artCompact: CGFloat = 84
+
+    /// Narrow windows: smaller cover, so text gets room.
     var compact = false {
-        didSet {
-            guard compact != oldValue else { return }
-            NSLayoutConstraint.deactivate(compact ? fullArt : compactArt)
-            NSLayoutConstraint.activate(compact ? compactArt : fullArt)
-        }
+        didSet { if compact != oldValue { artSize.constant = compact ? Self.artCompact : Self.artFull; onContentChange?() } }
     }
 
     override init(frame: NSRect) {
@@ -175,12 +177,19 @@ final class ModernInfoView: NSView {
         NSColor.black.setStroke(); p.stroke()
     }
 
-    private func style(_ l: NSTextField, _ size: CGFloat, bold: Bool = false, color: NSColor, truncate: NSLineBreakMode = .byTruncatingTail) {
+    /// Wrapping label: up to `lines` lines, the last one truncated if the text is longer still.
+    private func style(_ l: NSTextField, _ size: CGFloat, bold: Bool = false, color: NSColor, lines: Int = 2) {
         l.font = Fonts.hack(size, bold: bold)
         l.textColor = color
-        l.lineBreakMode = truncate
+        l.maximumNumberOfLines = lines
+        l.lineBreakMode = lines == 1 ? .byTruncatingMiddle : .byWordWrapping
+        l.cell?.truncatesLastVisibleLine = true
+        l.cell?.wraps = lines != 1
         l.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        l.setContentHuggingPriority(.defaultLow, for: .horizontal)
     }
+
+    private var labels: [NSTextField] { [title, byline, albumTitle, numbers, credits, format, file, albumLine, comment] }
 
     private func build() {
         let dim = Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)!
@@ -190,13 +199,13 @@ final class ModernInfoView: NSView {
         style(numbers, 10.5, color: dim)
         style(credits, 10.5, color: dim)
         style(format, 10.5, color: Theme.phosphor)
-        style(file, 10, color: dim, truncate: .byTruncatingMiddle)
+        style(file, 10, color: dim, lines: 1)
         style(albumLine, 10, color: dim)
-        style(comment, 10, color: dim)
-        style(modeLabel, 8.5, bold: true, color: Theme.phosphorDim)
+        style(comment, 10, color: dim, lines: 3)
+        modeLabel.font = Fonts.hack(8.5, bold: true)
+        modeLabel.textColor = Theme.phosphorDim
         modeLabel.alignment = .right
 
-        let rule = NSBox()
         rule.boxType = .custom
         rule.fillColor = Theme.phosphorDim.withAlphaComponent(0.35)
         rule.borderWidth = 0
@@ -205,9 +214,10 @@ final class ModernInfoView: NSView {
 
         revealButton = ModernButton(glyph: Fonts.Icon.search, label: "REVEAL", target: self, action: #selector(reveal))
         revealButton.glyphSize = 9
+        revealButton.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        revealButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         let fileRow = NSStackView(views: [file, revealButton])
         fileRow.spacing = 8
-        revealButton.heightAnchor.constraint(equalToConstant: 18).isActive = true
 
         for v in [title, byline, albumTitle, numbers, credits, rule, format, fileRow, albumLine, comment] as [NSView] { stack.addArrangedSubview(v) }
         stack.orientation = .vertical
@@ -223,25 +233,54 @@ final class ModernInfoView: NSView {
         addSubview(modeLabel)
         art.cornerRadius = 4
 
-        fullArt = [art.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)]
-        compactArt = [art.widthAnchor.constraint(equalToConstant: 88)]
-        NSLayoutConstraint.activate(fullArt)
+        artSize = art.widthAnchor.constraint(equalToConstant: Self.artFull)
         NSLayoutConstraint.activate([
             art.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             art.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            art.widthAnchor.constraint(equalTo: art.heightAnchor),
+            artSize,
+            art.heightAnchor.constraint(equalTo: art.widthAnchor),
             stack.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            fileRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             rule.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            fileRow.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
             modeLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             modeLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: modeLabel.leadingAnchor, constant: -8),
         ])
-        for l in [title, byline, albumTitle, numbers, credits, format, albumLine, comment] {
-            l.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor).isActive = true
+        for l in labels where l !== file && l !== title { l.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        // The title wraps before it reaches the NOW PLAYING / ON AIR tag.
+        let titleWidth = title.widthAnchor.constraint(equalTo: stack.widthAnchor)
+        titleWidth.priority = .defaultHigh
+        titleWidth.isActive = true
+        title.trailingAnchor.constraint(lessThanOrEqualTo: modeLabel.leadingAnchor, constant: -8).isActive = true
+    }
+
+    /// Height that fits the cover and all visible lines at `width` (drawer width).
+    func preferredHeight(forWidth width: CGFloat) -> CGFloat {
+        setWrapWidths(width)
+        var h: CGFloat = 0
+        var count = 0
+        for v in stack.arrangedSubviews where !v.isHidden {
+            if let l = v as? NSTextField {
+                h += l.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: l.preferredMaxLayoutWidth, height: 1000)).height ?? l.intrinsicContentSize.height
+            } else {
+                h += v.fittingSize.height
+            }
+            count += 1
         }
+        h += CGFloat(max(0, count - 1)) * stack.spacing + 10   // spacing, plus the larger gaps around the rule
+        return ceil(max(artSize.constant + 16, h + 20))
+    }
+
+    private func setWrapWidths(_ width: CGFloat) {
+        let textWidth = max(80, width - 8 - artSize.constant - 12 - 10)
+        for l in labels { l.preferredMaxLayoutWidth = textWidth }
+        title.preferredMaxLayoutWidth = max(60, textWidth - (modeLabel.stringValue.isEmpty ? 0 : modeLabel.intrinsicContentSize.width + 8))
+    }
+
+    override func layout() {
+        setWrapWidths(bounds.width)
+        super.layout()
     }
 
     /// Show a track (index into the playlist). `pinned` = chosen in the playlist rather than now playing.
@@ -252,20 +291,72 @@ final class ModernInfoView: NSView {
             title.stringValue = "Nothing playing"
             modeLabel.stringValue = ""
             for l in [byline, albumTitle, numbers, credits, format, albumLine, comment] { l.isHidden = true }
+            rule.isHidden = true
             file.stringValue = ""
             revealButton.isHidden = true
+            onContentChange?()
             return
         }
         let t = c.tracks[i]
+        let pathChanged = shownPath != t.path
         shownPath = t.path
-        modeLabel.stringValue = pinned ? "SELECTED" : (i == c.currentIndex ? "NOW PLAYING" : "")
-        revealButton.isHidden = false
+        modeLabel.stringValue = pinned ? "SELECTED" : (i == c.currentIndex ? (t.isStream ? "● ON AIR" : "NOW PLAYING") : "")
+        revealButton.isHidden = t.isStream
+        rule.isHidden = false
+        if t.isStream {
+            applyRadio(index: i)
+            if pathChanged || art.image == nil {
+                art.image = LogoStore.shared.cached(t.logo)
+                LogoStore.shared.load(t.logo) { [weak self] img in
+                    guard let self, self.shownPath == t.path else { return }
+                    self.art.image = img
+                }
+            }
+            onContentChange?()
+            return
+        }
         // Basics from the playlist right away; full tags + art fill in when loaded.
-        apply(index: i, details: nil, thumb: nil, artPixels: nil)
+        apply(index: i, details: ArtworkStore.shared.cached(t.path)?.details, thumb: ArtworkStore.shared.cached(t.path)?.thumb,
+              artPixels: ArtworkStore.shared.cached(t.path)?.artPixels)
         ArtworkStore.shared.load(t.path) { [weak self] e in
             guard let self, self.shownPath == t.path else { return }
             self.apply(index: i, details: e.details, thumb: e.thumb, artPixels: e.artPixels)
+            self.onContentChange?()
         }
+        onContentChange?()
+    }
+
+    /// Radio: station, the song on air (artist / title), LIVE + genre/country, format, stream URL.
+    private func applyRadio(index i: Int) {
+        guard let c = controller else { return }
+        let t = c.tracks[i]
+        let playing = i == c.currentIndex && c.player.isStreaming
+        title.stringValue = t.title ?? c.player.streamInfo?.name ?? "Internet radio"
+        let song = playing ? c.player.streamTitle : nil
+        if let s = song, let r = s.range(of: " - ") {
+            byline.stringValue = String(s[..<r.lowerBound])
+            albumTitle.stringValue = String(s[r.upperBound...])
+        } else {
+            byline.stringValue = song ?? (playing ? (c.player.isBuffering ? "Buffering…" : "") : "")
+            albumTitle.stringValue = ""
+        }
+        byline.isHidden = byline.stringValue.isEmpty
+        albumTitle.isHidden = albumTitle.stringValue.isEmpty
+        byline.toolTip = song
+        albumTitle.toolTip = song
+        numbers.stringValue = (["LIVE", t.stationTags].compactMap { $0 }).joined(separator: " · ")
+        numbers.isHidden = false
+        credits.isHidden = true
+        if let err = c.player.streamError, i == c.currentIndex, !playing {
+            format.stringValue = "Couldn't connect: \(err)"
+        } else {
+            format.stringValue = c.formatDescription(for: i)
+        }
+        format.isHidden = format.stringValue.isEmpty
+        file.stringValue = t.path
+        file.toolTip = t.path
+        albumLine.isHidden = true
+        comment.isHidden = true
     }
 
     private func apply(index i: Int, details d: TrackDetails?, thumb: CGImage?, artPixels: CGSize?) {
@@ -277,7 +368,6 @@ final class ModernInfoView: NSView {
         title.stringValue = (cue ? t.title : nil) ?? d?.title ?? t.title ?? t.fileStem
         let artist = cue ? (t.artist ?? d?.artist) : (d?.artist ?? t.artist)
         let album = cue ? (t.album ?? d?.album) : (d?.album ?? t.album)
-        // Artist and album on their own lines, so a long album name can't push the artist out of view.
         byline.stringValue = artist ?? ""
         byline.isHidden = byline.stringValue.isEmpty
         var al = album ?? ""

@@ -94,7 +94,10 @@ final class AudioPlayer {
 
     /// Volume used outside bit-perfect mode (persisted by the controller).
     var softwareVolume: Float = 0.8 {
-        didSet { if !bitPerfect { engine.mainMixerNode.outputVolume = testVolume ?? softwareVolume } }
+        didSet {
+            if !bitPerfect { engine.mainMixerNode.outputVolume = testVolume ?? softwareVolume }
+            applyGainStage()
+        }
     }
 
     /// Volume as the UI sees it: software volume, or the device's hardware volume in bit-perfect mode.
@@ -117,8 +120,9 @@ final class AudioPlayer {
     }
 
     var currentTime: Double {
-        guard current != nil else { return 0 }
         let running = clockStart.map { CACurrentMediaTime() - $0 } ?? 0
+        if isStreaming { return clockBase + running }   // radio: time since it started playing
+        guard current != nil else { return 0 }
         return max(0, min(clockBase + running, duration))
     }
 
@@ -137,8 +141,208 @@ final class AudioPlayer {
     var remaining: Double { max(0, duration - currentTime) }
     var currentURL: URL? { current?.url }
     var hasQueuedNext: Bool { upcoming != nil }
-    var sampleRate: Double { current?.file.fileFormat.sampleRate ?? 0 }
-    var channelCount: Int { Int(current?.file.fileFormat.channelCount ?? 0) }
+    var sampleRate: Double { stream.map { $0.info.sampleRate } ?? current?.file.fileFormat.sampleRate ?? 0 }
+    var channelCount: Int { stream.map { $0.info.channels } ?? Int(current?.file.fileFormat.channelCount ?? 0) }
+
+    // MARK: Internet radio
+
+    private var stream: StreamSource?
+    private var streamURL: URL?
+    private let bufferedFrames = OSAllocatedUnfairLock(initialState: AVAudioFramePosition(0))
+    private var streamStarted = false
+    private var reconnects = 0
+    /// True while waiting for enough audio (start, or after the connection stalled).
+    private(set) var isBuffering = false { didSet { if isBuffering != oldValue { onStreamChange?() } } }
+    var isStreaming: Bool { stream != nil || systemPlayer != nil }
+    var streamInfo: StreamSource.Info? { stream?.info ?? systemInfo }
+    /// Latest "Artist - Title" from the station.
+    private(set) var streamTitle: String?
+    /// Why the last station stopped (shown instead of the title), cleared when a stream starts.
+    private(set) var streamError: String?
+    /// Title, info or buffering changed (main thread).
+    var onStreamChange: (() -> Void)?
+
+    /// Start an Icecast/SHOUTcast stream. Buffers ~2 s before sound starts.
+    /// HLS and Ogg/Opus stations go to the system player (no EQ/visualizer for those).
+    func playStream(url: URL) {
+        stopNode()
+        stopStream()
+        upcoming = nil
+        current = nil
+        streamURL = url
+        streamTitle = nil
+        streamError = nil
+        reconnects = 0
+        state = .playing
+        clockBase = 0
+        clockStart = nil
+        if StreamSource.isSystemPlayerURL(url) { openSystemStream(url, codec: nil) } else { openStream(url) }
+    }
+
+    // MARK: System player (HLS, Ogg/Opus)
+
+    private var systemPlayer: AVPlayer?
+    private var systemObservers: [NSKeyValueObservation] = []
+    private var systemMetadata: AVPlayerItemMetadataOutput?
+    private let systemMetaDelegate = SystemMetadataDelegate()
+    private var systemInfo: StreamSource.Info?
+    /// True while a station plays through the system player (EQ and visualizer don't apply).
+    var usesSystemPlayer: Bool { systemPlayer != nil }
+
+    private func openSystemStream(_ url: URL, codec: String?) {
+        stream?.stop()
+        stream = nil
+        // The system player can't use a device we hold exclusively.
+        _ = AudioDevices.setHog(deviceID, false)
+        let item = AVPlayerItem(url: url)
+        let out = AVPlayerItemMetadataOutput(identifiers: nil)
+        systemMetaDelegate.onTitle = { [weak self] t in
+            guard let self, self.systemPlayer?.currentItem === item else { return }
+            self.streamTitle = t
+            self.onStreamChange?()
+        }
+        out.setDelegate(systemMetaDelegate, queue: .main)
+        item.add(out)
+        systemMetadata = out
+        let p = AVPlayer(playerItem: item)
+        p.audioOutputDeviceUniqueID = AudioDevices.device(id: deviceID)?.uid
+        systemPlayer = p
+        var info = StreamSource.Info()
+        let path = url.path.lowercased()
+        info.codec = codec ?? (path.hasSuffix(".m3u8") || (codec ?? "").contains("mpegurl") ? "HLS" : (path.contains("opus") ? "OPUS" : "OGG"))
+        systemInfo = info
+        applyGainStage()
+        isBuffering = true
+        systemObservers = [
+            item.observe(\.status, options: [.new]) { [weak self] it, _ in
+                DispatchQueue.main.async {
+                    guard let self, self.systemPlayer?.currentItem === it, it.status == .failed else { return }
+                    self.stop()
+                    self.streamError = Self.friendly(it.error)
+                    self.onStreamChange?()
+                }
+            },
+            p.observe(\.timeControlStatus, options: [.new]) { [weak self] pl, _ in
+                DispatchQueue.main.async {
+                    guard let self, self.systemPlayer === pl else { return }
+                    let playing = pl.timeControlStatus == .playing
+                    if playing, self.clockStart == nil { self.clockStart = CACurrentMediaTime() }
+                    self.isBuffering = !playing && self.state == .playing
+                }
+            },
+        ]
+        p.play()
+        onStreamChange?()
+    }
+
+    private func stopSystemStream() {
+        systemObservers.removeAll()
+        systemPlayer?.pause()
+        systemPlayer = nil
+        systemMetadata = nil
+        systemInfo = nil
+    }
+
+    private func openStream(_ url: URL) {
+        let src = StreamSource(url: url)
+        stream = src
+        streamStarted = false
+        bufferedFrames.withLock { $0 = 0 }
+        isBuffering = true
+        src.onInfo = { [weak self, weak src] info in
+            DispatchQueue.main.async {
+                guard let self, let src, self.stream === src else { return }
+                if info.sampleRate > 0, let f = AVAudioFormat(standardFormatWithSampleRate: info.sampleRate, channels: AVAudioChannelCount(max(1, info.channels))) {
+                    self.connect(format: f)
+                    self.startEngineIfNeeded()
+                }
+                self.onStreamChange?()
+            }
+        }
+        src.onTitle = { [weak self, weak src] t in
+            DispatchQueue.main.async {
+                guard let self, self.stream === src else { return }
+                self.streamTitle = t
+                self.onStreamChange?()
+            }
+        }
+        src.onBuffer = { [weak self, weak src] buf in
+            guard let self, self.stream === src else { return }
+            let frames = AVAudioFramePosition(buf.frameLength)
+            let sr = buf.format.sampleRate
+            let total = self.bufferedFrames.withLock { $0 += frames; return $0 }
+            self.node.scheduleBuffer(buf) { [weak self] in
+                guard let self else { return }
+                let left = self.bufferedFrames.withLock { $0 -= frames; return $0 }
+                if left <= 0 { DispatchQueue.main.async { if self.stream === src, self.state == .playing { self.isBuffering = true } } }
+            }
+            // Start (or leave the stall) once 2 s are queued.
+            if Double(total) >= sr * 2 {
+                DispatchQueue.main.async {
+                    guard self.stream === src, self.state == .playing else { return }
+                    if !self.streamStarted {
+                        self.streamStarted = true
+                        self.startEngineIfNeeded()
+                        self.node.play()
+                        self.clockStart = CACurrentMediaTime()
+                    }
+                    self.isBuffering = false
+                }
+            }
+        }
+        src.onUnsupported = { [weak self, weak src] type in
+            DispatchQueue.main.async {
+                guard let self, self.stream === src, let u = self.streamURL else { return }
+                NSLog("OmniAmp: %@ stream, using the system player", type)
+                self.openSystemStream(u, codec: type.contains("mpegurl") ? "HLS" : (type.contains("opus") ? "OPUS" : "OGG"))
+            }
+        }
+        src.onEnd = { [weak self, weak src] error in
+            DispatchQueue.main.async {
+                guard let self, self.stream === src, self.state == .playing else { return }
+                // Dropped connection: retry a few times before giving up.
+                if self.reconnects < 3, let u = self.streamURL {
+                    self.reconnects += 1
+                    NSLog("OmniAmp: stream ended (%@), reconnecting (%d/3)", error?.localizedDescription ?? "closed", self.reconnects)
+                    self.stopNode()
+                    self.stopStream(keepState: true)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        guard self.state == .playing, self.streamURL == u else { return }
+                        self.openStream(u)
+                    }
+                } else {
+                    // Give up: stop and say why (don't skip to the next playlist entry like a finished file).
+                    NSLog("OmniAmp: stream failed: %@", error?.localizedDescription ?? "closed")
+                    self.stop()
+                    self.streamError = Self.friendly(error)
+                    self.onStreamChange?()
+                }
+            }
+        }
+        src.start()
+    }
+
+    /// Short, human message for a failed station.
+    static func friendly(_ error: Error?) -> String {
+        guard let e = error else { return "station closed the connection" }
+        if let u = e as? URLError {
+            switch u.code {
+            case .notConnectedToInternet, .networkConnectionLost: return "no internet connection"
+            case .cannotFindHost, .dnsLookupFailed: return "station not found"
+            case .timedOut: return "station not responding"
+            case .appTransportSecurityRequiresSecureConnection: return "insecure connection blocked"
+            default: break
+            }
+        }
+        return e.localizedDescription
+    }
+
+    private func stopStream(keepState: Bool = false) {
+        stream?.stop()
+        stream = nil
+        stopSystemStream()
+        if !keepState { streamURL = nil; isBuffering = false }
+    }
 
     // MARK: Output info
 
@@ -232,6 +436,8 @@ final class AudioPlayer {
 
     private func applyGainStage() {
         converter.outputVolume = (bitPerfect ? 1 : replayGain) * fadeGain
+        // The system player (HLS/Opus radio) bypasses our mixer: give it the volume directly.
+        systemPlayer?.volume = (bitPerfect ? 1 : (testVolume ?? softwareVolume)) * fadeGain
     }
 
     /// EQ bypass and mixer volume for the current mode.
@@ -357,6 +563,7 @@ final class AudioPlayer {
     /// `range`: the track's slice of the file in seconds (CUE tracks); `start`: offset within the track.
     func play(url: URL, from start: Double = 0, range: (start: Double, end: Double?)? = nil) -> Bool {
         stopNode()
+        stopStream()
         upcoming = nil
         let file: AVAudioFile
         do {
@@ -450,6 +657,16 @@ final class AudioPlayer {
 
     func pause() {
         guard state == .playing else { return }
+        if isStreaming {
+            // Radio: pausing stops the stream (a live broadcast can't be paused); play restarts it.
+            let u = streamURL
+            stopNode()
+            stopStream()
+            streamURL = u
+            freezeClock()
+            state = .paused
+            return
+        }
         node.pause()
         freezeClock()
         state = .paused
@@ -457,6 +674,7 @@ final class AudioPlayer {
 
     func resume() {
         guard state == .paused else { return }
+        if let u = streamURL, !isStreaming { playStream(url: u); return }
         startEngineIfNeeded()
         node.play()
         if !awaitingRateSettle { clockStart = CACurrentMediaTime() }
@@ -466,6 +684,7 @@ final class AudioPlayer {
     func stop() {
         awaitingRateSettle = false
         stopNode()
+        stopStream()
         upcoming = nil
         if var c = current { c.startFrame = c.trackStart; current = c }
         clockBase = 0
@@ -475,7 +694,7 @@ final class AudioPlayer {
     }
 
     func seek(to seconds: Double) {
-        guard var c = current else { return }
+        guard !isStreaming, var c = current else { return }   // live radio can't seek
         awaitingRateSettle = false
         let wasPaused = state == .paused
         let frame = c.trackStart + AVAudioFramePosition(max(0, min(seconds, duration)) * c.sampleRate)
@@ -567,5 +786,21 @@ final class AudioPlayer {
             return false
         }
         return want
+    }
+}
+
+/// Picks the song title out of the system player's timed metadata (ICY StreamTitle, ID3 in HLS…).
+final class SystemMetadataDelegate: NSObject, AVPlayerItemMetadataOutputPushDelegate {
+    var onTitle: ((String) -> Void)?
+
+    func metadataOutput(_ output: AVPlayerItemMetadataOutput, didOutputTimedMetadataGroups groups: [AVTimedMetadataGroup],
+                        from track: AVPlayerItemTrack?) {
+        for item in groups.flatMap(\.items) {
+            let key = (item.identifier?.rawValue ?? "").lowercased()
+            let isTitle = item.commonKey == .commonKeyTitle || key.contains("streamtitle") || key.hasSuffix("/tit2")
+            guard isTitle, let v = item.stringValue?.trimmingCharacters(in: .whitespaces), !v.isEmpty else { continue }
+            onTitle?(v)
+            return
+        }
     }
 }

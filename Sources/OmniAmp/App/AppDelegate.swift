@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NSApp.activate(ignoringOtherApps: true)
         // Test hook: OMNIAMP_SETTINGS=1 opens the Settings window at launch.
         if ProcessInfo.processInfo.environment["OMNIAMP_SETTINGS"] != nil { showSettings(nil) }
+        if ProcessInfo.processInfo.environment["OMNIAMP_RADIO"] != nil { showRadio(nil) }
         // Test hook: OMNIAMP_HIDE=1 hides the app after launch (for measuring background playback).
         if ProcessInfo.processInfo.environment["OMNIAMP_HIDE"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.hide(nil) }
@@ -86,6 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             let w = ModernWindowController(controller: controller)
             w.onClose = { NSApp.terminate(nil) }
             w.playlistMenu = { [weak self] in self?.makePlaylistContextMenu() ?? NSMenu() }
+            w.onRadio = { [weak self] in self?.showRadio(nil) }
             look = w
         case .classic:
             look = makeClassicLook()
@@ -156,6 +158,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private var settings: SettingsWindowController?
+    private var radio: RadioWindowController?
+
+    @objc private func showRadio(_ sender: Any?) {
+        if radio == nil { radio = RadioWindowController(controller: controller) }
+        radio?.showWindow(nil)
+        radio?.window?.makeKeyAndOrderFront(nil)
+    }
 
     @objc private func showSettings(_ sender: Any?) {
         if settings == nil { settings = SettingsWindowController() }
@@ -213,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let m = NSMenu()
         m.addItem(withTitle: "Add Files or Folder…", action: #selector(openDoc(_:)), keyEquivalent: "").target = self
         m.addItem(withTitle: "Jump to File…", action: #selector(find(_:)), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Internet Radio…", action: #selector(showRadio(_:)), keyEquivalent: "").target = self
         m.addItem(.separator())
         addPlaylistItems(to: m)
         m.addItem(eqMenuItem())
@@ -601,6 +611,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Add Files or Folder…", action: #selector(openDoc(_:)), keyEquivalent: "o").target = self
+        let radio = fileMenu.addItem(withTitle: "Internet Radio…", action: #selector(showRadio(_:)), keyEquivalent: "r")
+        radio.keyEquivalentModifierMask = [.command, .option]
+        radio.target = self
         fileMenu.addItem(withTitle: "Clear Playlist", action: #selector(clear(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(.separator())
         addPlaylistItems(to: fileMenu)

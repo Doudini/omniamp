@@ -10,7 +10,14 @@ LASTFM_API_KEY=""; LASTFM_SECRET=""
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/OmniAmp" "$APP/Contents/MacOS/OmniAmp"
-cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# App icon: compile the Icon Composer icon (a macOS 26+ style icon, full size, no grey "legacy" plate) when
+# Xcode's actool is around; otherwise ship the prebuilt AppIcon.icns (also made by actool, via scripts/make-icon.sh).
+if xcrun --find actool >/dev/null 2>&1; then
+  xcrun actool "$PWD/Resources/AppIcon.icon" --compile "$PWD/$APP/Contents/Resources" --platform macosx \
+    --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist /dev/null >/dev/null
+else
+  cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+fi
 mkdir -p "$APP/Contents/Resources/Fonts"
 # Ship TTF, not WOFF2: TTFs are memory-mapped, WOFF2s get decompressed into RAM (~16 MB each).
 CONVERTER=.build/woff2-to-ttf
@@ -27,6 +34,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.microbot.omniamp</string>
   <key>CFBundleExecutable</key><string>OmniAmp</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIconName</key><string>AppIcon</string>
   <key>LastFMAPIKey</key><string>${LASTFM_API_KEY}</string>
   <key>LastFMSecret</key><string>${LASTFM_SECRET}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -35,6 +43,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <!-- Internet radio: many stations only stream over plain http. -->
+  <key>NSAppTransportSecurity</key>
+  <dict><key>NSAllowsArbitraryLoads</key><true/></dict>
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
@@ -55,4 +66,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 codesign --force --sign - "$APP" >/dev/null
+# The bundle was deleted and recreated: make Finder and the Dock drop the cached (placeholder) icon.
+touch "$APP"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
 echo "Built $PWD/$APP"
