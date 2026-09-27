@@ -526,20 +526,32 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
 // MARK: - Filter field keys
 
 extension ModernWindowController: NSSearchFieldDelegate {
+    /// Clear the filter and land on the playing track in the full playlist.
+    private func clearFilterShowingCurrent() {
+        filterField.stringValue = ""
+        controller.setFilter("")
+        if let c = controller.currentIndex, let r = controller.row(forTrackIndex: c) {
+            table.selectRowIndexes([r], byExtendingSelection: false)
+            // Center it: after a jump the surrounding tracks are what you want to see.
+            let visible = table.rows(in: table.visibleRect).length
+            table.scrollRowToVisible(min(controller.rowCount - 1, r + visible / 2))
+            table.scrollRowToVisible(max(0, r - visible / 2))
+        }
+        window?.makeFirstResponder(table)
+    }
+
     func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
         switch sel {
-        case #selector(NSResponder.insertNewline(_:)):
+        // Enter: play the highlighted match and go back to the full playlist.
+        // Shift+Enter: play it but keep the results (e.g. to try the next version of a song).
+        case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+            let keep = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
             playSelected()
-            window?.makeFirstResponder(table)
+            if keep { return true }   // stay in the field, results intact
+            clearFilterShowingCurrent()
             return true
         case #selector(NSResponder.cancelOperation(_:)):
-            filterField.stringValue = ""
-            controller.setFilter("")
-            if let c = controller.currentIndex, let r = controller.row(forTrackIndex: c) {
-                table.selectRowIndexes([r], byExtendingSelection: false)
-                table.scrollRowToVisible(r)
-            }
-            window?.makeFirstResponder(table)
+            clearFilterShowingCurrent()
             return true
         case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.moveUp(_:)):
             let n = controller.rowCount

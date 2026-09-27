@@ -308,7 +308,14 @@ extension ClassicLookController: PlayerUI {
 extension ClassicLookController: NSSearchFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
         switch sel {
-        case #selector(NSResponder.insertNewline(_:)): closeJump(play: true); return true
+        case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
+            // Shift+Enter plays but keeps the jump window and its results open.
+            if NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false {
+                if let r = playlistView.selectedRow, r < controller.rowCount { controller.play(index: controller.trackIndex(forRow: r)) }
+            } else {
+                closeJump(play: true)
+            }
+            return true
         case #selector(NSResponder.cancelOperation(_:)): closeJump(play: false); return true
         case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.moveUp(_:)):
             let n = controller.rowCount
