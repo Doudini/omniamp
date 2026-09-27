@@ -10,7 +10,11 @@ enum Fonts {
         registered = true
         guard let dir = fontsDirectory() else { NSLog("OmniAmp: fonts folder not found, using system fonts"); return }
         let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        for url in files where ["woff2", "woff", "ttf", "otf"].contains(url.pathExtension.lowercased()) {
+        // Only Hack is used. Prefer TTF: macOS memory-maps it, while a WOFF2 is decompressed into RAM
+        // (~16 MB each for these Nerd Fonts). The app bundle ships TTFs; dev runs fall back to fonts/*.woff2.
+        let hack = files.filter { $0.lastPathComponent.hasPrefix("HackNerdFont-") }
+        let ttf = hack.filter { $0.pathExtension.lowercased() == "ttf" }
+        for url in ttf.isEmpty ? hack.filter({ $0.pathExtension.lowercased() == "woff2" }) : ttf {
             CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
         }
     }

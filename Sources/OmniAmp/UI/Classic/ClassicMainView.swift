@@ -63,7 +63,7 @@ private enum MainHit: Equatable {
     case options, minimize, shade, close
     case prev, play, pause, stop, next, eject
     case shuffle, repeatAll, eq, playlist
-    case seek, volume, balance, time, titlebar, none
+    case seek, volume, balance, time, visualizer, titlebar, none
 }
 
 /// The 275×116 skinned main window.
@@ -81,6 +81,7 @@ final class ClassicMainView: SkinCanvasView {
     private var volumeDrag = false
     private var showRemaining = UserDefaults.standard.bool(forKey: "classicRemaining")
     private var marqueeOffset = 0
+    private var marqueeStart = animationTime
     private var tick = 0
     private var levels = [Float](repeating: 0, count: 19)
     private var peaks = [Float](repeating: 0, count: 19)
@@ -107,6 +108,7 @@ final class ClassicMainView: SkinCanvasView {
         (.volume, CGRect(x: 107, y: 57, width: 68, height: 13)),
         (.balance, CGRect(x: 177, y: 57, width: 38, height: 13)),
         (.time, CGRect(x: 36, y: 26, width: 63, height: 13)),
+        (.visualizer, CGRect(x: 24, y: 43, width: 76, height: 16)),
         (.titlebar, CGRect(x: 0, y: 0, width: 275, height: 14)),
     ]
 
@@ -116,20 +118,68 @@ final class ClassicMainView: SkinCanvasView {
 
     // MARK: Animation
 
+    // Last drawn values, so each tick only invalidates what changed.
+    private var drawnSecond = -1
+    private var drawnBlink = false
+    private var drawnSeekX: CGFloat = -1
+    private var drawnMarquee = -1
+
+    /// Called by the display clock (30 fps while playing, 4 fps while paused).
     func advance() {
         tick += 1
         guard let c = controller else { return }
-        let bars = c.player.state == .playing ? c.player.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount)
+        let playing = c.player.state == .playing
+        let bars = playing && Analyzer.isOn ? c.player.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount)
+        var visChanged = false
         for i in 0..<19 {
             let v = bars[min(bars.count - 1, i * bars.count / 19)]
-            levels[i] = v > levels[i] ? v : max(v, levels[i] - 0.07)
-            peaks[i] = levels[i] > peaks[i] ? levels[i] : max(0, peaks[i] - 0.012)
+            let l = v > levels[i] ? v : max(v, levels[i] - 0.07)
+            let p = l > peaks[i] ? l : max(0, peaks[i] - 0.012)
+            if l != levels[i] || p != peaks[i] { visChanged = true }
+            levels[i] = l
+            peaks[i] = p
         }
-        if tick % 4 == 0 { marqueeOffset += 1 }
+        if visChanged { invalidate(CGRect(x: 24, y: 43, width: 76, height: 16)) }
+
+        // Time: when the second changes, or the pause blink flips.
+        let t = showRemaining ? max(0, c.player.duration - c.player.currentTime) : c.player.currentTime
+        let blink = c.player.state == .paused && Int(animationTime * 2) % 2 == 1
+        if Int(t) != drawnSecond || blink != drawnBlink {
+            drawnSecond = Int(t); drawnBlink = blink
+            invalidate(CGRect(x: 36, y: 26, width: 63, height: 13))
+        }
+
+        // Position bar thumb: only when it moves a pixel.
+        let d = c.player.duration
+        let x = d > 0 ? (min(1, c.player.currentTime / d) * (248 - 29)).rounded() : 0
+        if x != drawnSeekX { drawnSeekX = x; invalidate(CGRect(x: 16, y: 72, width: 248, height: 10)) }
+
+        // Marquee scrolls one character every 4 ticks (only if the title is longer than the box).
+        marqueeOffset = Int((animationTime - marqueeStart) * 7.5)   // characters per second, fps-independent
+        if marqueeOffset != drawnMarquee, marqueeNeedsScroll {
+            drawnMarquee = marqueeOffset
+            invalidate(CGRect(x: 111, y: 27, width: 154, height: 6))
+        }
+    }
+
+    /// Playback state changed: redraw everything once (indicator, bars, time…).
+    func stateChanged() {
+        if controller?.player.state != .playing {
+            for i in 0..<19 { levels[i] = 0; peaks[i] = 0 }
+        }
         needsDisplay = true
     }
 
-    func resetMarquee() { marqueeOffset = 0 }
+    private var marqueeNeedsScroll: Bool {
+        guard let c = controller, let i = c.currentIndex, i < c.tracks.count else { return false }
+        return c.title(for: i).count > 30
+    }
+
+    private func invalidate(_ r: CGRect) {
+        setNeedsDisplay(NSRect(x: r.minX * scale, y: r.minY * scale, width: r.width * scale, height: r.height * scale))
+    }
+
+    func resetMarquee() { marqueeOffset = 0; marqueeStart = animationTime }
 
     // MARK: Drawing
 
@@ -225,7 +275,7 @@ final class ClassicMainView: SkinCanvasView {
         let st = c.player.state
         guard st != .stopped else { return }
         // Blink while paused.
-        if st == .paused, (tick / 15) % 2 == 1 { return }
+        if st == .paused, Int(animationTime * 2) % 2 == 1 { return }
         let nums = skin.has("nums_ex") ? "nums_ex" : "numbers"
         var t = c.player.currentTime
         if showRemaining { t = max(0, c.player.duration - t) }
@@ -313,6 +363,9 @@ final class ClassicMainView: SkinCanvasView {
             volumeDrag = false
         case .balance:
             return
+        case .visualizer:
+            Analyzer.toggle()
+            for i in 0..<19 { levels[i] = 0; peaks[i] = 0 }
         case .time:
             showRemaining.toggle()
             UserDefaults.standard.set(showRemaining, forKey: "classicRemaining")

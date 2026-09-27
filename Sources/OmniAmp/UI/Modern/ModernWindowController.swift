@@ -15,7 +15,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     private let scroll = NSScrollView()
     private let filterField = NSSearchField()
     private let statusLabel = NSTextField(labelWithString: "")
-    private var uiTimer: Timer?
+    private var clock: DisplayClock!
     private var tick = 0
     var onClose: (() -> Void)?
     /// Right-click menu for the playlist (built by the app delegate).
@@ -55,7 +55,9 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             table.selectRowIndexes([r], byExtendingSelection: false)
             DispatchQueue.main.async { self.table.scrollRowToVisible(r) }
         }
-        startUITimer()
+        clock = DisplayClock(player: controller.player) { [weak self] in self?.uiTick() }
+        clock.track([window])
+        panel.refresh(tick: 0)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -101,7 +103,12 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         let cTitle = NSTableColumn(identifier: Self.colTitle); cTitle.width = 300; cTitle.resizingMask = .autoresizingMask
         let cTime = NSTableColumn(identifier: Self.colTime); cTime.width = 84; cTime.resizingMask = []
         [cNum, cTitle, cTime].forEach(table.addTableColumn)
-        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.columnAutoresizingStyle = .noColumnAutoresizing
+        cTitle.minWidth = 60
+        NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { [weak self] _ in
+            self?.fitColumns()
+        }
+        scroll.postsFrameChangedNotifications = true
 
         scroll.documentView = table
         scroll.hasVerticalScroller = true
@@ -178,6 +185,14 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         ])
         // Push the panel's content below the transparent titlebar.
         panel.topInset = titlebarHeight
+    }
+
+    /// The title column takes whatever width is left, so the number and time columns always stay visible.
+    private func fitColumns() {
+        guard table.tableColumns.count == 3 else { return }
+        let fixed = table.tableColumns[0].width + table.tableColumns[2].width + table.intercellSpacing.width * 3
+        let w = max(table.tableColumns[1].minWidth, scroll.contentSize.width - fixed)
+        if abs(table.tableColumns[1].width - w) > 0.5 { table.tableColumns[1].width = w }
     }
 
     // MARK: PlayerUI
@@ -285,30 +300,26 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
     // MARK: Timer
 
-    private func startUITimer() {
-        let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.uiTick() }
-        RunLoop.main.add(t, forMode: .common)
-        uiTimer = t
-    }
-
     private func uiTick() {
         tick += 1
         panel.refresh(tick: tick)
-        if tick % 30 == 0 {
-            if controller.store.isLoadingTags { updateStatus() }
-            if controller.player.state == .playing { controller.refreshNowPlayingElapsed() }
-        }
+        if tick % 30 == 0, controller.store.isLoadingTags { updateStatus() }
+    }
+
+    func playbackStateDidChange() {
+        clock.update()
+        panel.refresh(tick: tick)   // show the new state even when the clock is off
     }
 
     /// Tear down without quitting (used when switching looks).
     func dismantle() {
-        uiTimer?.invalidate()
+        clock.stop()
         window?.delegate = nil
         window?.close()
     }
 
     func windowWillClose(_ notification: Notification) {
-        uiTimer?.invalidate()
+        clock.stop()
         onClose?()
     }
 }

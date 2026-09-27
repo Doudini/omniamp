@@ -11,7 +11,8 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
     private let playlistView: ClassicPlaylistView
     private let eqWindow: ClassicWindow
     private let eqView: ClassicEQView
-    private var timer: Timer?
+    private var clock: DisplayClock!
+    private var tick = 0
     private var jumpPanel: NSPanel?
     private var jumpField: NSSearchField?
 
@@ -91,11 +92,12 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
         mainWindow.makeKeyAndOrderFront(nil)
         if eqVisible { attach(eqWindow) }
         if playlistVisible { attach(playlistWindow) }
-        startTimer()
+        clock = DisplayClock(player: controller.player) { [weak self] in self?.uiTick() }
+        clock.track([mainWindow, playlistWindow, eqWindow])
     }
 
     func dismantle() {
-        timer?.invalidate()
+        clock?.stop()
         jumpPanel?.close()
         mainWindow.removeChildWindow(playlistWindow)
         mainWindow.removeChildWindow(eqWindow)
@@ -212,18 +214,10 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
 
     // MARK: Timer
 
-    private func startTimer() {
-        timer?.invalidate()
-        var tick = 0
-        let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            tick += 1
-            self.mainView.advance()
-            if tick % 30 == 0, self.controller.player.state == .playing { self.controller.refreshNowPlayingElapsed() }
-            if tick % 15 == 0, self.controller.store.isLoadingTags { self.playlistView.needsDisplay = true }
-        }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
+    private func uiTick() {
+        tick += 1
+        mainView.advance()
+        if tick % 15 == 0, controller.store.isLoadingTags { playlistView.needsDisplay = true }
     }
 
     // MARK: Window delegate
@@ -243,6 +237,11 @@ extension ClassicLookController: PlayerUI {
         mainView.resetMarquee()
         if let n = new, let r = controller.row(forTrackIndex: n) { playlistView.scrollToVisible(r) }
         playlistView.needsDisplay = true
+    }
+
+    func playbackStateDidChange() {
+        clock.update()
+        mainView.stateChanged()
     }
 
     func optionsDidChange() { mainView.needsDisplay = true; playlistView.needsDisplay = true; eqView.needsDisplay = true }

@@ -5,6 +5,12 @@ final class SpectrumView: NSView {
     private var levels = [Float](repeating: 0, count: SpectrumAnalyzer.barCount)
     private var peaks = [Float](repeating: 0, count: SpectrumAnalyzer.barCount)
     var drawsBackground = false
+    /// Segment colors (lit, unlit) for the current height, built once instead of every frame.
+    private var palette: [(NSColor, NSColor)] = []
+
+    override func mouseDown(with event: NSEvent) { Analyzer.toggle() }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 
     func update(with bars: [Float]) {
         var changed = false
@@ -27,15 +33,20 @@ final class SpectrumView: NSView {
         let h = bounds.height - 2
         let segH: CGFloat = 2, segGap: CGFloat = 1
         let segments = Int(h / (segH + segGap))
+        if palette.count != segments {
+            palette = (0..<segments).map { s in
+                let t = CGFloat(s) / CGFloat(max(segments - 1, 1))
+                let c = t < 0.6
+                    ? NSColor(calibratedRed: 0.2 + t * 1.2, green: 1.0, blue: 0.3 - t * 0.4, alpha: 1)
+                    : NSColor(calibratedRed: 1, green: 1.0 - (t - 0.6) * 2.0, blue: 0.1, alpha: 1)
+                return (c, c.withAlphaComponent(0.07))
+            }
+        }
         for i in 0..<n {
             let x = x0 + CGFloat(i) * (w + gap)
             let lit = Int((CGFloat(levels[i]) * CGFloat(segments)).rounded())
             for s in 0..<segments {
-                let t = CGFloat(s) / CGFloat(max(segments - 1, 1))
-                let color = t < 0.6
-                    ? NSColor(calibratedRed: 0.2 + t * 1.2, green: 1.0, blue: 0.3 - t * 0.4, alpha: 1)
-                    : NSColor(calibratedRed: 1, green: 1.0 - (t - 0.6) * 2.0, blue: 0.1, alpha: 1)
-                (s < lit ? color : color.withAlphaComponent(0.07)).setFill()
+                (s < lit ? palette[s].0 : palette[s].1).setFill()
                 NSRect(x: x, y: 1 + CGFloat(s) * (segH + segGap), width: w, height: segH).fill()
             }
             if peaks[i] > 0.02 {

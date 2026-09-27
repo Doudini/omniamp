@@ -104,6 +104,22 @@ enum AudioDevices {
         return nominalRate(id) == rate
     }
 
+    // MARK: IO buffer size
+
+    /// Ask for large IO buffers (per-process setting): fewer wakeups per second = less energy.
+    /// A player doesn't need low latency; ~85 ms at 48 kHz is still instant for play/pause/seek.
+    static func setIOBufferFrames(_ id: AudioDeviceID, _ frames: UInt32) {
+        let range = get(id, address(kAudioDevicePropertyBufferFrameSizeRange), AudioValueRange())
+        let f = UInt32(min(Double(frames), range?.mMaximum ?? Double(frames)))
+        var a = address(kAudioDevicePropertyBufferFrameSize)
+        var v = f
+        AudioObjectSetPropertyData(id, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v)
+    }
+
+    static func ioBufferFrames(_ id: AudioDeviceID) -> UInt32 {
+        get(id, address(kAudioDevicePropertyBufferFrameSize), UInt32(0)) ?? 0
+    }
+
     // MARK: Hog mode (exclusive access)
 
     static func hogOwner(_ id: AudioDeviceID) -> pid_t {

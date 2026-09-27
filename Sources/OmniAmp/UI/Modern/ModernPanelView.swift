@@ -38,8 +38,9 @@ final class LCDTimeView: NSView {
 
 /// Scrolling title on the LCD.
 final class MarqueeView: NSView {
-    var text = "OmniAmp" { didSet { if text != oldValue { offset = 0; needsDisplay = true } } }
+    var text = "OmniAmp" { didSet { if text != oldValue { offset = 0; scrollStart = animationTime; needsDisplay = true } } }
     private var offset: CGFloat = 0
+    private var scrollStart = animationTime
     private var attrs: [NSAttributedString.Key: Any] {
         let glow = NSShadow()
         glow.shadowColor = Theme.green.withAlphaComponent(0.5)
@@ -50,8 +51,10 @@ final class MarqueeView: NSView {
     func tick() {
         let w = (text as NSString).size(withAttributes: attrs).width
         guard w > bounds.width - 8 else { if offset != 0 { offset = 0; needsDisplay = true }; return }
-        offset += 1
-        if offset > w + 48 { offset = 0 }
+        // 12 points per second, whatever the frame rate.
+        let o = CGFloat(Int((animationTime - scrollStart) * 12)).truncatingRemainder(dividingBy: w + 48)
+        guard o != offset else { return }
+        offset = o
         needsDisplay = true
     }
 
@@ -231,12 +234,12 @@ final class ModernPanelView: NSView {
         let st = p.state
         let t = Int(st == .stopped ? 0 : max(0, p.currentTime))
         time.text = String(format: "%02d:%02d", min(t / 60, 99), t % 60)
-        time.dimmed = st == .paused && (tick / 15) % 2 == 0 // blink while paused
+        time.dimmed = st == .paused && Int(animationTime * 2) % 2 == 0 // blink while paused
         stateLabel.stringValue = st == .playing ? Fonts.Icon.play : (st == .paused ? Fonts.Icon.pause : Fonts.Icon.stop)
         let d = p.duration
         if !seek.isDragging { seek.value = d > 0 && st != .stopped ? p.currentTime / d : 0 }
-        spectrum.update(with: st == .playing ? p.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount))
-        if tick % 3 == 0 { marquee.tick() }
+        spectrum.update(with: st == .playing && Analyzer.isOn ? p.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount))
+        marquee.tick()
     }
 
     func refreshTrackInfo() {

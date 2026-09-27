@@ -9,7 +9,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/OmniAmp" "$APP/Contents/MacOS/OmniAmp"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 mkdir -p "$APP/Contents/Resources/Fonts"
-cp fonts/HackNerdFont-*.woff2 fonts/LICENSE-Hack.md fonts/LICENSE-NerdFonts.txt "$APP/Contents/Resources/Fonts/"
+# Ship TTF, not WOFF2: TTFs are memory-mapped, WOFF2s get decompressed into RAM (~16 MB each).
+CONVERTER=.build/woff2-to-ttf
+if [[ ! -x $CONVERTER || scripts/woff2-to-ttf.swift -nt $CONVERTER ]]; then swiftc -O -o $CONVERTER scripts/woff2-to-ttf.swift; fi
+$CONVERTER fonts/HackNerdFont-Regular.woff2 fonts/HackNerdFont-Bold.woff2 "$APP/Contents/Resources/Fonts" >/dev/null
+cp fonts/LICENSE-Hack.md fonts/LICENSE-NerdFonts.txt "$APP/Contents/Resources/Fonts/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

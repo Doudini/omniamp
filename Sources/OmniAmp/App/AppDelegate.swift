@@ -31,6 +31,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         buildMenu()
         showLook(ProcessInfo.processInfo.environment["OMNIAMP_MODE"].flatMap(Mode.init(rawValue:)) ?? mode)
         NSApp.activate(ignoringOtherApps: true)
+        // Test hook: OMNIAMP_HIDE=1 hides the app after launch (for measuring background playback).
+        if ProcessInfo.processInfo.environment["OMNIAMP_HIDE"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.hide(nil) }
+        }
         installKeyMonitor()
         // Quit cleanly on SIGTERM/SIGINT too, so the audio device gets its sample rate and access back.
         for sig in [SIGTERM, SIGINT] {

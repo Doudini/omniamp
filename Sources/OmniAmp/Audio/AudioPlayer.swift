@@ -1,5 +1,7 @@
+import Accelerate
 import AVFoundation
 import CoreAudio
+import os
 
 /// AVAudioEngine-based player: gapless queueing, 10-band EQ, seek, volume, output device selection and a
 /// bit-perfect mode, plus a tap for the spectrum.
@@ -9,6 +11,10 @@ import CoreAudio
 /// format, it is scheduled right behind the current one on the same player node, so there is no gap.
 /// Bit-perfect: the device is switched to each file's sample rate, the EQ is bypassed and the software
 /// volume is pinned to 1.0, so samples reach the device unchanged (float32 carries 16/24-bit PCM exactly).
+/// OMNIAMP_DEBUG=1 logs the audio engine's start-up sequence.
+private let debugAudio = ProcessInfo.processInfo.environment["OMNIAMP_DEBUG"] != nil
+private func dlog(_ s: @autoclosure () -> String) { if debugAudio { NSLog("OmniAmp[audio]: %@", s()) } }
+
 final class AudioPlayer {
     enum State { case stopped, playing, paused }
 
@@ -17,8 +23,6 @@ final class AudioPlayer {
         let url: URL
         /// Frame in the file where playback of this item began (non-zero after a seek).
         var startFrame: AVAudioFramePosition
-        /// Node sample time at which this item starts playing.
-        var nodeStart: AVAudioFramePosition
         var frames: AVAudioFramePosition { file.length - startFrame }
     }
 
@@ -41,6 +45,11 @@ final class AudioPlayer {
     /// After we switch the device rate, the engine reports a configuration change a moment later and stops.
     /// Playback waits for that (or a timeout) instead of starting and then stuttering on the restart.
     private var awaitingRateSettle = false
+    /// Playback clock kept on the host clock. Never ask the engine (`lastRenderTime`) from the main thread:
+    /// during a device reconfiguration that call waits for an IO cycle while holding the engine lock, and the
+    /// engine's own reconfiguration handler needs that lock → deadlock (silent, frozen UI, slow quit).
+    private var clockBase: Double = 0          // position (s) when the clock last started
+    private var clockStart: Double?            // host time it started; nil while not running
 
     // Test hooks (see README / memory): OMNIAMP_RECORD writes the final mix, OMNIAMP_VOLUME mutes.
     private let recordPath = ProcessInfo.processInfo.environment["OMNIAMP_RECORD"]
@@ -48,7 +57,12 @@ final class AudioPlayer {
     private let testVolume = ProcessInfo.processInfo.environment["OMNIAMP_VOLUME"].flatMap(Float.init)
 
     let spectrum = SpectrumAnalyzer()
-    private(set) var state: State = .stopped
+    /// The analyzer tap exists only while an analyzer is visible and playing.
+    private var analyzerActive = false
+    private var tapFormat: AVAudioFormat?
+    private(set) var state: State = .stopped { didSet { if state != oldValue { onStateChange?() } } }
+    /// Playing / paused / stopped changed (main thread).
+    var onStateChange: (() -> Void)?
     /// Track ended and nothing was queued.
     var onTrackFinished: (() -> Void)?
     /// Playback moved seamlessly into the queued track.
@@ -83,13 +97,21 @@ final class AudioPlayer {
     }
 
     var currentTime: Double {
-        guard let c = current else { return 0 }
-        var frame = c.startFrame
-        if state != .stopped, let nt = node.lastRenderTime, nt.isSampleTimeValid,
-           let pt = node.playerTime(forNodeTime: nt) {
-            frame += max(0, pt.sampleTime - c.nodeStart)
-        }
-        return min(Double(max(frame, 0)) / c.file.processingFormat.sampleRate, duration)
+        guard current != nil else { return 0 }
+        let running = clockStart.map { CACurrentMediaTime() - $0 } ?? 0
+        return max(0, min(clockBase + running, duration))
+    }
+
+    /// Start the clock at the current item's start frame (called right after node.play()).
+    private func startClock() {
+        guard let c = current else { return }
+        clockBase = Double(c.startFrame) / c.file.processingFormat.sampleRate
+        clockStart = CACurrentMediaTime()
+    }
+
+    private func freezeClock() {
+        clockBase = currentTime
+        clockStart = nil
     }
 
     var remaining: Double { max(0, duration - currentTime) }
@@ -154,8 +176,9 @@ final class AudioPlayer {
         engine.connect(eq, to: engine.mainMixerNode, format: f)
         engine.connect(engine.mainMixerNode, to: engine.outputNode, format: f)
         graphRate = rate
-        // Analyzer taps after the EQ, before the volume (like Winamp).
-        eq.installTap(onBus: 0, bufferSize: 2048, format: f) { [spectrum] buf, _ in spectrum.process(buf) }
+        tapFormat = f
+        if analyzerActive { installAnalyzerTap() }
+        if ProcessInfo.processInfo.environment["OMNIAMP_NO_IOBUF"] == nil { AudioDevices.setIOBufferFrames(deviceID, 4096) }
         if let path = recordPath {
             // Test hook: record exactly what goes to the device, one file per rate.
             let url = URL(fileURLWithPath: path).deletingPathExtension().appendingPathExtension("\(Int(rate)).caf")
@@ -164,6 +187,21 @@ final class AudioPlayer {
             engine.mainMixerNode.installTap(onBus: 0, bufferSize: 4096, format: f) { buf, _ in try? rec?.write(from: buf) }
         }
         applyMixState()
+    }
+
+    /// Called by the display clock: add/remove the analyzer tap so hidden playback does no analysis at all.
+    func setAnalyzerActive(_ on: Bool) {
+        spectrum.isEnabled = on
+        guard on != analyzerActive else { return }
+        analyzerActive = on
+        if on { installAnalyzerTap() } else { eq.removeTap(onBus: 0); spectrum.reset() }
+    }
+
+    private func installAnalyzerTap() {
+        guard let f = tapFormat else { return }
+        eq.removeTap(onBus: 0)
+        // After the EQ, before the volume (like Winamp).
+        eq.installTap(onBus: 0, bufferSize: 2048, format: f) { [spectrum] buf, _ in spectrum.process(buf) }
     }
 
     /// EQ bypass and mixer volume for the current mode.
@@ -263,14 +301,10 @@ final class AudioPlayer {
     /// The engine stops itself whenever the device format changes, including after our own rate switches,
     /// so always rebuild and resume here.
     private func engineConfigurationChanged() {
+        dlog("configChange awaiting=\(awaitingRateSettle) running=\(engine.isRunning) rate=\(deviceRate)")
         if awaitingRateSettle {
-            // Expected: the device finished switching rate. Start the track fresh from the top.
-            awaitingRateSettle = false
-            bindOutputUnit()
-            rebuildGraph()
-            if let f = current?.file { connect(format: f.processingFormat) }
-            beginPlayback()
-            onOutputChange?()
+            // Expected: the device finished switching rate / taking exclusive access.
+            settleComplete()
             return
         }
         NSLog("OmniAmp: audio configuration changed (device %.0f Hz), restarting", deviceRate)
@@ -311,28 +345,46 @@ final class AudioPlayer {
             onOutputChange?()
         }
         connect(format: file.processingFormat)
-        current = Item(file: file, url: url, startFrame: 0, nodeStart: 0)
+        current = Item(file: file, url: url, startFrame: 0)
+        clockBase = 0
+        clockStart = nil
         state = .playing
         if settle { awaitSettle() } else { beginPlayback() }
         return true
     }
 
     private func beginPlayback() {
+        dlog("beginPlayback engineRunning=\(engine.isRunning) state=\(state)")
         // Taking exclusive access reconfigures the device too: wait for that before any audio goes out.
         if startEngineIfNeeded() { awaitSettle(); return }
         scheduleCurrent()
-        if state == .playing { node.play() }   // paused while waiting: stay paused, resume() starts it
+        if state == .playing { node.play(); startClock() }   // paused while waiting: resume() starts it
     }
 
     /// Wait for the configuration change that follows a rate switch / hog grab (or give up after 0.8 s).
     private func awaitSettle() {
+        dlog("awaitSettle")
         awaitingRateSettle = true
         let gen = generation
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+        // OMNIAMP_SETTLE_TIMEOUT (test hook) shortens the wait to force the timeout path.
+        let wait = ProcessInfo.processInfo.environment["OMNIAMP_SETTLE_TIMEOUT"].flatMap(Double.init) ?? 0.8
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
             guard let self, self.awaitingRateSettle, self.generation == gen else { return }
-            self.awaitingRateSettle = false
-            self.beginPlayback()
+            dlog("settle timeout → start")
+            self.settleComplete()
         }
+    }
+
+    /// The device finished (or we stopped waiting for) a reconfiguration: rebuild the graph from scratch
+    /// either way. Resuming on the old connections can render digital silence after a hog/rate change.
+    private func settleComplete() {
+        awaitingRateSettle = false
+        if engine.isRunning { engine.stop() }
+        bindOutputUnit()
+        rebuildGraph()
+        if let f = current?.file { connect(format: f.processingFormat) }
+        beginPlayback()
+        onOutputChange?()
     }
 
     /// Schedule `url` to start exactly when the current track ends. Returns false if it can't be gapless
@@ -343,7 +395,7 @@ final class AudioPlayer {
         guard let file = try? AVAudioFile(forReading: url) else { return false }
         let a = file.processingFormat, b = c.file.processingFormat
         guard a.sampleRate == b.sampleRate, a.channelCount == b.channelCount, a.commonFormat == b.commonFormat else { return false }
-        let item = Item(file: file, url: url, startFrame: 0, nodeStart: c.nodeStart + c.frames)
+        let item = Item(file: file, url: url, startFrame: 0)
         upcoming = item
         let gen = generation
         node.scheduleSegment(file, startingFrame: 0, frameCount: AVAudioFrameCount(max(0, file.length)), at: nil,
@@ -364,6 +416,7 @@ final class AudioPlayer {
     func pause() {
         guard state == .playing else { return }
         node.pause()
+        freezeClock()
         state = .paused
     }
 
@@ -371,6 +424,7 @@ final class AudioPlayer {
         guard state == .paused else { return }
         startEngineIfNeeded()
         node.play()
+        if !awaitingRateSettle { clockStart = CACurrentMediaTime() }
         state = .playing
     }
 
@@ -378,7 +432,9 @@ final class AudioPlayer {
         awaitingRateSettle = false
         stopNode()
         upcoming = nil
-        if var c = current { c.startFrame = 0; c.nodeStart = 0; current = c }
+        if var c = current { c.startFrame = 0; current = c }
+        clockBase = 0
+        clockStart = nil
         state = .stopped
         spectrum.reset()
     }
@@ -391,13 +447,14 @@ final class AudioPlayer {
         stopNode()
         upcoming = nil
         c.startFrame = min(frame, c.file.length)
-        c.nodeStart = 0
         current = c
+        clockStart = nil
         scheduleCurrent()
         startEngineIfNeeded()
         node.play()
+        startClock()
         state = .playing
-        if wasPaused { node.pause(); state = .paused }
+        if wasPaused { node.pause(); freezeClock(); state = .paused }
     }
 
     // MARK: Scheduling
@@ -419,6 +476,8 @@ final class AudioPlayer {
         if let next = upcoming {
             current = next
             upcoming = nil
+            clockBase = 0
+            clockStart = CACurrentMediaTime()   // the previous track just finished playing out
             onGaplessAdvance?()
         } else {
             state = .stopped
@@ -440,8 +499,9 @@ final class AudioPlayer {
     /// Returns true if exclusive access was just taken (the device will reconfigure).
     @discardableResult
     private func startEngineIfNeeded() -> Bool {
-        guard !engine.isRunning else { return updateHog() }
+        guard !engine.isRunning else { let h = updateHog(); dlog("engine already running, hogTaken=\(h)"); return h }
         bindOutputUnit()
+        dlog("engine.start()")
         do {
             try engine.start()
         } catch {
@@ -455,7 +515,9 @@ final class AudioPlayer {
             }
             return false
         }
-        return updateHog()
+        let h = updateHog()
+        dlog("engine started, hogTaken=\(h), running=\(engine.isRunning)")
+        return h
     }
 
     /// Exclusive access is taken only while the engine runs (taking it before the first start makes

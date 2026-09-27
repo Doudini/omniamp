@@ -98,7 +98,10 @@ final class ModernButton: NSControl {
 
 /// Thin LCD-style slider: dark groove, green fill, small metal knob.
 final class ModernSlider: NSControl {
-    var value: Double = 0 { didSet { needsDisplay = true } }
+    /// Redraws only when the knob moves at least half a point (the seek bar updates every frame).
+    var value: Double = 0 {
+        didSet { if abs(value - oldValue) * Double(max(1, bounds.width - knobWidth)) >= 0.5 { needsDisplay = true } }
+    }
     private(set) var isDragging = false
     /// Called continuously while dragging; `action` fires on mouse-up.
     var onChange: ((Double) -> Void)?

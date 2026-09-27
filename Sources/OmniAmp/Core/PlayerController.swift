@@ -7,6 +7,8 @@ protocol PlayerUI: AnyObject {
     func playlistRowsDidUpdate(_ trackIndices: IndexSet)
     func currentTrackDidChange(old: Int?, new: Int?)
     func optionsDidChange()
+    /// Playing / paused / stopped changed.
+    func playbackStateDidChange()
     /// Track index under the UI's selection, used by Play when nothing is loaded.
     var selectedTrackIndex: Int? { get }
     /// All selected tracks (for queue/remove actions from menus and keys).
@@ -35,7 +37,8 @@ final class PlayerController {
     // Gapless: the track preloaded behind the current one, and whether we already tried for this track.
     private var preloaded: (index: Int, path: String)?
     private var preloadAttempted = false
-    private var gaplessTimer: Timer?
+    /// One-shot timer that fires ~8 s before the end of the track to preload the next one.
+    private var preloadTimer: Timer?
 
     /// Indices into store.tracks currently shown (nil = no filter).
     private(set) var visible: [Int]?
@@ -57,9 +60,22 @@ final class PlayerController {
         player.setBitPerfect(d.bool(forKey: "bitPerfect"), exclusive: d.bool(forKey: "exclusiveAccess"))
         folders.rescanAll()   // pick up changes made while the app was closed
         setupRemoteCommands()
-        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.maybePreloadNext() }
+        player.onStateChange = { [weak self] in
+            self?.schedulePreloadCheck()
+            self?.updateNowPlaying()
+            self?.ui?.playbackStateDidChange()
+        }
+    }
+
+    /// No polling: arm a single timer for the moment the next track should be preloaded.
+    private func schedulePreloadCheck() {
+        preloadTimer?.invalidate()
+        preloadTimer = nil
+        guard player.state == .playing, !preloadAttempted, player.duration > 0 else { return }
+        let t = Timer(timeInterval: max(0.05, player.remaining - 7.5), repeats: false) { [weak self] _ in self?.maybePreloadNext() }
+        t.tolerance = 0.5
         RunLoop.main.add(t, forMode: .common)
-        gaplessTimer = t
+        preloadTimer = t
     }
 
     var tracks: [Track] { store.tracks }
@@ -323,6 +339,7 @@ final class PlayerController {
         preloaded = nil
         preloadAttempted = false
         let ok = player.play(url: store.tracks[index].url)
+        schedulePreloadCheck()
         ui?.currentTrackDidChange(old: old, new: index)
         updateNowPlaying()
         if !ok {
@@ -442,6 +459,7 @@ final class PlayerController {
         if let o = old, o != new { pushHistory(o) }
         currentIndex = new
         if let n = new { dequeue(n) }
+        schedulePreloadCheck()
         NSLog("OmniAmp: gapless advance to #%d", (new ?? -2) + 1)
         ui?.currentTrackDidChange(old: old, new: new)
         updateNowPlaying()
@@ -452,6 +470,7 @@ final class PlayerController {
         if player.hasQueuedNext { player.cancelQueuedNext() }
         preloaded = nil
         preloadAttempted = false
+        schedulePreloadCheck()
     }
 
     // MARK: Equalizer
@@ -489,6 +508,7 @@ final class PlayerController {
     func seek(to seconds: Double) {
         guard player.state != .stopped else { return }
         player.seek(to: seconds)
+        schedulePreloadCheck()
         updateNowPlaying()
     }
 
@@ -643,13 +663,6 @@ final class PlayerController {
         center.playbackState = player.state == .playing ? .playing : .paused
     }
 
-    /// Called ~1/s by the active UI while playing.
-    func refreshNowPlayingElapsed() {
-        let center = MPNowPlayingInfoCenter.default()
-        guard var info = center.nowPlayingInfo else { return }
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentTime
-        center.nowPlayingInfo = info
-    }
 }
 
 extension PlayerController: PlaylistStoreDelegate {
