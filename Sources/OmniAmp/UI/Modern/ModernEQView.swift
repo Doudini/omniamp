@@ -49,7 +49,7 @@ final class ModernVSlider: NSControl {
         let y = track.midY + CGFloat(value) * track.height / 2
         let fill = NSRect(x: groove.minX + 1, y: min(y, track.midY), width: groove.width - 2, height: abs(y - track.midY))
         if fill.height > 0.5 {
-            (value >= 0 ? Theme.green : Theme.dimGreen.blended(withFraction: 0.3, of: Theme.green)!).setFill()
+            (value >= 0 ? Theme.phosphor : Theme.phosphorDim.blended(withFraction: 0.3, of: Theme.phosphor)!).setFill()
             NSBezierPath(roundedRect: fill, xRadius: 1.5, yRadius: 1.5).fill()
         }
         let cap = NSRect(x: bounds.midX - 7, y: y - capH / 2, width: 14, height: capH)
@@ -105,7 +105,7 @@ final class ModernEQView: NSView {
         addSubview(preamp)
         addSubview(preLabel)
         let scale = [label("+12", 8), label(" 0 ", 8), label("-12", 8)]
-        scale.forEach { $0.textColor = Theme.dimGreen; addSubview($0) }
+        scale.forEach { $0.textColor = Theme.phosphorDim; addSubview($0) }
 
         var cons: [NSLayoutConstraint] = [
             onButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
@@ -224,11 +224,11 @@ final class EQCurveView: NSView {
         }
         path.lineWidth = 1.5
         let glow = NSShadow()
-        glow.shadowColor = Theme.green.withAlphaComponent(0.8)
+        glow.shadowColor = Theme.phosphor.withAlphaComponent(0.8)
         glow.shadowBlurRadius = enabled ? 4 : 0
         NSGraphicsContext.saveGraphicsState()
         glow.set()
-        (enabled ? Theme.green : Theme.dimGreen).setStroke()
+        (enabled ? Theme.phosphor : Theme.phosphorDim).setStroke()
         path.stroke()
         NSGraphicsContext.restoreGraphicsState()
     }

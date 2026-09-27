@@ -149,6 +149,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let u = sender.representedObject as? URL { loadSkin(u) }
     }
 
+    /// Themes apply to the modern look; rebuilding its window picks up every color at once.
+    @objc private func pickTheme(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, id != Theme.palette.id else { return }
+        Theme.select(id)
+        if mode == .modern, look is ModernWindowController { showLook(.modern) }
+    }
+
     @objc private func setScale(_ sender: NSMenuItem) {
         SkinLibrary.scale = CGFloat(sender.tag)
         (look as? ClassicLookController)?.apply(scale: CGFloat(sender.tag))
@@ -178,6 +185,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         m.addItem(withTitle: "Modern Look", action: #selector(showModern(_:)), keyEquivalent: m === viewMenu ? "1" : "").target = self
         m.addItem(withTitle: "Classic Skin", action: #selector(showClassic(_:)), keyEquivalent: m === viewMenu ? "2" : "").target = self
         m.addItem(.separator())
+        let themeItem = NSMenuItem(title: "Modern Theme", action: nil, keyEquivalent: "")
+        let themes = NSMenu(title: "Modern Theme")
+        for t in ThemePalette.all {
+            let it = themes.addItem(withTitle: t.name, action: #selector(pickTheme(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = t.id
+        }
+        themeItem.submenu = themes
+        m.addItem(themeItem)
         let skinsItem = NSMenuItem(title: "Skins", action: nil, keyEquivalent: "")
         let skins = NSMenu(title: "Skins")
         for u in SkinLibrary.installed {
@@ -209,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if item.action == #selector(showModern(_:)) { item.state = mode == .modern ? .on : .off }
         if item.action == #selector(showClassic(_:)) { item.state = mode == .classic ? .on : .off }
         if item.action == #selector(toggleEQ(_:)) { item.state = controller.eqSettings.enabled ? .on : .off }
+        if item.action == #selector(pickTheme(_:)) { item.state = (item.representedObject as? String) == Theme.palette.id ? .on : .off }
         if item.action == #selector(setScale(_:)) { item.state = Int(SkinLibrary.scale) == item.tag ? .on : .off }
         if item.action == #selector(pickInstalledSkin(_:)) {
             item.state = (item.representedObject as? URL)?.lastPathComponent == SkinLibrary.current?.lastPathComponent ? .on : .off

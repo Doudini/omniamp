@@ -43,7 +43,7 @@ final class ArtView: NSView {
         } else {
             Theme.lcd.setFill(); bounds.fill()
             let glyph = Fonts.Icon.music as NSString
-            let attrs: [NSAttributedString.Key: Any] = [.font: Theme.icon(bounds.height * 0.4), .foregroundColor: Theme.dimGreen.withAlphaComponent(0.6)]
+            let attrs: [NSAttributedString.Key: Any] = [.font: Theme.icon(bounds.height * 0.4), .foregroundColor: Theme.phosphorDim.withAlphaComponent(0.6)]
             let sz = glyph.size(withAttributes: attrs)
             glyph.draw(at: NSPoint(x: (bounds.width - sz.width) / 2, y: (bounds.height - sz.height) / 2), withAttributes: attrs)
         }
@@ -83,7 +83,7 @@ final class HoverCard {
         panel.contentView = bg
         art.cornerRadius = 5
         text.font = Fonts.hack(11)
-        text.textColor = Theme.green
+        text.textColor = Theme.phosphor
         text.maximumNumberOfLines = 3
         text.translatesAutoresizingMaskIntoConstraints = false
         bg.addSubview(art)
@@ -183,22 +183,22 @@ final class ModernInfoView: NSView {
     }
 
     private func build() {
-        let dim = Theme.dimGreen.blended(withFraction: 0.35, of: Theme.green)!
+        let dim = Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)!
         style(title, 14, bold: true, color: NSColor(calibratedWhite: 0.95, alpha: 1))
-        style(byline, 12, color: Theme.green)
-        style(albumTitle, 11.5, color: Theme.green.blended(withFraction: 0.25, of: Theme.dimGreen)!)
+        style(byline, 12, color: Theme.phosphor)
+        style(albumTitle, 11.5, color: Theme.phosphor.blended(withFraction: 0.25, of: Theme.phosphorDim)!)
         style(numbers, 10.5, color: dim)
         style(credits, 10.5, color: dim)
-        style(format, 10.5, color: Theme.green)
+        style(format, 10.5, color: Theme.phosphor)
         style(file, 10, color: dim, truncate: .byTruncatingMiddle)
         style(albumLine, 10, color: dim)
         style(comment, 10, color: dim)
-        style(modeLabel, 8.5, bold: true, color: Theme.dimGreen)
+        style(modeLabel, 8.5, bold: true, color: Theme.phosphorDim)
         modeLabel.alignment = .right
 
         let rule = NSBox()
         rule.boxType = .custom
-        rule.fillColor = Theme.dimGreen.withAlphaComponent(0.35)
+        rule.fillColor = Theme.phosphorDim.withAlphaComponent(0.35)
         rule.borderWidth = 0
         rule.translatesAutoresizingMaskIntoConstraints = false
         rule.heightAnchor.constraint(equalToConstant: 1).isActive = true

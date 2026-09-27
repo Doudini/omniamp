@@ -24,15 +24,15 @@ final class LCDTimeView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let ghost = String(text.map { $0 == ":" ? ":" : "8" }) as NSString
-        let ghostAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.ghostGreen]
+        let ghostAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.phosphorGhost]
         let size = ghost.size(withAttributes: ghostAttrs)
         let origin = NSPoint(x: bounds.width - size.width, y: (bounds.height - size.height) / 2)
         ghost.draw(at: origin, withAttributes: ghostAttrs)
         guard !dimmed else { return }
         let glow = NSShadow()
-        glow.shadowColor = Theme.green.withAlphaComponent(0.7)
+        glow.shadowColor = Theme.phosphor.withAlphaComponent(0.7)
         glow.shadowBlurRadius = 8
-        (text as NSString).draw(at: origin, withAttributes: [.font: font, .foregroundColor: Theme.green, .shadow: glow])
+        (text as NSString).draw(at: origin, withAttributes: [.font: font, .foregroundColor: Theme.phosphor, .shadow: glow])
     }
 }
 
@@ -43,9 +43,9 @@ final class MarqueeView: NSView {
     private var scrollStart = animationTime
     private var attrs: [NSAttributedString.Key: Any] {
         let glow = NSShadow()
-        glow.shadowColor = Theme.green.withAlphaComponent(0.5)
+        glow.shadowColor = Theme.phosphor.withAlphaComponent(0.5)
         glow.shadowBlurRadius = 4
-        return [.font: Fonts.hack(13), .foregroundColor: Theme.green, .shadow: glow]
+        return [.font: Fonts.hack(13), .foregroundColor: Theme.phosphor, .shadow: glow]
     }
 
     func tick() {
@@ -139,11 +139,11 @@ final class ModernPanelView: NSView {
         infoLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         stateLabel.font = Theme.icon(10)
-        stateLabel.textColor = Theme.green
+        stateLabel.textColor = Theme.phosphor
         infoLabel.font = Theme.mono(10)
-        infoLabel.textColor = Theme.dimGreen.blended(withFraction: 0.5, of: Theme.green)
+        infoLabel.textColor = Theme.phosphorDim.blended(withFraction: 0.5, of: Theme.phosphor)
         volIcon.font = Theme.icon(11)
-        volIcon.textColor = Theme.dimGreen
+        volIcon.textColor = Theme.phosphorDim
 
         volume.knobWidth = 10
         volume.onChange = { [weak self] v in self?.controller?.setVolume(Float(v)) }
@@ -303,18 +303,18 @@ final class ModernPanelView: NSView {
         guard let c = controller else { return }
         let lines = c.currentIndex.map { c.formatLines(for: $0) } ?? ("", "")
         let b = c.outputBadge
-        let amber = NSColor(calibratedRed: 1, green: 0.7, blue: 0.2, alpha: 1)
+        let amber = Theme.warning
         badge.toolTip = b.map { $0.ok ? "\($0.text): samples reach \(c.player.deviceName) unchanged." : "\($0.text): \(c.player.deviceName) does not support this sample rate; macOS resamples." }
         if compact {
             infoLabel.stringValue = lines.0
             badge.font = Fonts.hack(10)
             badge.stringValue = (b.map { $0.ok ? "\u{25C6} " : "\u{25B2} " } ?? "") + lines.1
-            badge.textColor = b.map { $0.ok ? Theme.green : amber } ?? infoLabel.textColor
+            badge.textColor = b.map { $0.ok ? Theme.phosphor : amber } ?? infoLabel.textColor
         } else {
             infoLabel.stringValue = [lines.0, lines.1].filter { !$0.isEmpty }.joined(separator: " · ")
             badge.font = Fonts.hack(9, bold: true)
             badge.stringValue = b.map { ($0.ok ? "\u{25C6} " : "\u{25B2} ") + $0.text } ?? ""
-            badge.textColor = b.map { $0.ok ? Theme.green : amber } ?? Theme.green
+            badge.textColor = b.map { $0.ok ? Theme.phosphor : amber } ?? Theme.phosphor
         }
     }
 

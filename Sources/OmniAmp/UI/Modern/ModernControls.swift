@@ -78,10 +78,10 @@ final class ModernButton: NSControl {
             hl.stroke()
         }
 
-        let color = isOn ? Theme.green : Theme.buttonText
+        let color = isOn ? Theme.phosphor : Theme.buttonText
         let shadow = NSShadow()
         if isOn {
-            shadow.shadowColor = Theme.green.withAlphaComponent(0.8)
+            shadow.shadowColor = Theme.phosphor.withAlphaComponent(0.8)
             shadow.shadowBlurRadius = 5
         }
         let glyphAttrs: [NSAttributedString.Key: Any] = [.font: Theme.icon(glyphSize), .foregroundColor: color, .shadow: shadow]
@@ -161,7 +161,7 @@ final class ModernSlider: NSControl {
         let fx = track.minX + CGFloat(value) * track.width
         if fx > groove.minX + 1 {
             let fill = NSRect(x: groove.minX + 1, y: groove.minY + 1, width: fx - groove.minX - 1, height: groove.height - 2)
-            NSGradient(starting: Theme.dimGreen, ending: Theme.green)?.draw(in: NSBezierPath(roundedRect: fill, xRadius: 1.5, yRadius: 1.5), angle: 0)
+            NSGradient(starting: Theme.phosphorDim, ending: Theme.phosphor)?.draw(in: NSBezierPath(roundedRect: fill, xRadius: 1.5, yRadius: 1.5), angle: 0)
         }
 
         let knob = NSRect(x: fx - knobWidth / 2, y: midY - 6, width: knobWidth, height: 12)

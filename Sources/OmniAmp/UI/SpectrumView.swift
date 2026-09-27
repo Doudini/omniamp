@@ -36,9 +36,7 @@ final class SpectrumView: NSView {
         if palette.count != segments {
             palette = (0..<segments).map { s in
                 let t = CGFloat(s) / CGFloat(max(segments - 1, 1))
-                let c = t < 0.6
-                    ? NSColor(calibratedRed: 0.2 + t * 1.2, green: 1.0, blue: 0.3 - t * 0.4, alpha: 1)
-                    : NSColor(calibratedRed: 1, green: 1.0 - (t - 0.6) * 2.0, blue: 0.1, alpha: 1)
+                let c = Theme.spectrum(t)
                 return (c, c.withAlphaComponent(0.07))
             }
         }
