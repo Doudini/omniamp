@@ -1,6 +1,7 @@
 # Build output
 .build/
 OmniAmp.app/
+dist/
 *.xcodeproj/
 .swiftpm/
 

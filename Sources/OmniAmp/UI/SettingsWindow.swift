@@ -8,6 +8,12 @@ final class SettingsWindowController: NSWindowController {
     private let lbToken = NSSecureTextField()
     private var lbButton: NSButton!
     private let queueLabel = NSTextField(wrappingLabelWithString: "")
+    // Own Last.fm API key (instead of the one built into the app).
+    private var ownKeyBox: NSButton!
+    private let ownKey = NSTextField()
+    private let ownSecret = NSSecureTextField()
+    private var ownKeyRows: NSStackView!
+    private var stack: NSStackView!
     private var authTask: Task<Void, Never>?
 
     init() {
@@ -46,6 +52,19 @@ final class SettingsWindowController: NSWindowController {
         let sendNow = NSButton(title: "Send Now", target: self, action: #selector(sendNow))
 
         let lfmRow = NSStackView(views: [lfmStatus, NSView(), lfmButton])
+        ownKeyBox = NSButton(checkboxWithTitle: "Use my own Last.fm API key", target: self, action: #selector(ownKeyToggled))
+        ownKey.placeholderString = "API key"
+        ownSecret.placeholderString = "Shared secret"
+        let saveKey = NSButton(title: "Save", target: self, action: #selector(saveOwnKey))
+        let getKey = NSButton(title: "Get a key…", target: self, action: #selector(openLastfmAPI))
+        getKey.bezelStyle = .inline
+        let keyRow = NSStackView(views: [ownKey, ownSecret, saveKey])
+        keyRow.distribution = .fillEqually
+        ownKeyRows = NSStackView(views: [keyRow, NSStackView(views: [note("Free at last.fm/api/account/create (any app name). Switching keys signs you out of Last.fm; connect again after saving."), getKey])])
+        ownKeyRows.orientation = .vertical
+        ownKeyRows.alignment = .leading
+        ownKeyRows.spacing = 6
+        keyRow.widthAnchor.constraint(equalTo: ownKeyRows.widthAnchor).isActive = true
         let lbRow = NSStackView(views: [lbStatus, NSView(), lbButton])
         let tokenRow = NSStackView(views: [lbToken, getToken])
         let queueRow = NSStackView(views: [queueLabel, NSView(), sendNow])
@@ -55,6 +74,7 @@ final class SettingsWindowController: NSWindowController {
         let stack = NSStackView(views: [
             header("Last.fm"), lfmRow,
             note("Connecting opens last.fm in your browser; approve OmniAmp there and come back."),
+            ownKeyBox, ownKeyRows,
             header("ListenBrainz"), lbRow, tokenRow,
             note("Your token is on listenbrainz.org → Settings. Tokens and sessions are stored in your Keychain."),
             header("Queue"), queueRow,
@@ -67,25 +87,71 @@ final class SettingsWindowController: NSWindowController {
         for v in stack.arrangedSubviews where v is NSStackView || v.isKind(of: NSTextField.self) && (v as! NSTextField).isEditable == false {
             v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         }
-        stack.setCustomSpacing(18, after: stack.arrangedSubviews[2])
-        stack.setCustomSpacing(18, after: stack.arrangedSubviews[6])
+        stack.setCustomSpacing(18, after: ownKeyRows)
+        stack.setCustomSpacing(18, after: stack.arrangedSubviews[8])
+        self.stack = stack
         window?.contentView = stack
+        let lfm = LastFM.shared
+        ownKeyBox.state = lfm.usesCustomKey || !lfm.hasBuiltInKey ? .on : .off
+        ownKey.stringValue = lfm.customKey ?? ""
+        ownKeyRows.isHidden = ownKeyBox.state == .off
+        fitWindow()
     }
+
+    private func fitWindow() {
+        guard let w = window, let stack else { return }
+        // The section gap follows whichever is last: the checkbox, or the key fields under it.
+        stack.setCustomSpacing(ownKeyRows.isHidden ? 18 : 8, after: ownKeyBox)
+        stack.layoutSubtreeIfNeeded()
+        var f = w.frame
+        let h = stack.fittingSize.height
+        let content = w.contentRect(forFrameRect: f)
+        f.origin.y += content.height - h
+        f.size.height += h - content.height
+        w.setFrame(f, display: true, animate: w.isVisible)
+    }
+
+    @objc private func ownKeyToggled() {
+        ownKeyRows.isHidden = ownKeyBox.state == .off
+        // Unticking goes back to the built-in key.
+        if ownKeyBox.state == .off, LastFM.shared.usesCustomKey {
+            LastFM.shared.setCustomKey(nil, secret: nil)
+            Scrobbler.shared.clearQueue(LastFM.shared.id)
+            ownKey.stringValue = ""
+            ownSecret.stringValue = ""
+        }
+        fitWindow()
+        refresh()
+    }
+
+    @objc private func saveOwnKey() {
+        guard !ownKey.stringValue.isEmpty, !ownSecret.stringValue.isEmpty else {
+            window?.makeFirstResponder(ownKey.stringValue.isEmpty ? ownKey : ownSecret)
+            return
+        }
+        LastFM.shared.setCustomKey(ownKey.stringValue, secret: ownSecret.stringValue)
+        Scrobbler.shared.clearQueue(LastFM.shared.id)
+        ownSecret.stringValue = ""
+        refresh()
+    }
+
+    @objc private func openLastfmAPI() { NSWorkspace.shared.open(URL(string: "https://www.last.fm/api/account/create")!) }
 
     func refresh() {
         let lfm = LastFM.shared, lb = ListenBrainz.shared
+        let keyNote = lfm.usesCustomKey ? " (your API key)" : ""
         if !lfm.isAvailable {
-            lfmStatus.stringValue = "Not available in this build (no Last.fm API key)"
+            lfmStatus.stringValue = "Needs an API key: add your own below"
             lfmButton.isEnabled = false
         } else if lfm.isConnected {
-            lfmStatus.stringValue = "✓ Scrobbling as \(lfm.username ?? "your account")"
+            lfmStatus.stringValue = "✓ Scrobbling as \(lfm.username ?? "your account")" + keyNote
             lfmButton.title = "Disconnect"
             lfmButton.isEnabled = true
         } else if authTask != nil {
             lfmStatus.stringValue = "Waiting for you to approve OmniAmp in the browser…"
             lfmButton.title = "Cancel"
         } else {
-            lfmStatus.stringValue = "Not connected"
+            lfmStatus.stringValue = "Not connected" + keyNote
             lfmButton.title = "Connect…"
             lfmButton.isEnabled = true
         }

@@ -200,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func toggleStopAfter(_ sender: Any?) { controller.stopAfterCurrent.toggle() }
     @objc private func setSleep(_ sender: NSMenuItem) { controller.setSleepTimer(minutes: sender.tag == 0 ? nil : sender.tag) }
     @objc private func toggleResume(_ sender: Any?) { controller.resumeLongTracks.toggle() }
+    @objc private func setSpeed(_ sender: NSMenuItem) { controller.setSpeed(Float(sender.representedObject as? Double ?? 1)) }
     @objc private func setReplayGain(_ sender: NSMenuItem) {
         if let m = PlayerController.ReplayGainMode(rawValue: sender.representedObject as? String ?? "") { controller.replayGainMode = m }
     }
@@ -334,6 +335,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if item.action == #selector(setReplayGain(_:)) {
             item.state = (item.representedObject as? String) == controller.replayGainMode.rawValue ? .on : .off
             item.toolTip = controller.player.bitPerfect ? "Bypassed in bit-perfect mode." : nil
+        }
+        if item.action == #selector(setSpeed(_:)) {
+            // Only for podcast episodes and web files; remembered per show.
+            item.state = abs(Float(item.representedObject as? Double ?? 0) - controller.currentSpeed) < 0.01 ? .on : .off
+            return controller.currentTrack?.isEpisode == true
         }
         if item.action == #selector(setAnalyzer(_:)) { item.state = (item.representedObject as? String) == Analyzer.mode.rawValue ? .on : .off }
         if item.action == #selector(pickPlaylistFont(_:)) { item.state = (item.representedObject as? String) == PlaylistStyle.font.rawValue ? .on : .off }
@@ -741,6 +747,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sleepItem.submenu = sleep
         ctlMenu.addItem(sleepItem)
         ctlMenu.addItem(withTitle: "Resume Long Tracks", action: #selector(toggleResume(_:)), keyEquivalent: "").target = self
+        let speedItem = NSMenuItem(title: "Podcast Speed", action: nil, keyEquivalent: "")
+        let speedMenu = NSMenu(title: "Podcast Speed")
+        for sp in PlayerController.speeds {
+            let it = speedMenu.addItem(withTitle: String(format: "%g×", sp), action: #selector(setSpeed(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = Double(sp)
+        }
+        speedItem.submenu = speedMenu
+        ctlMenu.addItem(speedItem)
         ctlMenu.addItem(.separator())
         let rgItem = NSMenuItem(title: "ReplayGain", action: nil, keyEquivalent: "")
         let rg = NSMenu(title: "ReplayGain")

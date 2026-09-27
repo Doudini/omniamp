@@ -5,7 +5,7 @@ import Foundation
 ///
 /// The app's API key/secret come from the build (Info.plist `LastFMAPIKey`/`LastFMSecret`, injected by
 /// scripts/make-app.sh from the untracked secrets.env) or the OMNIAMP_LASTFM_KEY/SECRET environment.
-/// The user's session key lives in the Keychain.
+/// Users can use their own key instead (Settings); its secret and the user's session key live in the Keychain.
 final class LastFM: ScrobbleService {
     static let shared = LastFM()
 
@@ -13,17 +13,48 @@ final class LastFM: ScrobbleService {
     let maxBatch = 50
     private let endpoint = URL(string: "https://ws.audioscrobbler.com/2.0/")!
     var transport: HTTPTransport = URLSessionTransport()
-    let apiKey: String?
-    let secret: String?
+    private let fixedKey: String?, fixedSecret: String?    // tests
+    private let builtInKey: String?, builtInSecret: String?
 
     init(apiKey: String? = nil, secret: String? = nil) {
         let env = ProcessInfo.processInfo.environment
         let info = Bundle.main.infoDictionary
-        self.apiKey = apiKey ?? env["OMNIAMP_LASTFM_KEY"] ?? (info?["LastFMAPIKey"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        self.secret = secret ?? env["OMNIAMP_LASTFM_SECRET"] ?? (info?["LastFMSecret"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        fixedKey = apiKey
+        fixedSecret = secret
+        builtInKey = env["OMNIAMP_LASTFM_KEY"] ?? (info?["LastFMAPIKey"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        builtInSecret = env["OMNIAMP_LASTFM_SECRET"] ?? (info?["LastFMSecret"] as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    /// This build has an API key (otherwise Last.fm can't be offered).
+    // MARK: API key: the user's own, or the one built into the app
+
+    /// The user's own API key (Settings), used instead of the built-in one when both key and secret are set.
+    var customKey: String? { UserDefaults.standard.string(forKey: "lastfmCustomKey").flatMap { $0.isEmpty ? nil : $0 } }
+    private var cachedCustomSecret: String??
+    private var customSecret: String? {
+        if let c = cachedCustomSecret { return c }
+        let s = customKey == nil ? nil : Keychain.get("lastfm.customSecret")
+        cachedCustomSecret = .some(s)
+        return s
+    }
+    var usesCustomKey: Bool { fixedKey == nil && customKey != nil && customSecret != nil }
+    var hasBuiltInKey: Bool { builtInKey != nil && builtInSecret != nil }
+
+    var apiKey: String? { fixedKey ?? (usesCustomKey ? customKey : builtInKey) }
+    var secret: String? { fixedSecret ?? (usesCustomKey ? customSecret : builtInSecret) }
+
+    /// Use your own key (nil or empty = back to the built-in one). A session belongs to the key it was made with,
+    /// so this disconnects.
+    func setCustomKey(_ key: String?, secret: String?) {
+        let k = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let s = secret?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let on = !k.isEmpty && !s.isEmpty
+        UserDefaults.standard.set(on ? k : nil, forKey: "lastfmCustomKey")
+        Keychain.set("lastfm.customSecret", on ? s : nil)
+        cachedCustomSecret = .some(on ? s : nil)
+        disconnect()
+    }
+
+    /// There's an API key to use (otherwise Last.fm can't be offered).
     var isAvailable: Bool { apiKey != nil && secret != nil }
     var sessionKey: String? { Keychain.get("lastfm.session") }
     var username: String? { UserDefaults.standard.string(forKey: "lastfmUser") }

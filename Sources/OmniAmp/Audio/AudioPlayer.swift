@@ -254,6 +254,15 @@ final class AudioPlayer {
     /// True while a podcast episode is loaded (playing or paused).
     var isPlayingEpisode: Bool { episodePlayer != nil }
 
+    /// Playback speed for episodes and web files (1 = normal; pitch is kept). Music always plays at 1×.
+    var rate: Float = 1 {
+        didSet {
+            guard let p = episodePlayer else { return }
+            p.defaultRate = rate
+            if state == .playing { p.rate = rate }
+        }
+    }
+
     /// Play a podcast episode from `start` seconds. `duration` (from the feed) is shown until the file reports its own.
     func playEpisode(url: URL, from start: Double = 0, duration: Double? = nil) {
         stopNode()
@@ -263,8 +272,10 @@ final class AudioPlayer {
         streamError = nil
         _ = AudioDevices.setHog(deviceID, false)
         let item = AVPlayerItem(url: url)
+        item.audioTimePitchAlgorithm = .spectral   // faster speech without chipmunk voices
         let p = AVPlayer(playerItem: item)
         p.audioOutputDeviceUniqueID = AudioDevices.device(id: deviceID)?.uid
+        p.defaultRate = rate                        // play() uses it
         episodePlayer = p
         episodeDurationHint = duration ?? 0
         applyGainStage()

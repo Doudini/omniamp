@@ -156,3 +156,31 @@ final class ScrobbleTests: XCTestCase {
         XCTAssertEqual(Scrobbler(services: [svc]).pendingCount("fake"), 1)
     }
 }
+
+final class LastFMKeyTests: XCTestCase {
+    override func setUp() { setenv("OMNIAMP_KEYCHAIN_SERVICE", "OmniAmp.tests", 1) }   // never the real Keychain
+    override func tearDown() {
+        LastFM().setCustomKey(nil, secret: nil)
+        unsetenv("OMNIAMP_KEYCHAIN_SERVICE")
+    }
+
+    /// The user's own key replaces the built-in one (and signs out); clearing it goes back.
+    func testOwnKeyOverridesBuiltInKey() {
+        setenv("OMNIAMP_LASTFM_KEY", "builtin-key", 1)
+        setenv("OMNIAMP_LASTFM_SECRET", "builtin-secret", 1)
+        defer { unsetenv("OMNIAMP_LASTFM_KEY"); unsetenv("OMNIAMP_LASTFM_SECRET") }
+        let lfm = LastFM()
+        XCTAssertEqual(lfm.apiKey, "builtin-key")
+        XCTAssertFalse(lfm.usesCustomKey)
+
+        lfm.setCustomKey(" mine ", secret: "my-secret")
+        XCTAssertTrue(lfm.usesCustomKey)
+        XCTAssertEqual(lfm.apiKey, "mine")
+        XCTAssertEqual(lfm.secret, "my-secret")
+        XCTAssertEqual(LastFM().apiKey, "mine", "kept for the next launch")
+
+        lfm.setCustomKey("only-a-key", secret: "")   // incomplete: back to the built-in key
+        XCTAssertFalse(lfm.usesCustomKey)
+        XCTAssertEqual(lfm.apiKey, "builtin-key")
+    }
+}

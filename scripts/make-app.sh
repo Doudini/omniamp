@@ -3,17 +3,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build -c release
-APP=OmniAmp.app
+# OMNIAMP_APP_PATH: build somewhere else (make-dmg.sh uses it so your own OmniAmp.app keeps its keys).
+APP=${OMNIAMP_APP_PATH:-$PWD/OmniAmp.app}
 # Optional, never committed: secrets.env with LASTFM_API_KEY=… and LASTFM_SECRET=… (see README).
 LASTFM_API_KEY=""; LASTFM_SECRET=""
-[[ -f secrets.env ]] && source secrets.env
+# OMNIAMP_NO_SECRETS=1 (used for public DMGs) leaves them out, so the secret isn't handed to everyone.
+[[ -f secrets.env && -z "${OMNIAMP_NO_SECRETS:-}" ]] && source secrets.env
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/OmniAmp" "$APP/Contents/MacOS/OmniAmp"
 # App icon: compile the Icon Composer icon (a macOS 26+ style icon, full size, no grey "legacy" plate) when
 # Xcode's actool is around; otherwise ship the prebuilt AppIcon.icns (also made by actool, via scripts/make-icon.sh).
 if xcrun --find actool >/dev/null 2>&1; then
-  xcrun actool "$PWD/Resources/AppIcon.icon" --compile "$PWD/$APP/Contents/Resources" --platform macosx \
+  xcrun actool "$PWD/Resources/AppIcon.icon" --compile "$APP/Contents/Resources" --platform macosx \
     --minimum-deployment-target 14.0 --app-icon AppIcon --output-partial-info-plist /dev/null >/dev/null
 else
   cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -41,8 +43,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LastFMAPIKey</key><string>${LASTFM_API_KEY}</string>
   <key>LastFMSecret</key><string>${LASTFM_SECRET}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>${OMNIAMP_VERSION:-0.1}</string>
+  <key>CFBundleVersion</key><string>${OMNIAMP_BUILD:-1}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -72,4 +74,4 @@ codesign --force --sign - "$APP" >/dev/null
 # The bundle was deleted and recreated: make Finder and the Dock drop the cached (placeholder) icon.
 touch "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
-echo "Built $PWD/$APP"
+echo "Built $APP"

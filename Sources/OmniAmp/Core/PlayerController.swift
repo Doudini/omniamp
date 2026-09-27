@@ -376,6 +376,7 @@ final class PlayerController {
         preloaded = nil
         preloadAttempted = false
         applyReplayGain()
+        if !store.tracks[index].isEpisode { player.rate = 1 }
         if store.tracks[index].isStream {
             player.playStream(url: store.tracks[index].url)
             Scrobbler.shared.trackStarted(nil, duration: 0)   // radio isn't scrobbled
@@ -385,6 +386,7 @@ final class PlayerController {
         }
         if store.tracks[index].isEpisode {
             let t = store.tracks[index]
+            player.rate = speed(for: t)
             player.playEpisode(url: t.url, from: resumePosition(for: t), duration: t.duration)
             Scrobbler.shared.trackStarted(nil, duration: 0)   // podcasts aren't scrobbled
             ui?.currentTrackDidChange(old: old, new: index)
@@ -670,6 +672,35 @@ final class PlayerController {
         setSleepTimer(minutes: nil)
     }
 
+    // MARK: Playback speed (podcasts and web files)
+
+    static let speeds: [Float] = [1, 1.25, 1.5, 1.75, 2]
+
+    /// Speed per show (web files share one), remembered between launches.
+    private var showSpeeds: [String: Float] {
+        get { (UserDefaults.standard.dictionary(forKey: "podcastSpeeds") as? [String: Double])?.mapValues { Float($0) } ?? [:] }
+        set { UserDefaults.standard.set(newValue.mapValues { Double($0) }, forKey: "podcastSpeeds") }
+    }
+
+    private func speedKey(_ t: Track) -> String { t.isWebFile ? "\u{0}web" : (t.podcast ?? "") }
+
+    func speed(for t: Track) -> Float { t.isEpisode ? (showSpeeds[speedKey(t)] ?? 1) : 1 }
+
+    /// The playing episode's speed (1 for anything else).
+    var currentSpeed: Float { currentTrack.map(speed(for:)) ?? 1 }
+
+    /// Change the speed of the playing episode's show.
+    func setSpeed(_ s: Float) {
+        guard let t = currentTrack, t.isEpisode else { return }
+        var all = showSpeeds
+        all[speedKey(t)] = s == 1 ? nil : s
+        showSpeeds = all
+        player.rate = s
+        updateNowPlaying()
+        if let i = currentIndex { ui?.playlistRowsDidUpdate([i]) }
+        ui?.optionsDidChange()
+    }
+
     // MARK: Resume position (audiobooks, podcasts, long mixes)
 
     /// Long files resume where they were left (≥ 10 minutes, or any .m4b audiobook).
@@ -837,7 +868,9 @@ final class PlayerController {
             let ext = (t.url.path as NSString).pathExtension.uppercased()
             let codec = ["MP3", "M4A", "AAC", "MP4", "OGG", "OPUS", "WAV"].contains(ext) ? (ext == "M4A" || ext == "MP4" ? "AAC" : ext) : ""
             let date = t.published.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .omitted) } ?? ""
-            return ([t.isWebFile ? "WEB" : "PODCAST", codec].filter { !$0.isEmpty }.joined(separator: " "), date)
+            let sp = speed(for: t)
+            let speedTag = sp == 1 ? "" : String(format: "%g×", sp)
+            return ([t.isWebFile ? "WEB" : "PODCAST", codec, speedTag].filter { !$0.isEmpty }.joined(separator: " "), date)
         }
         let playing = index == currentIndex && player.state != .stopped
         let ext = (t.path as NSString).pathExtension.lowercased()
@@ -909,6 +942,40 @@ final class PlayerController {
             self.seek(to: e.positionTime)
             return .success
         }
+        // Podcasts: 15 s back / 30 s forward instead of previous / next (switched per track in updateNowPlaying).
+        cc.skipBackwardCommand.preferredIntervals = [15]
+        cc.skipForwardCommand.preferredIntervals = [30]
+        cc.skipBackwardCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            self.seek(to: max(0, self.player.currentTime - 15))
+            return .success
+        }
+        cc.skipForwardCommand.addTarget { [weak self] _ in
+            guard let self else { return .commandFailed }
+            self.seek(to: min(self.player.duration, self.player.currentTime + 30))
+            return .success
+        }
+        cc.skipBackwardCommand.isEnabled = false
+        cc.skipForwardCommand.isEnabled = false
+    }
+
+    /// Cover for Now Playing: album art, station logo or show artwork, loaded once per track in the background.
+    private var nowPlayingArt: (key: String, art: MPMediaItemArtwork)?
+    private var nowPlayingArtRequest: String?
+
+    private func nowPlayingArtwork(for t: Track) -> MPMediaItemArtwork? {
+        if let a = nowPlayingArt, a.key == t.key { return a.art }
+        guard nowPlayingArtRequest != t.key else { return nil }
+        nowPlayingArtRequest = t.key
+        let key = t.key
+        let deliver: (CGImage?) -> Void = { [weak self] img in
+            guard let self, let img, self.currentTrack?.key == key else { return }
+            let image = NSImage(cgImage: img, size: NSSize(width: img.width, height: img.height))
+            self.nowPlayingArt = (key, MPMediaItemArtwork(boundsSize: image.size) { _ in image })
+            self.updateNowPlaying()
+        }
+        if t.isRemote { LogoStore.shared.load(t.logo, completion: deliver) } else { ArtworkStore.shared.load(t.path) { deliver($0.thumb) } }
+        return nil
     }
 
     func updateNowPlaying() {
@@ -918,24 +985,37 @@ final class PlayerController {
             center.playbackState = .stopped
             return
         }
+        // Podcasts get skip buttons; music and radio get previous / next.
+        let cc = MPRemoteCommandCenter.shared()
+        let skips = t.isEpisode
+        cc.skipBackwardCommand.isEnabled = skips
+        cc.skipForwardCommand.isEnabled = skips
+        cc.previousTrackCommand.isEnabled = !skips
+        cc.nextTrackCommand.isEnabled = !skips
+        let art = nowPlayingArtwork(for: t)
+        var info: [String: Any]
         if t.isStream {
-            center.nowPlayingInfo = [
+            info = [
                 MPMediaItemPropertyTitle: player.streamTitle ?? t.title ?? "Internet radio",
                 MPMediaItemPropertyArtist: t.title ?? player.streamInfo?.name ?? "",
                 MPNowPlayingInfoPropertyIsLiveStream: true,
                 MPNowPlayingInfoPropertyPlaybackRate: player.state == .playing ? 1.0 : 0.0,
             ]
-            center.playbackState = player.state == .playing ? .playing : .paused
-            return
+        } else {
+            info = [
+                MPMediaItemPropertyTitle: t.title ?? t.fileStem,
+                MPMediaItemPropertyArtist: t.artist ?? "",
+                MPMediaItemPropertyAlbumTitle: t.album ?? "",
+                MPMediaItemPropertyPlaybackDuration: player.duration,
+                MPNowPlayingInfoPropertyElapsedPlaybackTime: player.currentTime,
+                MPNowPlayingInfoPropertyPlaybackRate: player.state == .playing ? Double(player.rate) : 0.0,
+                MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+            ]
+            if t.isEpisode, let show = t.podcast, !show.isEmpty { info[MPMediaItemPropertyPodcastTitle] = show }
         }
-        center.nowPlayingInfo = [
-            MPMediaItemPropertyTitle: t.title ?? t.fileStem,
-            MPMediaItemPropertyArtist: t.artist ?? "",
-            MPMediaItemPropertyAlbumTitle: t.album ?? "",
-            MPMediaItemPropertyPlaybackDuration: player.duration,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: player.currentTime,
-            MPNowPlayingInfoPropertyPlaybackRate: player.state == .playing ? 1.0 : 0.0,
-        ]
+        info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
+        if let art { info[MPMediaItemPropertyArtwork] = art }
+        center.nowPlayingInfo = info
         center.playbackState = player.state == .playing ? .playing : .paused
     }
 

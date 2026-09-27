@@ -45,6 +45,7 @@ Press **RADIO** (or ⌘⌥R) to browse and search thousands of stations from [ra
 Press **PODCASTS** (or ⌘⌥P) to browse the top shows in your country or search the [Apple Podcasts](https://podcasts.apple.com) directory. Pick a show to see its episodes, subscribe to it, and play or add episodes to the playlist like any other track.
 - **Subscriptions:** new episodes are counted under SUBSCRIBED each time you open the window.
 - **Resume:** episodes continue where you stopped, and finished ones are marked as played.
+- **Speed:** 1× to 2× (Controls → Podcast Speed), remembered per show, without changing the pitch.
 - **Playback:** episodes stream through the macOS player, so the EQ and visualizer don't apply to them.
 - **Any feed:** **+ FEED** subscribes to shows that aren't in the directory, including private or paid feeds with a personal link.
 
@@ -89,7 +90,7 @@ Press **PODCASTS** (or ⌘⌥P) to browse the top shows in your country or searc
 **Look and feel**
 - **Visualizer:** click it to cycle spectrum (with peak hold) → oscilloscope → L/R level meters → off.
 - **Time display:** click the time to switch between elapsed and remaining.
-- **Now Playing and media keys:** macOS Now Playing and the keyboard media keys work.
+- **Now Playing and media keys:** OmniAmp shows up in macOS Now Playing (menu bar and Control Center) with cover art, and the media keys work. Podcasts get 15 s back / 30 s forward buttons there.
 
 ## Keyboard shortcuts
 
@@ -105,7 +106,22 @@ Press **PODCASTS** (or ⌘⌥P) to browse the top shows in your country or searc
 
 ## Get it
 
-OmniAmp is built from source for now; a signed download is planned. You need macOS 14 or later and Xcode (Swift 6).
+### Download
+
+Download the latest `OmniAmp-x.y.dmg` from [Releases](https://github.com/Doudini/omniamp/releases), open it and drag OmniAmp into Applications. Requires macOS 14 or later.
+
+OmniAmp isn't signed with a paid Apple Developer certificate, so macOS blocks it the first time:
+
+1. Open OmniAmp. When macOS says it can't check it, click **Done**.
+2. Open **System Settings → Privacy & Security**, scroll down to the message about OmniAmp and click **Open Anyway**.
+
+After that it opens normally. The DMG includes these steps as a text file. In the Terminal, `xattr -dr com.apple.quarantine /Applications/OmniAmp.app` does the same.
+
+Last.fm and ListenBrainz scrobbling work out of the box (Settings, ⌘,).
+
+### Build from source
+
+You need macOS 14 or later and Xcode (Swift 6).
 
 ```sh
 git clone https://github.com/Doudini/omniamp.git
@@ -118,7 +134,7 @@ Drag `OmniAmp.app` into `/Applications` to keep it.
 
 ### Last.fm API key (optional)
 
-Last.fm requires every app to have its own API key, so a build made from this repo has Last.fm scrobbling disabled until you add one. ListenBrainz works without a key.
+Last.fm requires every app to have its own API key, so a build made from this repo needs one for Last.fm scrobbling. ListenBrainz works without a key. Either enter your own key in **Settings → Last.fm → Use my own Last.fm API key**, or build it into the app:
 
 1. Create a free API account at <https://www.last.fm/api/account/create>.
 2. Put the key and secret in a `secrets.env` file in the repo root. Git ignores this file, so it is never committed:
@@ -134,6 +150,7 @@ Last.fm requires every app to have its own API key, so a build made from this re
 swift build            # debug build
 swift test             # unit tests
 ./scripts/make-app.sh  # release app bundle
+./scripts/make-dmg.sh 0.2   # dist/OmniAmp-0.2.dmg for sharing
 ```
 
 The app icon's source is `Resources/AppIcon.icon`. Open it in Icon Composer or edit its SVG, then run `./scripts/make-icon.sh`. The ideas we're saving for later are in [BACKLOG.md](BACKLOG.md).

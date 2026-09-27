@@ -23,6 +23,9 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     private let table = PlaylistTableView()
     private let scroll = NSScrollView()
     private let filterField = NSSearchField()
+    /// The search field only shows while jumping (J / ⌘F); hidden, it takes no room and the status gets it.
+    private var filterMinWidth: NSLayoutConstraint!
+    private var filterHiddenWidth: NSLayoutConstraint!
     private let statusLabel = NSTextField(labelWithString: "")
     private var clock: DisplayClock!
     private var addBtn: ModernButton!
@@ -190,6 +193,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             b.keyStyle = true
             b.housing = false
             b.keyBase = Theme.background.blended(withFraction: 0.35, of: Theme.panelTop)!   // matches the darker bottom bar
+            b.setContentHuggingPriority(.required, for: .horizontal)   // keys keep their size; the status takes spare room
         }
         root.addSubview(podcastBtn)
         root.addSubview(addBtn)
@@ -226,13 +230,16 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             podcastBtn.heightAnchor.constraint(equalToConstant: 22),
             filterField.leadingAnchor.constraint(equalTo: podcastBtn.trailingAnchor, constant: 12),
             filterField.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
-            filterField.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
+
 
             statusLabel.leadingAnchor.constraint(equalTo: filterField.trailingAnchor, constant: 10),
             statusLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             statusLabel.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
         ])
         KeyHousing.wrap([addBtn, radioBtn, podcastBtn], in: root)
+        filterMinWidth = filterField.widthAnchor.constraint(greaterThanOrEqualToConstant: 90)
+        filterHiddenWidth = filterField.widthAnchor.constraint(equalToConstant: 0)
+        setSearchVisible(false)
         // Push the panel's content below the transparent titlebar.
         panel.topInset = titlebarHeight
     }
@@ -243,6 +250,8 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         // Also fires while the saved frame is restored in init, before the UI exists.
         let narrow = (window?.frame.width ?? 600) < 520
         addBtn?.compact = narrow
+        // Icon-only keys are square.
+        for b in [addBtn, radioBtn, podcastBtn] { b?.iconWidth = narrow ? 22 : 34 }
         radioBtn?.compact = narrow
         podcastBtn?.compact = narrow
         infoView.compact = narrow
@@ -379,7 +388,20 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
 
     func focusFilter() {
+        setSearchVisible(true)
         window?.makeFirstResponder(filterField)
+    }
+
+    private func setSearchVisible(_ on: Bool) {
+        filterField.isHidden = !on
+        filterHiddenWidth.isActive = !on
+        filterMinWidth.isActive = on
+    }
+
+    /// Hide the search field again once it's empty and no longer being typed in.
+    private func hideSearchIfIdle() {
+        guard filterField.stringValue.isEmpty, window?.firstResponder !== filterField.currentEditor() else { return }
+        setSearchVisible(false)
     }
 
     // MARK: Actions
@@ -580,6 +602,12 @@ extension ModernWindowController: NSSearchFieldDelegate {
             table.scrollRowToVisible(max(0, r - visible / 2))
         }
         window?.makeFirstResponder(table)
+        setSearchVisible(false)
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard (obj.object as? NSSearchField) === filterField else { return }
+        DispatchQueue.main.async { [weak self] in self?.hideSearchIfIdle() }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
