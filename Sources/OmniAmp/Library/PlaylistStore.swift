@@ -169,6 +169,21 @@ final class PlaylistStore {
         loadMissingTags()
     }
 
+    /// A podcast episode already in the list got newer details from its feed (its own cover, notes…).
+    func updateEpisode(at i: Int, from new: Track) {
+        guard i < tracks.count, tracks[i].isEpisode else { return }
+        var t = tracks[i]
+        t.logo = new.logo ?? t.logo
+        t.title = new.title ?? t.title
+        t.summary = new.summary ?? t.summary
+        t.published = new.published ?? t.published
+        t.duration = t.duration ?? new.duration
+        guard t.logo != tracks[i].logo || t.title != tracks[i].title || t.summary != tracks[i].summary
+                || t.published != tracks[i].published || t.duration != tracks[i].duration else { return }
+        tracks[i] = t
+        delegate?.playlistDidUpdate(indices: [i])
+    }
+
     /// Files changed on disk: take the new size/mtime and read their tags again.
     func refresh(_ updates: [(index: Int, size: Int64, mtime: Double)]) {
         guard !updates.isEmpty else { return }

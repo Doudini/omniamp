@@ -48,6 +48,56 @@ final class PodcastTests: XCTestCase {
         XCTAssertNotNil(p.episodes[1].published, "single-digit day and GMT zone")
     }
 
+    func testEpisodeImageNumbersAndLinks() {
+        let xml = """
+        <rss xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel>
+          <title>Show</title><itunes:image href="https://example.com/show.jpg"/>
+          <item>
+            <title>Deep dive</title>
+            <itunes:image href="https://example.com/ep.jpg"/>
+            <itunes:season>2</itunes:season><itunes:episode>14</itunes:episode>
+            <description><![CDATA[<p>Read <a href="https://example.com/post?a=1&amp;b=2">the post</a> or
+              <a href='mailto:hi@example.com'>mail us</a>. <a href="javascript:x()">nope</a></p>
+              <p>Also https://example.org/bare</p>]]></description>
+            <enclosure url="https://example.com/e.mp3" type="audio/mpeg"/>
+          </item>
+          <item><title>Plain</title><enclosure url="https://example.com/p.mp3" type="audio/mpeg"/></item>
+        </channel></rss>
+        """
+        let p = PodcastFeedParser.parse(Data(xml.utf8))
+        let show = PodcastShow(feedURL: "f", title: "Show", author: "", artwork: "https://example.com/show.jpg")
+        let e = p.episodes[0]
+        XCTAssertEqual(p.artwork, "https://example.com/show.jpg", "an episode image doesn't replace the show's")
+        XCTAssertEqual(e.image, "https://example.com/ep.jpg")
+        XCTAssertEqual(e.artwork(show: show), "https://example.com/ep.jpg")
+        XCTAssertEqual(p.episodes[1].artwork(show: show), "https://example.com/show.jpg", "falls back to the show cover")
+        XCTAssertEqual(e.season, 2)
+        XCTAssertEqual(e.number, 14)
+        XCTAssertEqual(e.links, [["the post", "https://example.com/post?a=1&b=2"], ["mail us", "mailto:hi@example.com"]],
+                       "web and mail links only")
+        XCTAssertNil(p.episodes[1].links)
+
+        // In the notes pane the link texts become links again, and bare addresses are found too.
+        let notes = EpisodeNotesView.notes(e, font: .systemFont(ofSize: 11), color: .white)
+        var found: [String: String] = [:]
+        notes.enumerateAttribute(.link, in: NSRange(location: 0, length: notes.length)) { v, r, _ in
+            if let u = v as? URL { found[(notes.string as NSString).substring(with: r)] = u.absoluteString }
+        }
+        XCTAssertEqual(found["the post"], "https://example.com/post?a=1&b=2")
+        XCTAssertEqual(found["mail us"], "mailto:hi@example.com")
+        XCTAssertEqual(found["https://example.org/bare"], "https://example.org/bare")
+        XCTAssertNil(found["nope"])
+    }
+
+    func testOlderCachedEpisodesStillDecode() throws {
+        // Feed caches written before episodes had images, numbers and links.
+        let old = #"[{"title":"Old","url":"https://example.com/o.mp3","published":1,"duration":60,"summary":"s"}]"#
+        let eps = try JSONDecoder().decode([PodcastEpisode].self, from: Data(old.utf8))
+        XCTAssertEqual(eps.first?.title, "Old")
+        XCTAssertNil(eps.first?.image)
+        XCTAssertNil(eps.first?.links)
+    }
+
     func testDurationAndDates() {
         XCTAssertEqual(PodcastFeedParser.duration("62:03"), 3723)
         XCTAssertEqual(PodcastFeedParser.duration("45"), 45)

@@ -17,9 +17,17 @@ struct PodcastEpisode: Codable, Equatable {
     var published: Double?     // seconds since 1970
     var duration: Double?      // seconds
     var summary: String?       // show notes, plain text
+    var image: String?         // the episode's own artwork, if the feed has one
+    var season: Int?
+    var number: Int?           // episode number
+    /// Links from the show notes as [text, url] pairs (the plain-text notes keep only the text).
+    var links: [[String]]?
+
+    /// The episode's own image, else the show's.
+    func artwork(show: PodcastShow) -> String? { image ?? show.artwork }
 
     func track(show: PodcastShow) -> Track {
-        .episode(url, title: title, show: show.title, artwork: show.artwork, duration: duration, published: published, summary: summary)
+        .episode(url, title: title, show: show.title, artwork: artwork(show: show), duration: duration, published: published, summary: summary)
     }
 }
 
@@ -117,7 +125,7 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
             if itemURL == nil, let u = attributes["url"], !u.isEmpty { itemURL = u; itemType = attributes["type"] }
         case "itunes:image":
             if let h = attributes["href"], !h.isEmpty {
-                if item == nil { artwork = artwork ?? h }
+                if item == nil { artwork = artwork ?? h } else if item?["image"] == nil { item?["image"] = h }
             }
         default: break
         }
@@ -134,15 +142,20 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if item != nil {
             switch n {
-            case "title", "pubdate", "itunes:duration", "description", "itunes:summary", "content:encoded":
+            case "title", "pubdate", "itunes:duration", "description", "itunes:summary", "content:encoded", "itunes:season", "itunes:episode":
                 if item?[n] == nil, !value.isEmpty { item?[n] = value }
             case "item":
                 if let it = item, let url = itemURL, Self.isAudio(url: url, type: itemType) {
                     let notes = it["description"] ?? it["itunes:summary"] ?? it["content:encoded"]
+                    let links = notes.map(Self.links) ?? []
                     episodes.append(PodcastEpisode(title: it["title"] ?? "Untitled episode", url: url,
                                                    published: it["pubdate"].flatMap(Self.date),
                                                    duration: it["itunes:duration"].flatMap(Self.duration),
-                                                   summary: notes.map(Self.plainText)))
+                                                   summary: notes.map(Self.plainText),
+                                                   image: it["image"],
+                                                   season: it["itunes:season"].flatMap { Int($0) },
+                                                   number: it["itunes:episode"].flatMap { Int($0) },
+                                                   links: links.isEmpty ? nil : links))
                 }
                 item = nil
             default: break
@@ -194,6 +207,22 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
         return secs > 0 ? secs : nil
     }
 
+    /// The notes' links as [text, url] (web and mail links only, at most 30): the notes pane puts them back
+    /// on the text that plainText keeps.
+    static func links(_ html: String) -> [[String]] {
+        guard let re = try? NSRegularExpression(pattern: "<a\\s[^>]*href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+                                                options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return [] }
+        let ns = html as NSString
+        var out: [[String]] = []
+        for m in re.matches(in: html, range: NSRange(location: 0, length: ns.length)) where out.count < 30 {
+            let href = ns.substring(with: m.range(at: 1)).replacingOccurrences(of: "&amp;", with: "&")
+            guard let scheme = URL(string: href)?.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) else { continue }
+            let text = plainText(ns.substring(with: m.range(at: 2)))
+            if !text.isEmpty { out.append([text, href]) }
+        }
+        return out
+    }
+
     /// Show notes are HTML: keep the text, one paragraph per line, and cap the length.
     static func plainText(_ html: String) -> String {
         var s = html.replacingOccurrences(of: "<br\\s*/?>|</p>|</li>", with: "\n", options: [.regularExpression, .caseInsensitive])
@@ -212,6 +241,8 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
 
 final class PodcastLibrary {
     static let shared = PodcastLibrary()
+    /// An episode was marked played, or its resume position was saved or cleared.
+    static let progressChanged = Notification.Name("OmniAmp.podcastProgressChanged")
     var transport: HTTPTransport = URLSessionTransport()
 
     private struct FeedCache: Codable {
@@ -301,6 +332,21 @@ final class PodcastLibrary {
         if on { played.insert(url) } else { played.remove(url) }
         if played.count > 5000 { played = Set(played.prefix(4000)) }
         save(Array(played), "played.json")
+        NotificationCenter.default.post(name: Self.progressChanged, object: nil)
+    }
+
+    /// An episode from the feeds read so far or the subscriptions' saved feeds (nil if none has it).
+    func knownEpisode(_ url: String) -> PodcastEpisode? {
+        for c in feeds.values { if let e = c.episodes.first(where: { $0.url == url }) { return e } }
+        for s in subscriptions where feeds[s.feedURL] == nil {
+            if let e = cachedEpisodes(s).first(where: { $0.url == url }) { return e }
+        }
+        return nil
+    }
+
+    /// Newest episode date the user had seen of a subscribed show (nil: not subscribed, nothing is "new").
+    func seenMark(_ show: PodcastShow) -> Double? {
+        isSubscribed(show) ? (seen[show.feedURL] ?? .infinity) : nil
     }
 
     /// Episodes released since the user last opened this show.

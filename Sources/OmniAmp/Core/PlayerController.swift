@@ -231,7 +231,11 @@ final class PlayerController {
         /// Add a podcast episode (or find it if it's already in the playlist). Returns its index.
     @discardableResult
     func addEpisode(_ episode: Track) -> Int {
-        if let i = store.tracks.firstIndex(where: { $0.path == episode.path }) { return i }
+        if let i = store.tracks.firstIndex(where: { $0.path == episode.path }) {
+            store.updateEpisode(at: i, from: episode)   // e.g. added before episodes had their own covers
+            scheduleSave()
+            return i
+        }
         insertScanned([episode], at: store.tracks.count)
         return store.tracks.count - 1
     }
@@ -392,6 +396,11 @@ final class PlayerController {
             return
         }
         if store.tracks[index].isEpisode {
+            // Pick up what the podcast library knows now (the episode's own cover for older entries).
+            if let e = PodcastLibrary.shared.knownEpisode(store.tracks[index].path), let show = store.tracks[index].podcast {
+                store.updateEpisode(at: index, from: .episode(e.url, title: e.title, show: show, artwork: e.image, duration: e.duration,
+                                                              published: e.published, summary: e.summary))
+            }
             let t = store.tracks[index]
             player.rate = speed(for: t)
             player.playEpisode(url: t.url, from: resumePosition(for: t), duration: t.duration)
@@ -724,9 +733,11 @@ final class PlayerController {
         return d >= 600 || (t.path as NSString).pathExtension.lowercased() == "m4b"
     }
 
+    /// Kept in memory too: the podcast window asks for every episode row it draws.
+    private lazy var resumeCache = UserDefaults.standard.dictionary(forKey: "resumePositions") as? [String: Double] ?? [:]
     private var resumePositions: [String: Double] {
-        get { UserDefaults.standard.dictionary(forKey: "resumePositions") as? [String: Double] ?? [:] }
-        set { UserDefaults.standard.set(newValue, forKey: "resumePositions") }
+        get { resumeCache }
+        set { resumeCache = newValue; UserDefaults.standard.set(newValue, forKey: "resumePositions") }
     }
 
     private func resumePosition(for t: Track) -> Double {
@@ -744,6 +755,7 @@ final class PlayerController {
         // Keep the list small.
         if all.count > 300 { for k in all.keys.prefix(all.count - 300) { all.removeValue(forKey: k) } }
         resumePositions = all
+        if t.isEpisode { NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil) }
     }
 
     private func forgetPosition(_ path: String?) {
@@ -751,6 +763,16 @@ final class PlayerController {
         var all = resumePositions
         all.removeValue(forKey: p)
         resumePositions = all
+        NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil)
+    }
+
+    /// How far into an episode the user got: the live position for the one playing, else the saved one.
+    /// nil = not started (or finished). `duration` is nil when only the feed could say.
+    func episodeProgress(_ url: String) -> (position: Double, duration: Double?)? {
+        if let t = currentTrack, t.isEpisode, t.path == url, player.isPlayingEpisode, player.currentTime > 0 {
+            return (player.currentTime, player.duration > 0 ? player.duration : nil)
+        }
+        return resumePositions[url].map { ($0, nil) }
     }
 
     // MARK: ReplayGain

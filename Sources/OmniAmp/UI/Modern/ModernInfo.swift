@@ -116,9 +116,12 @@ final class HoverCard {
 
     /// Show next to `anchor` (screen rect of the thumbnail). The small thumbnail shows at once; the sharp
     /// large rendering replaces it when ready.
-    func show(path: String, thumb: CGImage?, lines: String, near anchor: NSRect) {
+    /// `logo`: a station or podcast image (web) instead of a file's embedded cover.
+    func show(path: String, thumb: CGImage?, lines: String, near anchor: NSRect, logo: String? = nil,
+              placeholder: String = Fonts.Icon.music) {
         self.path = path
-        art.image = thumb
+        art.placeholder = placeholder
+        art.image = logo.map { LogoStore.shared.cached($0) } ?? thumb
         text.stringValue = lines
         let size = panel.frame.size
         let screen = NSScreen.screens.first { $0.frame.intersects(anchor) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
@@ -129,6 +132,15 @@ final class HoverCard {
         panel.alphaValue = 0
         panel.orderFront(nil)
         NSAnimationContext.runAnimationGroup { $0.duration = 0.12; panel.animator().alphaValue = 1 }
+        if let logo {
+            if art.image == nil {
+                LogoStore.shared.load(logo) { [weak self] img in
+                    guard let self, self.path == path else { return }
+                    self.art.image = img
+                }
+            }
+            return
+        }
         guard thumb != nil else { return }
         ArtworkStore.shared.largeImage(path, maxPixels: Int(Self.artSize * 2)) { [weak self] img in
             guard let self, self.path == path, let img else { return }
@@ -172,6 +184,7 @@ final class ModernInfoView: NSView {
     private let rule = NSBox()
     private var revealButton: ModernButton!
     private var shownPath: String?
+    private var shownLogo: String?
     private var artSize: NSLayoutConstraint!
     static let artFull: CGFloat = 120
     static let artCompact: CGFloat = 84
@@ -335,7 +348,8 @@ final class ModernInfoView: NSView {
         rule.isHidden = false
         if t.isRemote {
             if t.isStream { applyRadio(index: i) } else { applyEpisode(index: i) }
-            if pathChanged || art.image == nil {
+            if pathChanged || art.image == nil || shownLogo != t.logo {
+                shownLogo = t.logo
                 art.image = LogoStore.shared.cached(t.logo)
                 LogoStore.shared.load(t.logo) { [weak self] img in
                     guard let self, self.shownPath == t.path else { return }

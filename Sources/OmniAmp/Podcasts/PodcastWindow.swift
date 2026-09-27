@@ -2,7 +2,8 @@ import AppKit
 
 /// Podcast browser in the modern look: top shows per country, search, subscriptions (with new-episode
 /// counts), and the selected show's episodes. Episodes play like any track and remember their position.
-final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
+                                    NSSplitViewDelegate {
     private let controller: PlayerController
     private let library = PodcastLibrary.shared
     private var topButton: ModernButton!
@@ -24,6 +25,20 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var episodesTask: Task<Void, Never>?
     private var showingSubscriptions: Bool
     private var themeObserver: NSObjectProtocol?
+    private var progressObserver: NSObjectProtocol?
+    /// Episodes released after this are marked new (nil: the show isn't subscribed). Taken when the show
+    /// opens, so the marks stay while you look, though opening it counts as having seen them.
+    private var newSince: Double?
+    /// Episode list above, show notes below (collapsible).
+    private let split = NotesSplitView()
+    /// Shows on the left, the selected show on the right; the gap between them is a draggable divider.
+    private let panes = PaneSplitView()
+    private let rightPane = NSView()
+    private static let showsWidthKey = "podcastShowsWidth"
+    private let notes = EpisodeNotesView()
+    private var notesButton: ModernButton!
+    private var progressTimer: Timer?
+    private static let notesOpenKey = "podcastNotesOpen", notesHeightKey = "podcastNotesHeight"
 
     private static let countries = RadioWindowController.countries.filter { !$0.1.isEmpty }
 
@@ -48,15 +63,44 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             self?.showsTable.reloadData()
             self?.episodesTable.reloadData()
         }
+        progressObserver = NotificationCenter.default.addObserver(forName: PodcastLibrary.progressChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshMarks()
+        }
         load()
         refreshSubscriptions()
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    deinit { themeObserver.map(NotificationCenter.default.removeObserver) }
+    deinit {
+        themeObserver.map(NotificationCenter.default.removeObserver)
+        progressObserver.map(NotificationCenter.default.removeObserver)
+    }
 
     /// Opening the window again checks subscribed shows for new episodes.
-    func windowDidBecomeKey(_ notification: Notification) { refreshSubscriptions() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        refreshSubscriptions()
+        refreshMarks()
+        startProgressTimer()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        progressTimer?.invalidate()
+        progressTimer = nil
+    }
+
+    /// While an episode plays, its pie keeps up (every few seconds; nothing runs when the window is closed).
+    private func startProgressTimer() {
+        guard progressTimer == nil else { return }
+        let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self, self.window?.occlusionState.contains(.visible) == true,
+                  self.controller.player.isPlayingEpisode, self.controller.player.state == .playing,
+                  let url = self.controller.currentTrack?.path, let row = self.episodes.firstIndex(where: { $0.url == url }) else { return }
+            self.episodesTable.reloadData(forRowIndexes: [row], columnIndexes: [0])
+            if self.episodesTable.selectedRow == row { self.updateNotes() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        progressTimer = t
+    }
 
     // MARK: Layout
 
@@ -69,7 +113,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func style(_ table: NSTableView, _ scroll: NSScrollView, rowHeight: CGFloat) {
         table.headerView = nil
-        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.columnAutoresizingStyle = .noColumnAutoresizing   // fitColumns() sizes the flexible one
         table.dataSource = self
         table.delegate = self
         table.target = self
@@ -121,7 +165,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             showsTable.addTableColumn(column("show", 300, flexible: true))
             style(showsTable, showsScroll, rowHeight: 46)
             showsTable.action = #selector(showClicked)
-            episodesTable.addTableColumn(column("mark", 16))
+            episodesTable.addTableColumn(column("mark", 14))
+            episodesTable.addTableColumn(column("art", 20))
             episodesTable.addTableColumn(column("title", 300, flexible: true))
             episodesTable.addTableColumn(column("date", 92))
             episodesTable.addTableColumn(column("length", 62))
@@ -133,6 +178,15 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
                 t.backgroundColor = Theme.lcd
                 s.backgroundColor = Theme.lcd
             }
+        }
+        notes.applyTheme()
+        if split.subviews.isEmpty {
+            split.isVertical = false
+            split.dividerStyle = .thin
+            split.delegate = self
+            split.addArrangedSubview(episodesScroll)
+            split.addArrangedSubview(notes)
+            notes.isHidden = !UserDefaults.standard.bool(forKey: Self.notesOpenKey)
         }
 
         showTitle.font = Fonts.hack(13, bold: true)
@@ -155,10 +209,13 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         credit.isBordered = false
         credit.attributedTitle = NSAttributedString(string: "directory: Apple Podcasts",
                                                     attributes: [.font: Fonts.hack(9), .foregroundColor: Theme.phosphorDim])
+        notesButton = ModernButton(glyph: Fonts.Icon.info, label: "NOTES", target: self, action: #selector(toggleNotes))
+        notesButton.isOn = !notes.isHidden
+        notesButton.toolTip = "Show notes of the selected episode"
         let playedButton = ModernButton(glyph: Fonts.Icon.check, label: "PLAYED", target: self, action: #selector(togglePlayed))
         let add = ModernButton(glyph: Fonts.Icon.plus, label: "ADD", target: self, action: #selector(addSelected))
         let play = ModernButton(glyph: Fonts.Icon.play, label: "PLAY", target: self, action: #selector(playSelected))
-        for b in [playedButton, add, play] { b.glyphSize = 10 }
+        for b in [notesButton!, playedButton, add, play] { b.glyphSize = 10 }
         playedButton.toolTip = "Mark the selected episodes as played / unplayed"
         add.toolTip = "Add the selected episodes to the playlist"
         play.toolTip = "Play now (double-click)"
@@ -171,17 +228,27 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         top.spacing = 6
         let header = NSStackView(views: [showTitle, NSView(), subscribeButton])
         header.spacing = 8
-        let bottom = NSStackView(views: [status, NSView(), credit, playedButton, add, play])
+        let bottom = NSStackView(views: [status, NSView(), credit, notesButton, playedButton, add, play])
         bottom.spacing = 6
         let root = NSView()
-        for v in [title, top, showsScroll, header, showInfo, episodesScroll, bottom] as [NSView] {
+        for v in [title, top, panes, bottom] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
-        for b in [topButton!, subscribedButton!, subscribeButton!, playedButton, add, play] { b.heightAnchor.constraint(equalToConstant: 22).isActive = true }
+        // Right side: rebuilt with the theme (a new header each time), the episode/notes split moves over.
+        rightPane.subviews.forEach { $0.removeFromSuperview() }
+        for v in [header, showInfo, split] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            rightPane.addSubview(v)
+        }
+        if panes.subviews.isEmpty {
+            panes.isVertical = true
+            panes.delegate = self
+            panes.addArrangedSubview(showsScroll)
+            panes.addArrangedSubview(rightPane)
+        }
+        for b in [topButton!, subscribedButton!, subscribeButton!, notesButton!, playedButton, add, play] { b.heightAnchor.constraint(equalToConstant: 22).isActive = true }
         search.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let showsWidth = showsScroll.widthAnchor.constraint(equalTo: root.widthAnchor, multiplier: 0.36)
-        showsWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
             title.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
             title.centerXAnchor.constraint(equalTo: root.centerXAnchor),
@@ -189,22 +256,21 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             top.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             top.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
 
-            showsScroll.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 10),
-            showsScroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
-            showsScroll.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -10),
-            showsWidth,
-            showsScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
+            panes.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 10),
+            panes.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
+            panes.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            panes.bottomAnchor.constraint(equalTo: bottom.topAnchor, constant: -10),
 
-            header.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 10),
-            header.leadingAnchor.constraint(equalTo: showsScroll.trailingAnchor, constant: 12),
-            header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            header.topAnchor.constraint(equalTo: rightPane.topAnchor),
+            header.leadingAnchor.constraint(equalTo: rightPane.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: rightPane.trailingAnchor),
             showInfo.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             showInfo.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             showInfo.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            episodesScroll.topAnchor.constraint(equalTo: showInfo.bottomAnchor, constant: 8),
-            episodesScroll.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            episodesScroll.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            episodesScroll.bottomAnchor.constraint(equalTo: showsScroll.bottomAnchor),
+            split.topAnchor.constraint(equalTo: showInfo.bottomAnchor, constant: 8),
+            split.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            split.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            split.bottomAnchor.constraint(equalTo: rightPane.bottomAnchor),
 
             bottom.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             bottom.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
@@ -212,6 +278,121 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         ])
         window?.contentView = root
         updateHeader()
+        DispatchQueue.main.async {
+            self.restoreShowsWidth()
+            if !self.notes.isHidden { self.restoreNotesHeight() }
+            self.fitColumns()
+        }
+    }
+
+    private func restoreShowsWidth() {
+        panes.layoutSubtreeIfNeeded()
+        let saved = UserDefaults.standard.double(forKey: Self.showsWidthKey)
+        let w = saved > 0 ? saved : (panes.bounds.width * 0.36).rounded()
+        panes.setPosition(min(max(w, Self.minShows), max(Self.minShows, panes.bounds.width - Self.minEpisodes)), ofDividerAt: 0)
+    }
+
+    private static let minShows: CGFloat = 200, minEpisodes: CGFloat = 380
+
+    // MARK: Columns
+
+    /// The flexible column (show name, episode title) takes exactly the room left, so dates and lengths
+    /// always end at the right edge instead of running past it.
+    private func fitColumns() {
+        for (table, flexible) in [(showsTable, "show"), (episodesTable, "title")] {
+            guard let col = table.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier(flexible)),
+                  let clip = table.enclosingScrollView?.contentView else { continue }
+            let others = table.tableColumns.filter { $0 !== col }.reduce(0) { $0 + $1.width }
+            let spacing = table.intercellSpacing.width * CGFloat(table.tableColumns.count)
+            let w = max(col.minWidth, (clip.bounds.width - others - spacing).rounded(.down))
+            if abs(col.width - w) > 0.5 { col.width = w }
+        }
+    }
+
+    // MARK: Show notes pane
+
+    @objc private func toggleNotes() {
+        notes.isHidden.toggle()
+        UserDefaults.standard.set(!notes.isHidden, forKey: Self.notesOpenKey)
+        notesButton.isOn = !notes.isHidden
+        split.adjustSubviews()
+        split.needsDisplay = true   // or the old divider line stays behind
+        if !notes.isHidden { restoreNotesHeight(); updateNotes() }
+        episodesTable.reloadData()   // the title tooltips are only there while the pane is closed
+    }
+
+    private func restoreNotesHeight() {
+        split.layoutSubtreeIfNeeded()
+        let saved = UserDefaults.standard.double(forKey: Self.notesHeightKey)
+        let h = min(max(saved > 0 ? saved : 170, 90), max(90, split.bounds.height - 90))
+        split.setPosition(split.bounds.height - h - split.dividerThickness, ofDividerAt: 0)
+    }
+
+    func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool { splitView === split && notes.isHidden }
+
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposed: CGFloat, ofSubviewAt i: Int) -> CGFloat {
+        splitView === panes ? max(proposed, Self.minShows) : max(proposed, 80)   // keep a few episode rows
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposed: CGFloat, ofSubviewAt i: Int) -> CGFloat {
+        if splitView === panes { return min(proposed, splitView.bounds.width - Self.minEpisodes - splitView.dividerThickness) }
+        return min(proposed, splitView.bounds.height - 90 - splitView.dividerThickness)   // notes: cover and a line or two
+    }
+
+    /// Window resizes go to the episode list: the notes keep their height, the show list its width.
+    func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool {
+        view !== notes && view !== showsScroll
+    }
+
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        fitColumns()
+        if (notification.object as? NSSplitView) === panes {
+            if showsScroll.frame.width >= Self.minShows { UserDefaults.standard.set(showsScroll.frame.width, forKey: Self.showsWidthKey) }
+            return
+        }
+        guard !notes.isHidden, notes.frame.height >= 90 else { return }
+        UserDefaults.standard.set(notes.frame.height, forKey: Self.notesHeightKey)
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        if (notification.object as? NSTableView) === episodesTable { updateNotes() }
+    }
+
+    private func updateNotes() {
+        guard !notes.isHidden else { return }
+        let row = episodesTable.selectedRow
+        guard let s = currentShow, row >= 0, row < episodes.count else { notes.show(nil, show: nil, status: nil); return }
+        let e = episodes[row]
+        let status: String?
+        switch mark(for: e) {
+        case .played: status = "Played"
+        case .new: status = "New"
+        case .progress:
+            let p = controller.episodeProgress(e.url)
+            let d = p?.duration ?? e.duration
+            status = d.flatMap { d in p.map { "\(max(1, Int((d - $0.position) / 60))) min left" } } ?? "Started"
+        case .none: status = nil
+        }
+        notes.show(e, show: s, status: status)
+    }
+
+    // MARK: Markers
+
+    private func mark(for e: PodcastEpisode) -> EpisodeMarkView.State {
+        if library.isPlayed(e.url) { return .played }
+        if let p = controller.episodeProgress(e.url) {
+            let d = p.duration ?? e.duration
+            return .progress(d.flatMap { $0 > 0 ? min(1, max(0, p.position / $0)) : nil })
+        }
+        if let since = newSince, let pub = e.published, pub > since { return .new }
+        return .none
+    }
+
+    /// Played / started changed somewhere: markers and titles (played ones are dimmed).
+    private func refreshMarks() {
+        guard !episodes.isEmpty else { return }
+        episodesTable.reloadData(forRowIndexes: IndexSet(integersIn: 0..<episodes.count), columnIndexes: [0, 2])
+        updateNotes()
     }
 
     // MARK: Loading shows
@@ -335,10 +516,12 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func open(_ show: PodcastShow) {
         currentShow = show
+        newSince = library.seenMark(show)
         episodes = library.cachedEpisodes(show)
         episodesTable.reloadData()
         scrollToTop(episodesScroll)
         updateHeader()
+        updateNotes()
         episodesTask?.cancel()
         if episodes.isEmpty { status.stringValue = "Loading episodes…" }
         episodesTask = Task { @MainActor in
@@ -410,7 +593,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard !eps.isEmpty else { return }
         let makePlayed = !eps.allSatisfy { library.isPlayed($0.url) }
         for e in eps { library.markPlayed(e.url, makePlayed) }
-        episodesTable.reloadData(forRowIndexes: episodesTable.selectedRowIndexes, columnIndexes: IndexSet(integersIn: 0..<4))
+        episodesTable.reloadData(forRowIndexes: episodesTable.selectedRowIndexes, columnIndexes: IndexSet(integersIn: 0..<5))
+        updateNotes()
     }
 
     // MARK: Tables
@@ -430,26 +614,44 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         guard row < episodes.count else { return nil }
         let e = episodes[row]
-        let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? NSTextField) ?? {
+        if id == "mark" {
+            let v = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? EpisodeMarkView) ?? EpisodeMarkView()
+            v.identifier = NSUserInterfaceItemIdentifier(id)
+            v.state = mark(for: e)
+            return v
+        }
+        if id == "art" {
+            let v = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? EpisodeArtCell) ?? EpisodeArtCell()
+            v.identifier = NSUserInterfaceItemIdentifier(id)
+            v.show(currentShow.flatMap { e.artwork(show: $0) })
+            return v
+        }
+        // Text centered in the row, level with the thumbnail and marker.
+        let host = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? NSTableCellView) ?? {
+            let v = NSTableCellView()
+            v.identifier = NSUserInterfaceItemIdentifier(id)
             let f = NSTextField(labelWithString: "")
-            f.identifier = NSUserInterfaceItemIdentifier(id)
             f.lineBreakMode = .byTruncatingTail
-            return f
+            f.translatesAutoresizingMaskIntoConstraints = false
+            f.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            v.addSubview(f)
+            v.textField = f
+            NSLayoutConstraint.activate([
+                f.leadingAnchor.constraint(equalTo: v.leadingAnchor), f.trailingAnchor.constraint(equalTo: v.trailingAnchor),
+                f.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            ])
+            return v
         }()
+        let cell = host.textField!
         let played = library.isPlayed(e.url)
         let dim = Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)!
         cell.alignment = .left
         switch id {
-        case "mark":
-            cell.stringValue = played ? Fonts.Icon.check : ""
-            cell.font = Theme.icon(10)
-            cell.textColor = Theme.phosphorDim
-            cell.alignment = .center
         case "title":
             cell.stringValue = e.title
             cell.font = Fonts.hack(12, bold: !played)
             cell.textColor = played ? dim : Theme.playlistText
-            cell.toolTip = e.summary
+            cell.toolTip = notes.isHidden ? e.summary : nil   // the notes pane shows them when open
         case "date":
             cell.stringValue = e.published.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .omitted) } ?? ""
             cell.font = Fonts.hack(10.5)
@@ -460,7 +662,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             cell.textColor = dim
             cell.alignment = .right
         }
-        return cell
+        return host
     }
 }
 

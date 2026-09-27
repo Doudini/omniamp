@@ -544,21 +544,23 @@ final class ModernPanelView: NSView {
             marquee.text = c.title(for: i)
             updateInfoLines()
             let path = c.tracks[i].path
-            if path != artPath {
-                artPath = path
+            // Keyed on the image too: an episode can get its own cover after it started.
+            let key = path + "|" + (c.tracks[i].logo ?? "")
+            if key != artPath {
+                artPath = key
                 let t = c.tracks[i]
                 art.placeholder = ArtView.placeholder(for: t)
                 if t.isRemote {
                     // Radio / podcasts: the station logo or show artwork takes the cover's place.
                     art.image = LogoStore.shared.cached(t.logo)
                     LogoStore.shared.load(t.logo) { [weak self] img in
-                        guard let self, self.artPath == path else { return }
+                        guard let self, self.artPath == key else { return }
                         self.art.image = img
                     }
                 } else {
                     art.image = ArtworkStore.shared.cached(path)?.thumb
                     ArtworkStore.shared.load(path) { [weak self] e in
-                        guard let self, self.artPath == path else { return }
+                        guard let self, self.artPath == key else { return }
                         self.art.image = e.thumb
                     }
                 }
@@ -610,12 +612,21 @@ final class ModernPanelView: NSView {
         let w = DispatchWorkItem { [weak self] in
             guard let self, let c = self.controller, let i = c.currentIndex, i < c.tracks.count, let win = self.window else { return }
             let t = c.tracks[i]
+            let anchor = win.convertToScreen(self.art.convert(self.art.bounds, to: nil))
+            if t.isRemote {
+                // Episode: its title, the show and the date; station: its name and the song on air.
+                let lines = t.isEpisode
+                    ? [t.title, t.podcast, t.published.map { Date(timeIntervalSince1970: $0).formatted(date: .long, time: .omitted) }]
+                    : [t.title ?? c.player.streamInfo?.name, c.player.streamTitle]
+                self.hoverCard.show(path: t.path, thumb: nil, lines: lines.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n"),
+                                    near: anchor, logo: t.logo, placeholder: ArtView.placeholder(for: t))
+                return
+            }
             let e = ArtworkStore.shared.cached(t.path)
             let d = e?.details
             var lines = [d?.album ?? t.album, [d?.albumArtist ?? d?.artist ?? t.artist, d?.year].compactMap { $0 }.joined(separator: " · ")]
                 .compactMap { $0 }.filter { !$0.isEmpty }
             if lines.isEmpty { lines = [t.displayTitle] }
-            let anchor = win.convertToScreen(self.art.convert(self.art.bounds, to: nil))
             self.hoverCard.show(path: t.path, thumb: e?.thumb, lines: lines.joined(separator: "\n"), near: anchor)
         }
         hoverWork = w
