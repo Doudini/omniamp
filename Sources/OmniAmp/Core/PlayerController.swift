@@ -403,7 +403,9 @@ final class PlayerController {
             }
             let t = store.tracks[index]
             player.rate = speed(for: t)
-            player.playEpisode(url: t.url, from: resumePosition(for: t), duration: t.duration)
+            // Downloaded: play from disk (offline too). The track keeps its web address as its identity.
+            player.playEpisode(url: PodcastDownloads.shared.localFile(t.path) ?? t.url, from: resumePosition(for: t), duration: t.duration)
+            PodcastLibrary.shared.noteListened(t.path)
             Scrobbler.shared.trackStarted(nil, duration: 0)   // podcasts aren't scrobbled
             ui?.currentTrackDidChange(old: old, new: index)
             updateNowPlaying()
@@ -649,7 +651,10 @@ final class PlayerController {
     /// A track reached its end on its own (not Next).
     private func trackFinished() {
         forgetPosition(currentTrack?.key)
-        if let t = currentTrack, t.isEpisode { PodcastLibrary.shared.markPlayed(t.path) }
+        if let t = currentTrack, t.isEpisode {
+            PodcastLibrary.shared.markPlayed(t.path)
+            PodcastDownloads.shared.remove(t.path)   // heard to the end: the download has done its job
+        }
         if stopAfterCurrent {
             stopAfterCurrent = false
             player.stop()
@@ -755,7 +760,10 @@ final class PlayerController {
         // Keep the list small.
         if all.count > 300 { for k in all.keys.prefix(all.count - 300) { all.removeValue(forKey: k) } }
         resumePositions = all
-        if t.isEpisode { NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil) }
+        if t.isEpisode {
+            PodcastLibrary.shared.noteListened(t.path)
+            NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil)
+        }
     }
 
     private func forgetPosition(_ path: String?) {
@@ -765,6 +773,9 @@ final class PlayerController {
         resumePositions = all
         NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil)
     }
+
+    /// Web addresses of the episodes with a saved position (started, not finished).
+    var startedEpisodeURLs: [String] { resumePositions.keys.filter { $0.hasPrefix("http") } }
 
     /// How far into an episode the user got: the live position for the one playing, else the saved one.
     /// nil = not started (or finished). `duration` is nil when only the feed could say.

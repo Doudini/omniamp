@@ -502,7 +502,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let k = PlayerController.SortKey(rawValue: sender.representedObject as? String ?? "") { controller.sort(by: k) }
     }
     @objc private func revealSelected(_ sender: Any?) {
-        let urls = (look?.selectedTrackIndices ?? []).map { controller.tracks[$0].url }.filter(\.isFileURL)
+        // Files, and podcast episodes that were downloaded.
+        let urls = (look?.selectedTrackIndices ?? []).compactMap { i -> URL? in
+            let t = controller.tracks[i]
+            return t.isEpisode ? PodcastDownloads.shared.localFile(t.path) : (t.url.isFileURL ? t.url : nil)
+        }
         if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
     }
     @objc private func removeDeadFiles(_ sender: Any?) {

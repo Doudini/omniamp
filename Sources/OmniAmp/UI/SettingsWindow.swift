@@ -1,6 +1,6 @@
 import AppKit
 
-/// Settings (⌘,). Currently: scrobbling to Last.fm and ListenBrainz.
+/// Settings (⌘,): scrobbling to Last.fm and ListenBrainz, and where podcast downloads go.
 final class SettingsWindowController: NSWindowController {
     private let lfmStatus = NSTextField(labelWithString: "")
     private var lfmButton: NSButton!
@@ -14,6 +14,7 @@ final class SettingsWindowController: NSWindowController {
     private let ownSecret = NSSecureTextField()
     private var ownKeyRows: NSStackView!
     private var stack: NSStackView!
+    private let folderLabel = NSTextField(labelWithString: "")
     private var authTask: Task<Void, Never>?
 
     init() {
@@ -71,6 +72,14 @@ final class SettingsWindowController: NSWindowController {
         for r in [lfmRow, lbRow, tokenRow, queueRow] { r.orientation = .horizontal; r.distribution = .fill }
         lbToken.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
+        folderLabel.lineBreakMode = .byTruncatingMiddle
+        folderLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let reveal = NSButton(title: "Show in Finder", target: self, action: #selector(revealDownloads))
+        let change = NSButton(title: "Change…", target: self, action: #selector(changeDownloads))
+        let folderRow = NSStackView(views: [folderLabel, NSView(), reveal, change])
+        folderRow.orientation = .horizontal
+        folderRow.distribution = .fill
+
         let stack = NSStackView(views: [
             header("Last.fm"), lfmRow,
             note("Connecting opens last.fm in your browser; approve OmniAmp there and come back."),
@@ -79,6 +88,8 @@ final class SettingsWindowController: NSWindowController {
             note("Your token is on listenbrainz.org → Settings. Tokens and sessions are stored in your Keychain."),
             header("Queue"), queueRow,
             note("Plays count after half the track or 4 minutes (tracks over 30 s). Scrobbles made offline are kept and sent later."),
+            header("Podcast Downloads"), folderRow,
+            note("Episodes you download are saved here as “Show - Episode” and deleted once you’ve listened to the end. Changing the folder moves the downloads already there."),
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -89,6 +100,7 @@ final class SettingsWindowController: NSWindowController {
         }
         stack.setCustomSpacing(18, after: ownKeyRows)
         stack.setCustomSpacing(18, after: stack.arrangedSubviews[8])
+        stack.setCustomSpacing(18, after: stack.arrangedSubviews[11])
         self.stack = stack
         window?.contentView = stack
         let lfm = LastFM.shared
@@ -135,7 +147,36 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func openLastfmAPI() { NSWorkspace.shared.open(URL(string: "https://www.last.fm/api/account/create")!) }
 
+    @objc private func revealDownloads() {
+        let d = PodcastDownloads.shared.dir
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(d)
+    }
+
+    @objc private func changeDownloads() {
+        guard let w = window else { return }
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true
+        p.canChooseFiles = false
+        p.canCreateDirectories = true
+        p.prompt = "Use This Folder"
+        p.message = "Choose where downloaded podcast episodes are saved."
+        p.directoryURL = PodcastDownloads.shared.dir.deletingLastPathComponent()
+        p.beginSheetModal(for: w) { [weak self] r in
+            guard r == .OK, let url = p.url else { return }
+            if let problem = PodcastDownloads.shared.setFolder(url) {
+                let a = NSAlert()
+                a.messageText = "Some downloads weren't moved"
+                a.informativeText = problem
+                a.beginSheetModal(for: w)
+            }
+            self?.refresh()
+        }
+    }
+
     func refresh() {
+        folderLabel.stringValue = (PodcastDownloads.shared.dir.path as NSString).abbreviatingWithTildeInPath
+        folderLabel.toolTip = PodcastDownloads.shared.dir.path
         let lfm = LastFM.shared, lb = ListenBrainz.shared
         let keyNote = lfm.usesCustomKey ? " (your API key)" : ""
         if !lfm.isAvailable {

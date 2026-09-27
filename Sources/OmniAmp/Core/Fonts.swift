@@ -61,5 +61,9 @@ enum Fonts {
         static let rss = "\u{F09E}"
         static let globe = "\u{F0AC}"
         static let info = "\u{F05A}"
+        static let download = "\u{F019}"
+        static let downloaded = "\u{F058}"     // check-circle
+        static let warning = "\u{F071}"
+        static let folder = "\u{F07C}"       // open folder
     }
 }

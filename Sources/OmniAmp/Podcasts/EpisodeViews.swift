@@ -219,3 +219,53 @@ final class PaneSplitView: NSSplitView {
     override var dividerThickness: CGFloat { 12 }
     override func drawDivider(in rect: NSRect) {}
 }
+
+/// A row's download state: an outline arrow to download, a filling ring while it comes in, a check once it's
+/// on disk, a warning if it failed. Clicking it starts or stops the download (see the window).
+final class DownloadMarkView: NSView {
+    private var state: PodcastDownloads.State = .none
+    private var failed = false
+
+    func set(_ s: PodcastDownloads.State, failure: String?) {
+        guard s != state || failed != (failure != nil) else { return }
+        state = s
+        failed = failure != nil && s == .none
+        switch s {
+        case .none: toolTip = failure.map { "Download failed: \($0). Click to try again." } ?? "Download for offline listening"
+        case .queued: toolTip = "Waiting to download · click to cancel"
+        case .downloading(let p): toolTip = "Downloading \(Int(p * 100))% · click to cancel"
+        case .done: toolTip = "Downloaded: plays offline"
+        }
+        needsDisplay = true
+    }
+
+    private func glyph(_ g: String, _ color: NSColor, size: CGFloat = 10) {
+        let s = NSAttributedString(string: g, attributes: [.font: Theme.icon(size), .foregroundColor: color])
+        let z = s.size()
+        s.draw(at: NSPoint(x: (bounds.midX - z.width / 2).rounded(), y: (bounds.midY - z.height / 2).rounded()))
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let c = NSPoint(x: bounds.midX, y: bounds.midY)
+        switch state {
+        case .none:
+            if failed { glyph(Fonts.Icon.warning, Theme.warning, size: 9) }
+            else { glyph(Fonts.Icon.download, Theme.phosphorDim.withAlphaComponent(0.55), size: 9) }
+        case .done:
+            glyph(Fonts.Icon.downloaded, Theme.phosphor)
+        case .queued, .downloading:
+            let r: CGFloat = 5
+            let ring = NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+            ring.lineWidth = 1.5
+            Theme.phosphorDim.withAlphaComponent(0.5).setStroke()
+            ring.stroke()
+            if case .downloading(let p) = state {
+                let arc = NSBezierPath()
+                arc.appendArc(withCenter: c, radius: r, startAngle: 90, endAngle: 90 - 360 * CGFloat(max(0.03, p)), clockwise: true)
+                arc.lineWidth = 1.5
+                Theme.phosphor.setStroke()
+                arc.stroke()
+            }
+        }
+    }
+}

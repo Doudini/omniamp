@@ -256,6 +256,10 @@ final class PodcastLibrary {
     /// Newest episode date the user has seen, per feed ("new" = released after that).
     private var seen: [String: Double] = [:]
     private var feeds: [String: FeedCache] = [:]
+    /// When each episode was last listened to (orders "Continue listening").
+    private var listened: [String: Double] = [:]
+    /// Shows whose feeds were read this session, by feed URL (to find an episode's show again).
+    private var knownShows: [String: PodcastShow] = [:]
 
     init(directory: URL? = nil) {
         dir = directory ?? LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("Podcasts", isDirectory: true)
@@ -263,6 +267,28 @@ final class PodcastLibrary {
         subscriptions = load("subscriptions.json") ?? []
         played = Set(load("played.json") ?? [String]())
         seen = load("seen.json") ?? [:]
+        listened = load("listened.json") ?? [:]
+    }
+
+    func noteListened(_ url: String) {
+        listened[url] = Date().timeIntervalSince1970
+        if listened.count > 500 { for k in listened.sorted(by: { $0.value < $1.value }).prefix(100).map(\.key) { listened.removeValue(forKey: k) } }
+        save(listened, "listened.json")
+    }
+
+    func lastListened(_ url: String) -> Double? { listened[url] }
+
+    /// An episode and its show, from the feeds read so far or the subscriptions' saved feeds.
+    func lookup(_ url: String) -> (episode: PodcastEpisode, show: PodcastShow)? {
+        for (feed, c) in feeds {
+            if let e = c.episodes.first(where: { $0.url == url }), let s = knownShows[feed] ?? subscriptions.first(where: { $0.feedURL == feed }) {
+                return (e, s)
+            }
+        }
+        for s in subscriptions where feeds[s.feedURL] == nil {
+            if let e = cachedEpisodes(s).first(where: { $0.url == url }) { return (e, s) }
+        }
+        return nil
     }
 
     private func load<T: Decodable>(_ name: String) -> T? {
@@ -307,6 +333,7 @@ final class PodcastLibrary {
     /// Main-actor isolated: the library's state is only ever touched on main (refreshes run several of these at once).
     @MainActor
     func episodes(_ show: PodcastShow, maxAge: Double = 600) async throws -> [PodcastEpisode] {
+        knownShows[show.feedURL] = show
         _ = cachedEpisodes(show)   // loads the disk cache
         if let c = feeds[show.feedURL], Date().timeIntervalSince1970 - c.fetched < maxAge { return c.episodes }
         guard let url = URL(string: show.feedURL) else { return [] }
