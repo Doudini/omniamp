@@ -166,7 +166,9 @@ final class LCDTimeView: NSView {
 
 /// Scrolling title on the LCD.
 final class MarqueeView: NSView {
-    var text = "OmniAmp" { didSet { if text != oldValue { offset = 0; scrollStart = animationTime; needsDisplay = true } } }
+    var text = "OmniAmp" { didSet { if text != oldValue { offset = 0; scrollStart = animationTime; textWidth = nil; needsDisplay = true } } }
+    /// Measured once per text (tick() runs 20× a second).
+    private var textWidth: CGFloat?
     private var offset: CGFloat = 0
     private var scrollStart = animationTime
     private var attrs: [NSAttributedString.Key: Any] {
@@ -177,7 +179,8 @@ final class MarqueeView: NSView {
     }
 
     func tick() {
-        let w = (text as NSString).size(withAttributes: attrs).width
+        let w = textWidth ?? (text as NSString).size(withAttributes: attrs).width
+        textWidth = w
         guard w > bounds.width - 8 else { if offset != 0 { offset = 0; needsDisplay = true }; return }
         // 12 points per second, whatever the frame rate.
         let o = CGFloat(Int((animationTime - scrollStart) * 12)).truncatingRemainder(dividingBy: w + 48)
@@ -445,12 +448,13 @@ final class ModernPanelView: NSView {
         let live = track?.isStream == true
         let remaining = showRemaining && !live && d > 0 && st != .stopped
         let t = Int(st == .stopped ? 0 : max(0, remaining ? d - p.currentTime : p.currentTime))
-        remainTag.stringValue = live ? "LIVE" : "REM"
-        remainTag.isHidden = !(live || showRemaining)
+        // Called 20× a second: only touch what changed (a text field redraws on every stringValue set).
+        remainTag.setIfChanged(live ? "LIVE" : "REM")
+        if remainTag.isHidden != !(live || showRemaining) { remainTag.isHidden = !(live || showRemaining) }
         updateSource(track, buffering: st == .playing && p.isBuffering && track?.isRemote == true)
         time.text = String(format: "%02d:%02d", min(t / 60, 99), t % 60)
         time.dimmed = st == .paused && Int(animationTime * 2) % 2 == 0 // the colon blinks while paused
-        stateLabel.stringValue = st == .playing ? Fonts.Icon.play : (st == .paused ? Fonts.Icon.pause : Fonts.Icon.stop)
+        stateLabel.setIfChanged(st == .playing ? Fonts.Icon.play : (st == .paused ? Fonts.Icon.pause : Fonts.Icon.stop))
         if !seek.isDragging { seek.value = d > 0 && st != .stopped ? p.currentTime / d : 0 }
         if Analyzer.mode == .oscilloscope {
             spectrum.update(wave: st == .playing ? p.spectrum.wave() : [])
@@ -472,8 +476,9 @@ final class ModernPanelView: NSView {
         case let t? where t.isEpisode: glyph = Fonts.Icon.podcast
         default: glyph = Fonts.Icon.music
         }
-        if sourceLabel.stringValue != glyph { sourceLabel.stringValue = glyph }
-        sourceLabel.toolTip = t.map { $0.isStream ? "Internet radio" : ($0.isWebFile ? "Web audio file" : ($0.isEpisode ? "Podcast" : "Local file")) }
+        sourceLabel.setIfChanged(glyph)
+        let tip = t.map { $0.isStream ? "Internet radio" : ($0.isWebFile ? "Web audio file" : ($0.isEpisode ? "Podcast" : "Local file")) }
+        if sourceLabel.toolTip != tip { sourceLabel.toolTip = tip }   // setting it re-registers the tooltip area
         let blinkOff = buffering && Int(animationTime * 3) % 2 == 1
         if sourceLabel.isHidden != blinkOff { sourceLabel.isHidden = blinkOff }
     }
@@ -518,17 +523,18 @@ final class ModernPanelView: NSView {
         let lines = c.currentIndex.map { c.formatLines(for: $0) } ?? ("", "")
         let b = c.outputBadge
         let amber = Theme.warning
-        badge.toolTip = b.map { $0.ok ? "\($0.text): samples reach \(c.player.deviceName) unchanged." : "\($0.text): \(c.player.deviceName) does not support this sample rate; macOS resamples." }
+        let tip = b.map { $0.ok ? "\($0.text): samples reach \(c.player.deviceName) unchanged." : "\($0.text): \(c.player.deviceName) does not support this sample rate; macOS resamples." }
+        if badge.toolTip != tip { badge.toolTip = tip }
+        let font = compact ? Fonts.hack(10) : Fonts.hack(9, bold: true)
+        if badge.font != font { badge.font = font }
+        let color = b.map { $0.ok ? Theme.phosphor : amber } ?? (compact ? infoLabel.textColor : Theme.phosphor)
+        if badge.textColor != color { badge.textColor = color }
         if compact {
-            infoLabel.stringValue = lines.0
-            badge.font = Fonts.hack(10)
-            badge.stringValue = (b.map { $0.ok ? "\u{25C6} " : "\u{25B2} " } ?? "") + lines.1
-            badge.textColor = b.map { $0.ok ? Theme.phosphor : amber } ?? infoLabel.textColor
+            infoLabel.setIfChanged(lines.0)
+            badge.setIfChanged((b.map { $0.ok ? "\u{25C6} " : "\u{25B2} " } ?? "") + lines.1)
         } else {
-            infoLabel.stringValue = [lines.0, lines.1].filter { !$0.isEmpty }.joined(separator: " · ")
-            badge.font = Fonts.hack(9, bold: true)
-            badge.stringValue = b.map { ($0.ok ? "\u{25C6} " : "\u{25B2} ") + $0.text } ?? ""
-            badge.textColor = b.map { $0.ok ? Theme.phosphor : amber } ?? Theme.phosphor
+            infoLabel.setIfChanged([lines.0, lines.1].filter { !$0.isEmpty }.joined(separator: " · "))
+            badge.setIfChanged(b.map { ($0.ok ? "\u{25C6} " : "\u{25B2} ") + $0.text } ?? "")
         }
     }
 
@@ -569,11 +575,19 @@ final class ModernPanelView: NSView {
         guard let c = controller else { return }
         shuffleButton.isOn = c.shuffle
         repeatButton.isOn = c.repeatAll
-        if !volume.isDragging { volume.value = Double(c.player.volume) }
-        volume.alphaValue = c.player.volumeAdjustable ? 1 : 0.35
-        volume.isEnabled = c.player.volumeAdjustable
-        volume.toolTip = c.player.bitPerfect ? (c.player.volumeAdjustable ? "Device volume (bit-perfect mode)" : "Fixed at 100% in bit-perfect mode") : nil
+        refreshVolume()
+        let adjustable = c.player.volumeAdjustable
+        volume.alphaValue = adjustable ? 1 : 0.35
+        volume.isEnabled = adjustable
+        let tip = c.player.bitPerfect ? (adjustable ? "Device volume (bit-perfect mode)" : "Fixed at 100% in bit-perfect mode") : nil
+        if volume.toolTip != tip { volume.toolTip = tip }
         updateInfoLines()
+    }
+
+    /// Just the volume knob: what a volume drag or key changes, many times a second.
+    func refreshVolume() {
+        guard let c = controller, !volume.isDragging else { return }
+        volume.value = Double(c.player.volume)
     }
 
     // MARK: Actions

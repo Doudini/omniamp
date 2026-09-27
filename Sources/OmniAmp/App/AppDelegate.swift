@@ -502,7 +502,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let k = PlayerController.SortKey(rawValue: sender.representedObject as? String ?? "") { controller.sort(by: k) }
     }
     @objc private func revealSelected(_ sender: Any?) {
-        let urls = (look?.selectedTrackIndices ?? []).map { controller.tracks[$0].url }
+        let urls = (look?.selectedTrackIndices ?? []).map { controller.tracks[$0].url }.filter(\.isFileURL)
         if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
     }
     @objc private func removeDeadFiles(_ sender: Any?) {
@@ -800,6 +800,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 }
 
 extension AppDelegate: NSMenuDelegate {
+    /// Asked on every shortcut press, before AppKit would rebuild each of these menus just to search them
+    /// (the device list comes from Core Audio, the playlist menus from disk). Answer without rebuilding:
+    /// only the Playlist menu has a shortcut, ⌘R.
+    func menuHasKeyEquivalent(_ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
+                              action: UnsafeMutablePointer<Selector?>) -> Bool {
+        guard menu.title == "Playlist", event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              event.charactersIgnoringModifiers == "r" else { return false }
+        target.pointee = self
+        action.pointee = #selector(revealSelected(_:))
+        return true
+    }
+
     /// Fills "Saved Playlists" with the files in the playlists folder.
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu.title == "Watched Folders" {

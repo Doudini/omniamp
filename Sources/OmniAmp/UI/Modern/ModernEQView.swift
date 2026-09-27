@@ -169,9 +169,9 @@ final class ModernEQView: NSView {
         let s = c.eqSettings
         let bypassed = c.player.bitPerfect
         onButton.isOn = s.enabled && !bypassed
-        onButton.label = bypassed ? "BYPASSED" : "EQ ON"
-        onButton.toolTip = bypassed ? "The EQ is bypassed in bit-perfect mode (Output menu)." : nil
-        onButton.needsDisplay = true
+        onButton.label = bypassed ? "BYPASSED" : "EQ ON"   // both only redraw when they change
+        let tip = bypassed ? "The EQ is bypassed in bit-perfect mode (Output menu)." : nil
+        if onButton.toolTip != tip { onButton.toolTip = tip }
         preamp.value = Double(s.preamp / Equalizer.range)
         for (i, b) in bands.enumerated() { b.value = Double(s.bands[i] / Equalizer.range) }
         curve.bands = s.bands
@@ -199,7 +199,7 @@ final class ModernEQView: NSView {
 /// Small LCD showing the EQ curve (smooth line through the band gains).
 final class EQCurveView: NSView {
     var bands: [Float] = Array(repeating: 0, count: 10) { didSet { needsDisplay = true } }
-    var enabled = false { didSet { needsDisplay = true } }
+    var enabled = false { didSet { if enabled != oldValue { needsDisplay = true } } }
 
     override func draw(_ dirtyRect: NSRect) {
         let p = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)

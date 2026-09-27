@@ -3,7 +3,7 @@ import AppKit
 /// Beveled hardware-style button showing a Nerd Font glyph and/or a label.
 final class ModernButton: NSControl {
     var glyph: String
-    var label: String? { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
+    var label: String? { didSet { if label != oldValue { invalidateIntrinsicContentSize(); needsDisplay = true } } }
     private var fullLabel: String?
     /// Icon-only when true (narrow windows); the label moves into the tooltip.
     var compact = false {
@@ -14,7 +14,7 @@ final class ModernButton: NSControl {
         }
     }
     var isToggle = false
-    var isOn = false { didSet { needsDisplay = true } }
+    var isOn = false { didSet { if isOn != oldValue { needsDisplay = true } } }
     var glyphSize: CGFloat = 12
     /// Drawn as a physical hi-fi key in a recessed housing (like the transport keys); the label glows when on.
     var keyStyle = false { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
@@ -472,4 +472,10 @@ final class ModernSlider: NSControl {
             l.stroke()
         }
     }
+}
+
+extension NSTextField {
+    /// Set the text only if it differs: every stringValue set redraws the field (and can re-run layout),
+    /// which adds up for labels refreshed many times a second.
+    func setIfChanged(_ s: String) { if stringValue != s { stringValue = s } }
 }

@@ -347,6 +347,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         panel.eqButton.isOn = d == .eq
         panel.infoButton.isOn = d == .info
         if d == .info { refreshInfo() }
+        if d == .eq { eqView.refresh() }   // not kept current while hidden
     }
 
     /// INFO takes the height its text needs (cover-high at least, 300 pt at most).
@@ -372,8 +373,8 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
 
     func mixDidChange() {
-        eqView.refresh()
-        panel.refreshOptions()
+        if drawer == .eq { eqView.refresh() }   // hidden: refreshed when it opens
+        panel.refreshVolume()
     }
 
     func optionsDidChange() {
@@ -458,7 +459,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
 
     private func updateStatus() {
-        statusLabel.stringValue = controller.statusText
+        statusLabel.setIfChanged(controller.statusText)
     }
 
     // MARK: Timer
