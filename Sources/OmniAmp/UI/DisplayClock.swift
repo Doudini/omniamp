@@ -1,12 +1,19 @@
 import AppKit
 import QuartzCore
 
-/// The visualizer, like Winamp's: click it to cycle spectrum → oscilloscope → off.
+/// The visualizer, like Winamp's: click it to cycle spectrum → oscilloscope → L/R meters → off.
 /// When off, the UI only needs a slow clock.
 enum Analyzer {
     enum Mode: String, CaseIterable {
-        case spectrum, oscilloscope, off
-        var title: String { self == .spectrum ? "Spectrum Analyzer" : (self == .oscilloscope ? "Oscilloscope" : "Off") }
+        case spectrum, oscilloscope, meters, off
+        var title: String {
+            switch self {
+            case .spectrum: return "Spectrum Analyzer"
+            case .oscilloscope: return "Oscilloscope"
+            case .meters: return "Level Meters (L/R)"
+            case .off: return "Off"
+            }
+        }
     }
 
     static let changed = Notification.Name("OmniAmpAnalyzerChanged")
@@ -24,7 +31,7 @@ enum Analyzer {
 
     static var isOn: Bool { mode != .off }
 
-    /// Click: spectrum → oscilloscope → off → spectrum.
+    /// Click: spectrum → oscilloscope → L/R meters → off → spectrum.
     static func toggle() {
         let all = Mode.allCases
         mode = all[(all.firstIndex(of: mode)! + 1) % all.count]

@@ -59,5 +59,6 @@ enum Fonts {
         static let podcast = "\u{F0994}"
         static let check = "\u{F00C}"
         static let rss = "\u{F09E}"
+        static let globe = "\u{F0AC}"
     }
 }

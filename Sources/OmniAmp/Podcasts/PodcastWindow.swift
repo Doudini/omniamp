@@ -350,10 +350,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
                 updateHeader()
                 status.stringValue = eps.isEmpty ? "This feed has no audio episodes." : "\(eps.count) episodes"
                 // Seen: the new-episode marks stay until the next visit.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                    self?.library.markSeen(show)
-                    self?.showsTable.reloadData(forRowIndexes: IndexSet(integersIn: 0..<(self?.shows.count ?? 0)), columnIndexes: [0])
-                }
+                try? await Task.sleep(for: .seconds(1))
+                library.markSeen(show)
+                showsTable.reloadData(forRowIndexes: IndexSet(integersIn: 0..<shows.count), columnIndexes: [0])
             } catch {
                 guard !Task.isCancelled, currentShow == show else { return }
                 status.stringValue = (episodes.isEmpty ? "Couldn't load this feed: " : "Showing saved episodes (offline): ") + error.localizedDescription

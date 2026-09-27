@@ -87,7 +87,8 @@ Press **PODCASTS** (or ⌘⌥P) to browse the top shows in your country or searc
 - **[Last.fm](https://www.last.fm) and [ListenBrainz](https://listenbrainz.org)** (Settings, ⌘,): Now Playing updates, standard scrobble rules and an offline queue. Logins are stored in the macOS Keychain.
 
 **Look and feel**
-- **Visualizer:** cycles spectrum → oscilloscope → off.
+- **Visualizer:** click it to cycle spectrum (with peak hold) → oscilloscope → L/R level meters → off.
+- **Time display:** click the time to switch between elapsed and remaining.
 - **Now Playing and media keys:** macOS Now Playing and the keyboard media keys work.
 
 ## Keyboard shortcuts

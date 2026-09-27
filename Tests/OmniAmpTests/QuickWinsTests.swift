@@ -85,7 +85,15 @@ final class QuickWinsTests: XCTestCase {
         defer { UserDefaults.standard.set(saved, forKey: "analyzerMode") }
         Analyzer.mode = .spectrum
         Analyzer.toggle(); XCTAssertEqual(Analyzer.mode, .oscilloscope)
+        Analyzer.toggle(); XCTAssertEqual(Analyzer.mode, .meters)
         Analyzer.toggle(); XCTAssertEqual(Analyzer.mode, .off)
         Analyzer.toggle(); XCTAssertEqual(Analyzer.mode, .spectrum)
+    }
+
+    func testMeterLevelsCoverFortyDecibels() {
+        XCTAssertEqual(SpectrumAnalyzer.meterLevel(1), 1, accuracy: 0.001)          // 0 dBFS
+        XCTAssertEqual(SpectrumAnalyzer.meterLevel(0.1), 0.5, accuracy: 0.001)      // -20 dB
+        XCTAssertEqual(SpectrumAnalyzer.meterLevel(0.01), 0, accuracy: 0.001)       // -40 dB
+        XCTAssertEqual(SpectrumAnalyzer.meterLevel(0), 0)
     }
 }

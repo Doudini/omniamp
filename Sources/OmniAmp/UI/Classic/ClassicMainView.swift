@@ -165,6 +165,12 @@ final class ClassicMainView: SkinCanvasView {
     /// Oscilloscope samples (empty unless in oscilloscope mode and playing).
     private var scope: [Float] = []
     private var peaks = [Float](repeating: 0, count: 19)
+    private var peakHold = [Int](repeating: 0, count: 19)
+    private var peakFall = [Float](repeating: 0, count: 19)
+    /// L/R level meters (visualizer mode), with peak markers.
+    private var meter: [Float] = [0, 0]
+    private var meterPeak: [Float] = [0, 0]
+    private var meterHold = [0, 0]
 
     static let size = CGSize(width: 275, height: 116)
     override var intrinsicContentSize: NSSize { NSSize(width: Self.size.width * scale, height: Self.size.height * scale) }
@@ -221,10 +227,23 @@ final class ClassicMainView: SkinCanvasView {
         for i in 0..<19 {
             let v = bars[min(bars.count - 1, i * bars.count / 19)]
             let l = v > levels[i] ? v : max(v, levels[i] - 0.07)
-            let p = l > peaks[i] ? l : max(0, peaks[i] - 0.012)
+            // Peak hold: hangs ~0.6 s, then falls faster and faster.
+            var p = peaks[i]
+            if l >= p { p = l; peakHold[i] = 0; peakFall[i] = 0 }
+            else if peakHold[i] < 12 { peakHold[i] += 1 }
+            else { peakFall[i] = min(0.08, peakFall[i] + 0.004); p = max(l, p - peakFall[i]) }
             if l != levels[i] || p != peaks[i] { visChanged = true }
             levels[i] = l
             peaks[i] = p
+        }
+        let lv = playing && Analyzer.mode == .meters ? c.player.spectrum.levels() : (left: Float(0), right: Float(0))
+        for (i, v) in [lv.left, lv.right].enumerated() {
+            let m = v > meter[i] ? v : max(v, meter[i] - 0.04)
+            var p = meterPeak[i]
+            if m >= p { p = m; meterHold[i] = 0 } else if meterHold[i] < 20 { meterHold[i] += 1 } else { p = max(m, p - 0.02) }
+            if m != meter[i] || p != meterPeak[i] { visChanged = true }
+            meter[i] = m
+            meterPeak[i] = p
         }
         if visChanged { renderVis() }
 
@@ -421,6 +440,22 @@ final class ClassicMainView: SkinCanvasView {
                     ctx.fill(CGRect(x: origin.x + CGFloat(x), y: origin.y + CGFloat(yy), width: 1, height: 1))
                 }
                 lastY = y
+            }
+            return
+        }
+        if Analyzer.mode == .meters {
+            // Two rows (L, R) of 1-pixel segments, colored like the spectrum from bottom (low) to top (high).
+            for (row, y) in [(0, 4), (1, 9)] {
+                let lit = Int((CGFloat(meter[row]) * 72).rounded())
+                for x in stride(from: 0, to: lit, by: 2) {
+                    ctx.setFillColor(vc[2 + 15 - min(15, x * 16 / 72)])
+                    ctx.fill(CGRect(x: origin.x + 2 + CGFloat(x), y: origin.y + CGFloat(y), width: 1, height: 3))
+                }
+                if meterPeak[row] > 0.02 {
+                    let px = min(71, Int((CGFloat(meterPeak[row]) * 72).rounded()) / 2 * 2)
+                    ctx.setFillColor(vc[23])
+                    ctx.fill(CGRect(x: origin.x + 2 + CGFloat(px), y: origin.y + CGFloat(y), width: 1, height: 3))
+                }
             }
             return
         }

@@ -26,6 +26,8 @@ final class SpectrumAnalyzer: @unchecked Sendable {
     static let waveCount = 128
     private var waveWork = [Float](repeating: 0, count: SpectrumAnalyzer.waveCount)
     private let latestWave = OSAllocatedUnfairLock(initialState: [Float](repeating: 0, count: SpectrumAnalyzer.waveCount))
+    /// Left/right peak level of the latest buffer, 0...1 over a 40 dB range (for the level meters).
+    private let latestLevels = OSAllocatedUnfairLock(initialState: (Float(0), Float(0)))
 
     /// Turned on only while an analyzer is on screen and music plays.
     var isEnabled: Bool {
@@ -50,6 +52,15 @@ final class SpectrumAnalyzer: @unchecked Sendable {
     func reset() {
         latest.withLock { for i in $0.indices { $0[i] = 0 } }
         latestWave.withLock { for i in $0.indices { $0[i] = 0 } }
+        latestLevels.withLock { $0 = (0, 0) }
+    }
+
+    /// Latest left/right levels in 0...1 (-40 dB ... 0 dB).
+    func levels() -> (left: Float, right: Float) { latestLevels.withLock { $0 } }
+
+    static func meterLevel(_ peak: Float) -> Float {
+        let db = 20 * log10f(max(peak, 1e-6))
+        return max(0, min(1, (db + 40) / 40))
     }
 
     /// Latest waveform for the oscilloscope.
@@ -81,6 +92,12 @@ final class SpectrumAnalyzer: @unchecked Sendable {
         // Mono mix of up to n frames, zero-padded.
         let count = min(frames, n)
         let channels = Int(buffer.format.channelCount)
+        // Level meters: each channel's peak (mono feeds both).
+        var pl: Float = 0, pr: Float = 0
+        vDSP_maxmgv(ch[0], 1, &pl, vDSP_Length(frames))
+        if channels > 1 { vDSP_maxmgv(ch[1], 1, &pr, vDSP_Length(frames)) } else { pr = pl }
+        let lv = (Self.meterLevel(pl), Self.meterLevel(pr))
+        latestLevels.withLock { $0 = lv }
         vDSP_vclr(&mono, 1, vDSP_Length(n))
         for c in 0..<channels { vDSP_vadd(mono, 1, ch[c], 1, &mono, 1, vDSP_Length(count)) }
         var scale = 1 / Float(max(channels, 1))

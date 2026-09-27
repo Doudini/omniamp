@@ -16,23 +16,151 @@ final class LCDBox: NSView {
     }
 }
 
-/// Big glowing time readout with faint "88:88" ghost segments behind it.
+/// The time as a 7-segment display, like an 80s tape-deck counter: slanted segments with pointed ends, the
+/// unlit segments of "88:88" faintly visible, a phosphor glow, and a colon that blinks while paused.
+/// Click it to switch between elapsed and remaining time.
+///
+/// Made of shape layers: a tick only swaps the lit segments' paths (once a second), and the glow is
+/// rasterized once per change, so the app does no drawing of its own.
 final class LCDTimeView: NSView {
-    var text = "00:00" { didSet { if text != oldValue { needsDisplay = true } } }
-    var dimmed = false { didSet { if dimmed != oldValue { needsDisplay = true } } }
-    var font = Fonts.hack(30, bold: true)
+    /// "MM:SS".
+    var text = "00:00" { didSet { if text != oldValue { updateDigits() } } }
+    /// Paused: the colon goes dark (blinks).
+    var dimmed = false { didSet { if dimmed != oldValue { colon.isHidden = dimmed } } }
+    /// Height of a digit in points.
+    var digitHeight: CGFloat = 28 { didSet { if digitHeight != oldValue { geometry = nil; needsLayout = true } } }
+    var onClick: (() -> Void)?
 
-    override func draw(_ dirtyRect: NSRect) {
-        let ghost = String(text.map { $0 == ":" ? ":" : "8" }) as NSString
-        let ghostAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: Theme.phosphorGhost]
-        let size = ghost.size(withAttributes: ghostAttrs)
-        let origin = NSPoint(x: bounds.width - size.width, y: (bounds.height - size.height) / 2)
-        ghost.draw(at: origin, withAttributes: ghostAttrs)
-        guard !dimmed else { return }
-        let glow = NSShadow()
-        glow.shadowColor = Theme.phosphor.withAlphaComponent(0.7)
-        glow.shadowBlurRadius = 8
-        (text as NSString).draw(at: origin, withAttributes: [.font: font, .foregroundColor: Theme.phosphor, .shadow: glow])
+    private let ghost = CAShapeLayer()
+    private let litGroup = CALayer()
+    private var digits: [CAShapeLayer] = []
+    private let colon = CAShapeLayer()
+    private var geometry: (size: CGSize, cells: [CGFloat])?
+
+    // Proportions (relative to the digit height).
+    private static let widthRatio: CGFloat = 0.56, thickRatio: CGFloat = 0.15, spaceRatio: CGFloat = 0.2, colonRatio: CGFloat = 0.34
+    private static let slant: CGFloat = tan(8 * .pi / 180)
+
+    /// Segments per digit: a top, b upper right, c lower right, d bottom, e lower left, f upper left, g middle.
+    private static let segmentsFor: [Character: String] = [
+        "0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc", "5": "afgcd",
+        "6": "afgedc", "7": "abc", "8": "abcdefg", "9": "abcdfg", "-": "g", " ": "",
+    ]
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func makeBackingLayer() -> CALayer {
+        let root = CALayer()
+        root.addSublayer(ghost)
+        root.addSublayer(litGroup)
+        for _ in 0..<4 { let d = CAShapeLayer(); litGroup.addSublayer(d); digits.append(d) }
+        litGroup.addSublayer(colon)
+        // Glow around the lit segments, cached as a bitmap until the digits change.
+        litGroup.shadowOffset = .zero
+        litGroup.shadowRadius = 4
+        litGroup.shadowOpacity = 0.8
+        litGroup.shouldRasterize = true
+        return root
+    }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func resetCursorRects() { if onClick != nil { addCursorRect(bounds, cursor: .pointingHand) } }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        litGroup.rasterizationScale = window?.backingScaleFactor ?? 2
+        for l in [ghost, colon] + digits { l.contentsScale = window?.backingScaleFactor ?? 2 }
+    }
+
+    override func layout() {
+        super.layout()
+        guard bounds.width > 0, geometry?.size != bounds.size else { return }
+        let h = digitHeight, w = h * Self.widthRatio, sp = h * Self.spaceRatio, cw = h * Self.colonRatio
+        let total = 4 * w + 2 * sp + cw + h * Self.slant
+        let x0 = ((bounds.width - total) / 2).rounded()
+        // Cell x origins: digit, digit, colon, digit, digit.
+        let cells = [x0, x0 + w + sp, x0 + 2 * w + sp, x0 + 2 * w + sp + cw, x0 + 3 * w + 2 * sp + cw]
+        geometry = (bounds.size, cells)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for l in [ghost, colon] + digits as [CALayer] { l.frame = bounds }
+        litGroup.frame = bounds
+        litGroup.shadowColor = Theme.phosphor.cgColor
+        litGroup.rasterizationScale = window?.backingScaleFactor ?? 2
+        ghost.fillColor = Theme.phosphorGhost.cgColor
+        colon.fillColor = Theme.phosphor.cgColor
+        digits.forEach { $0.fillColor = Theme.phosphor.cgColor }
+        // Unlit: every segment of 88:88.
+        let g = CGMutablePath()
+        for i in [0, 1, 3, 4] { g.addPath(digitPath("abcdefg", x: cells[i])) }
+        g.addPath(colonPath(x: cells[2]))
+        ghost.path = g
+        colon.path = colonPath(x: cells[2])
+        CATransaction.commit()
+        updateDigits()
+    }
+
+    private func updateDigits() {
+        guard let cells = geometry?.cells else { return }
+        let chars = Array(text.filter { $0 != ":" }.suffix(4))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (i, cell) in [cells[0], cells[1], cells[3], cells[4]].enumerated() {
+            let c = i < chars.count ? chars[i] : " "
+            digits[i].path = digitPath(Self.segmentsFor[c] ?? "", x: cell)
+        }
+        CATransaction.commit()
+    }
+
+    /// The lit segments of one digit whose cell starts at `x`, vertically centered, slanted.
+    private func digitPath(_ segs: String, x: CGFloat) -> CGPath {
+        let h = digitHeight, w = h * Self.widthRatio, t = h * Self.thickRatio, gap = max(0.5, t * 0.14)
+        let y0 = ((bounds.height - h) / 2).rounded()
+        let p = CGMutablePath()
+        // Hexagonal segment between two centre points along one axis.
+        func horizontal(_ yc: CGFloat) -> [CGPoint] {
+            let a = t / 2 + gap, b = w - t / 2 - gap
+            return [CGPoint(x: a, y: yc), CGPoint(x: a + t / 2, y: yc + t / 2), CGPoint(x: b - t / 2, y: yc + t / 2),
+                    CGPoint(x: b, y: yc), CGPoint(x: b - t / 2, y: yc - t / 2), CGPoint(x: a + t / 2, y: yc - t / 2)]
+        }
+        func vertical(_ xc: CGFloat, _ lo: CGFloat, _ hi: CGFloat) -> [CGPoint] {
+            let a = lo + gap, b = hi - gap
+            return [CGPoint(x: xc, y: a), CGPoint(x: xc + t / 2, y: a + t / 2), CGPoint(x: xc + t / 2, y: b - t / 2),
+                    CGPoint(x: xc, y: b), CGPoint(x: xc - t / 2, y: b - t / 2), CGPoint(x: xc - t / 2, y: a + t / 2)]
+        }
+        let top = h - t / 2, mid = h / 2, bottom = t / 2, left = t / 2, right = w - t / 2
+        for s in segs {
+            let pts: [CGPoint]
+            switch s {
+            case "a": pts = horizontal(top)
+            case "b": pts = vertical(right, mid, top)
+            case "c": pts = vertical(right, bottom, mid)
+            case "d": pts = horizontal(bottom)
+            case "e": pts = vertical(left, bottom, mid)
+            case "f": pts = vertical(left, mid, top)
+            default: pts = horizontal(mid)
+            }
+            // Lean the digit to the right, like the displays it imitates.
+            p.addLines(between: pts.map { CGPoint(x: x + $0.x + $0.y * Self.slant, y: y0 + $0.y) })
+            p.closeSubpath()
+        }
+        return p
+    }
+
+    private func colonPath(x: CGFloat) -> CGPath {
+        let h = digitHeight, t = h * Self.thickRatio, cw = h * Self.colonRatio
+        let y0 = ((bounds.height - h) / 2).rounded()
+        let p = CGMutablePath()
+        for fy in [0.3, 0.7] as [CGFloat] {
+            let y = h * fy
+            p.addRect(CGRect(x: x + (cw - t) / 2 + y * Self.slant, y: y0 + y - t / 2, width: t, height: t))
+        }
+        return p
     }
 }
 
@@ -92,6 +220,13 @@ final class ModernPanelView: NSView {
     private let leftBox = LCDBox()
     private let rightBox = LCDBox()
     private let stateLabel = NSTextField(labelWithString: "")
+    /// What is playing: local music, radio, podcast or a web file (blinks while a stream buffers).
+    private let sourceLabel = NSTextField(labelWithString: "")
+    /// "REM" while the counter shows remaining time; "LIVE" for radio, which has no length.
+    private let remainTag = NSTextField(labelWithString: "REM")
+    private var showRemaining = UserDefaults.standard.bool(forKey: "modernRemaining") {
+        didSet { UserDefaults.standard.set(showRemaining, forKey: "modernRemaining") }
+    }
     let time = LCDTimeView()
     let spectrum = SpectrumView()
     let marquee = MarqueeView()
@@ -129,12 +264,25 @@ final class ModernPanelView: NSView {
     }
 
     private func build() {
-        for v in [leftBox, rightBox, stateLabel, time, spectrum, marquee, infoLabel, volIcon] as [NSView] {
+        for v in [leftBox, rightBox, stateLabel, sourceLabel, remainTag, time, spectrum, marquee, infoLabel, volIcon] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         addSubview(leftBox)
         addSubview(rightBox)
-        [stateLabel, time, spectrum].forEach(leftBox.addSubview)
+        [stateLabel, sourceLabel, remainTag, time, spectrum].forEach(leftBox.addSubview)
+        sourceLabel.font = Theme.icon(10)
+        sourceLabel.textColor = Theme.phosphor.withAlphaComponent(0.55)
+        sourceLabel.alignment = .center
+        remainTag.font = Fonts.hack(6.5, bold: true)
+        remainTag.textColor = Theme.phosphor
+        remainTag.isHidden = !showRemaining
+        time.onClick = { [weak self] in
+            guard let self, self.controller?.currentTrack?.isStream != true else { return }   // live radio has no length
+            self.showRemaining.toggle()
+            self.remainTag.isHidden = !self.showRemaining
+            self.refresh(tick: 0)
+        }
+        time.toolTip = "Click: elapsed / remaining time"
         [art, marquee, infoLabel, volIcon, volume, badge].forEach(rightBox.addSubview)
         art.onHover = { [weak self] inside in self?.hover(inside) }
         art.onClick = { [weak self] in self?.hover(false); self?.onArtClick?() }
@@ -200,14 +348,18 @@ final class ModernPanelView: NSView {
 
             stateLabel.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 8),
             stateLabel.topAnchor.constraint(equalTo: leftBox.topAnchor, constant: 8),
-            time.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -8),
-            time.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 22),
-            time.topAnchor.constraint(equalTo: leftBox.topAnchor, constant: 2),
-            time.heightAnchor.constraint(equalToConstant: 40),
+            sourceLabel.centerXAnchor.constraint(equalTo: stateLabel.centerXAnchor),
+            sourceLabel.topAnchor.constraint(equalTo: stateLabel.bottomAnchor, constant: 3),
+            remainTag.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -7),
+            remainTag.topAnchor.constraint(equalTo: leftBox.topAnchor, constant: 6),
+            time.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -6),
+            time.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 6),
+            time.topAnchor.constraint(equalTo: leftBox.topAnchor, constant: 4),
+            time.heightAnchor.constraint(equalToConstant: 36),
             spectrum.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 6),
             spectrum.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -6),
-            spectrum.bottomAnchor.constraint(equalTo: leftBox.bottomAnchor, constant: -6),
-            spectrum.heightAnchor.constraint(equalToConstant: 36),
+            spectrum.bottomAnchor.constraint(equalTo: leftBox.bottomAnchor, constant: -4),
+            spectrum.heightAnchor.constraint(equalToConstant: 42),
 
             rightBox.leadingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: 8),
             rightBox.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
@@ -271,18 +423,42 @@ final class ModernPanelView: NSView {
         guard let c = controller else { return }
         let p = c.player
         let st = p.state
-        let t = Int(st == .stopped ? 0 : max(0, p.currentTime))
-        time.text = String(format: "%02d:%02d", min(t / 60, 99), t % 60)
-        time.dimmed = st == .paused && Int(animationTime * 2) % 2 == 0 // blink while paused
-        stateLabel.stringValue = st == .playing ? Fonts.Icon.play : (st == .paused ? Fonts.Icon.pause : Fonts.Icon.stop)
         let d = p.duration
+        let track = c.currentTrack
+        let live = track?.isStream == true
+        let remaining = showRemaining && !live && d > 0 && st != .stopped
+        let t = Int(st == .stopped ? 0 : max(0, remaining ? d - p.currentTime : p.currentTime))
+        remainTag.stringValue = live ? "LIVE" : "REM"
+        remainTag.isHidden = !(live || showRemaining)
+        updateSource(track, buffering: st == .playing && p.isBuffering && track?.isRemote == true)
+        time.text = String(format: "%02d:%02d", min(t / 60, 99), t % 60)
+        time.dimmed = st == .paused && Int(animationTime * 2) % 2 == 0 // the colon blinks while paused
+        stateLabel.stringValue = st == .playing ? Fonts.Icon.play : (st == .paused ? Fonts.Icon.pause : Fonts.Icon.stop)
         if !seek.isDragging { seek.value = d > 0 && st != .stopped ? p.currentTime / d : 0 }
         if Analyzer.mode == .oscilloscope {
             spectrum.update(wave: st == .playing ? p.spectrum.wave() : [])
+        } else if Analyzer.mode == .meters {
+            spectrum.update(levels: st == .playing ? p.spectrum.levels() : (0, 0))
         } else {
             spectrum.update(with: st == .playing && Analyzer.isOn ? p.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount))
         }
         marquee.tick()
+    }
+
+    /// The source icon under play/pause; it blinks while a stream or episode is buffering.
+    private func updateSource(_ t: Track?, buffering: Bool) {
+        let glyph: String
+        switch t {
+        case nil: glyph = ""
+        case let t? where t.isStream: glyph = Fonts.Icon.radio
+        case let t? where t.isWebFile: glyph = Fonts.Icon.globe
+        case let t? where t.isEpisode: glyph = Fonts.Icon.podcast
+        default: glyph = Fonts.Icon.music
+        }
+        if sourceLabel.stringValue != glyph { sourceLabel.stringValue = glyph }
+        sourceLabel.toolTip = t.map { $0.isStream ? "Internet radio" : ($0.isWebFile ? "Web audio file" : ($0.isEpisode ? "Podcast" : "Local file")) }
+        let blinkOff = buffering && Int(animationTime * 3) % 2 == 1
+        if sourceLabel.isHidden != blinkOff { sourceLabel.isHidden = blinkOff }
     }
 
     /// Narrow windows (< 520 pt): smaller time, format on two lines, icon-only toggles.
@@ -308,8 +484,7 @@ final class ModernPanelView: NSView {
             repeatButton.compact = narrow
             updateInfoLines()
         }
-        let size: CGFloat = leftBox.frame.width >= 150 ? 30 : 24
-        if time.font.pointSize != size { time.font = Fonts.hack(size, bold: true); time.needsDisplay = true }
+        time.digitHeight = leftBox.frame.width >= 150 ? 29 : 23
     }
 
     /// Format line(s) and the bit-perfect badge. Compact: line 2 of the format replaces the badge row.
