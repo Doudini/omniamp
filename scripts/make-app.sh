@@ -3,6 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build -c release
+# Version: the latest release tag (v0.3 → 0.3) unless OMNIAMP_VERSION says otherwise; build number: commit count.
+VERSION=${OMNIAMP_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}
+VERSION=${VERSION:-0.1}
+BUILD=${OMNIAMP_BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}
 # OMNIAMP_APP_PATH: build somewhere else (make-dmg.sh uses it so your own OmniAmp.app keeps its keys).
 APP=${OMNIAMP_APP_PATH:-$PWD/OmniAmp.app}
 # Optional, never committed: secrets.env with LASTFM_API_KEY=… and LASTFM_SECRET=… (see README).
@@ -43,8 +47,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LastFMAPIKey</key><string>${LASTFM_API_KEY}</string>
   <key>LastFMSecret</key><string>${LASTFM_SECRET}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>${OMNIAMP_VERSION:-0.1}</string>
-  <key>CFBundleVersion</key><string>${OMNIAMP_BUILD:-1}</string>
+  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+  <key>CFBundleVersion</key><string>${BUILD}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -84,4 +88,4 @@ fi
 # The bundle was deleted and recreated: make Finder and the Dock drop the cached (placeholder) icon.
 touch "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
-echo "Built $APP ($SIGNED)"
+echo "Built $APP, version $VERSION ($BUILD), $SIGNED"
