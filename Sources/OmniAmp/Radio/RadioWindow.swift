@@ -2,14 +2,14 @@ import AppKit
 
 /// Internet radio browser in the modern look: popular stations, search, genre/country filters, favorites
 /// and station logos. Follows the selected color theme.
-final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
     private let controller: PlayerController
     private var popularButton: ModernButton!
     private var favoritesButton: ModernButton!
     private let search = NSSearchField()
     private let genre = NSPopUpButton()
     private let country = NSPopUpButton()
-    private let table = NSTableView()
+    private let table = KeyTableView()
     private let scroll = NSScrollView()
     private let status = NSTextField(labelWithString: "")
     private var stations: [RadioStation] = []
@@ -94,6 +94,10 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             table.target = self
             table.doubleAction = #selector(playSelected)
             table.action = #selector(tableClicked)
+            table.onKey = { [weak self] e in self?.tableKey(e) ?? false }
+            let menu = NSMenu()
+            menu.delegate = self   // filled for the clicked row
+            table.menu = menu
             table.rowHeight = 26
             table.intercellSpacing = NSSize(width: 8, height: 0)
             table.style = .plain
@@ -195,6 +199,54 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
     @objc private func searchChanged() { load() }
     @objc private func filterChanged() { load() }
     @objc private func openCredit() { NSWorkspace.shared.open(URL(string: "https://www.radio-browser.info")!) }
+
+    // MARK: Keyboard
+
+    /// Return plays, Space pauses, ⌘D favorite, Esc closes, typing searches.
+    private func tableKey(_ e: NSEvent) -> Bool {
+        let mods = e.modifierFlags.intersection([.command, .control, .option])
+        if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "d" { toggleFavorite(); return true }
+        guard mods.isEmpty else { return false }
+        switch e.keyCode {
+        case 36, 76: playSelected(); return true
+        case 49: controller.togglePlayPause(); return true
+        case 53: window?.performClose(nil); return true
+        default:
+            guard let c = e.characters, c.count == 1, c.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) else { return false }
+            window?.makeFirstResponder(search)
+            search.currentEditor()?.insertText(c)
+            return true
+        }
+    }
+
+    /// ⌘F while this window is in front.
+    func focusSearch() {
+        window?.makeFirstResponder(search)
+        search.currentEditor()?.selectAll(nil)
+    }
+
+    // MARK: Context menu
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let row = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
+        guard row >= 0, row < stations.count else { return }
+        if table.selectedRow != row { table.selectRowIndexes([row], byExtendingSelection: false) }
+        let s = stations[row]
+        func add(_ title: String, _ action: Selector) { menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self }
+        add("Play", #selector(playSelected))
+        add("Add to Playlist", #selector(addSelected))
+        menu.addItem(.separator())
+        add(RadioFavorites.contains(s) ? "Remove from Favorites  (⌘D)" : "Add to Favorites  (⌘D)", #selector(toggleFavorite))
+        add("Copy Stream URL", #selector(copyStreamURL))
+    }
+
+    @objc private func copyStreamURL() {
+        guard let s = selected else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(s.url, forType: .string)
+        status.stringValue = "Copied the stream address of “\(s.name)”."
+    }
 
     // MARK: Actions
 

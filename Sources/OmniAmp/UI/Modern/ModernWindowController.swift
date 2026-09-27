@@ -321,6 +321,15 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         if let n = new, let r = controller.row(forTrackIndex: n) { table.scrollRowToVisible(r) }
     }
 
+    func toggleInfo() { pinnedInfoID = nil; toggle(.info) }
+    func toggleEQ() { toggle(.eq) }
+
+    func showCurrentTrack() {
+        guard let i = controller.currentIndex, let r = controller.row(forTrackIndex: i) else { NSSound.beep(); return }
+        table.jump(to: r)
+        window?.makeFirstResponder(table)
+    }
+
     private func toggle(_ d: Drawer) {
         drawer = drawer == d ? .none : d
         applyDrawer()

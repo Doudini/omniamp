@@ -171,7 +171,16 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
         if playlistVisible { attach(playlistWindow) } else { detach(playlistWindow) }
     }
 
-    private func toggleEQ() {
+    /// Classic has no INFO drawer.
+    func toggleInfo() { NSSound.beep() }
+
+    func showCurrentTrack() {
+        guard let i = controller.currentIndex, let r = controller.row(forTrackIndex: i) else { NSSound.beep(); return }
+        if !playlistVisible { togglePlaylist() }
+        playlistView.select(row: r)
+    }
+
+    func toggleEQ() {
         eqVisible.toggle()
         mainView.eqVisible = eqVisible
         if eqVisible { attach(eqWindow) } else { detach(eqWindow) }

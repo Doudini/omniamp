@@ -427,11 +427,17 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     // MARK: Keyboard
 
-    private enum Key { static let left: UInt16 = 123, right: UInt16 = 124, returnKey: UInt16 = 36, enter: UInt16 = 76, space: UInt16 = 49 }
+    private enum Key {
+        static let left: UInt16 = 123, right: UInt16 = 124, returnKey: UInt16 = 36, enter: UInt16 = 76, space: UInt16 = 49, escape: UInt16 = 53
+    }
+
+    private static func plain(_ e: NSEvent) -> Bool { e.modifierFlags.intersection([.command, .control, .option]).isEmpty }
 
     /// Show list: → or Return goes to the episodes.
     private func showsKey(_ e: NSEvent) -> Bool {
+        guard Self.plain(e) else { return false }
         switch e.keyCode {
+        case Key.escape: window?.performClose(nil); return true
         case Key.right, Key.returnKey, Key.enter:
             showSelectionWork?.perform()   // open the highlighted show now
             focusEpisodes()
@@ -442,7 +448,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Episode list: ← back to the shows, Return plays, Space pauses / resumes.
     private func episodesKey(_ e: NSEvent) -> Bool {
+        guard Self.plain(e) else { return false }
         switch e.keyCode {
+        case Key.escape: window?.performClose(nil); return true
         case Key.left: window?.makeFirstResponder(showsTable); return true
         case Key.returnKey, Key.enter: playSelected(); return true
         case Key.space: controller.togglePlayPause(); return true

@@ -361,7 +361,10 @@ final class ClassicPlaylistView: SkinCanvasView {
             setSelection(c.shift(trackIndices: selectedTrackIndices, by: event.keyCode == 125 ? 1 : -1))
             return
         }
+        let jump = event.modifierFlags.contains(.shift) ? 100 : 10
         switch event.keyCode {
+        case 125 where event.modifierFlags.contains(.command): select(row: min(n - 1, cur + jump))   // ⌘↓ / ⌘⇧↓
+        case 126 where event.modifierFlags.contains(.command): select(row: max(0, cur - jump))       // ⌘↑ / ⌘⇧↑
         case 125: select(row: min(n - 1, cur + 1))                     // ↓
         case 126: select(row: max(0, cur - 1))                         // ↑
         case 121: select(row: min(n - 1, cur + visibleRows))           // page down

@@ -51,11 +51,12 @@ final class EpisodeMarkView: NSView {
     }
 }
 
-/// A table that first offers ←, →, Return and Space to its owner; everything else works as usual.
+/// A table that first offers every key to its owner (which checks modifiers itself); what it doesn't
+/// take works as usual (arrows, page keys, ⇧-selection…).
 final class KeyTableView: NSTableView {
     var onKey: ((NSEvent) -> Bool)?
     override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.intersection([.command, .control, .option]).isEmpty, onKey?(event) == true { return }
+        if onKey?(event) == true { return }
         super.keyDown(with: event)
     }
 }

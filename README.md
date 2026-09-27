@@ -96,15 +96,19 @@ Press **PODCASTS** (or ⌘⌥P) to browse the top shows in your country or searc
 
 ## Keyboard shortcuts
 
+OmniAmp works without a mouse. **Help → Keyboard Shortcuts (⌘/)** lists every key; the main ones:
+
 | Key | Action | | Key | Action |
 |---|---|---|---|---|
-| `Z` | Previous | | `J` / ⌘F | Jump to track |
-| `X` | Play | | `Q` | Queue selected track |
-| `C` | Pause | | ⇧V | Stop after current |
-| `V` | Stop | | ← / → | Seek |
-| `B` | Next | | Space | Play / pause |
-| ⌘O | Add files or folder | | ⌘⌥R | Internet radio |
-| ⌘L | Add URL | | ⌘⌥P | Podcasts |
+| `Z` / `B` | Previous / next | | ↑ / ↓ | Move in the playlist |
+| `X` / `C` / `V` | Play / pause / stop | | ⌘↑ / ⌘↓ | Move 10 rows (⌘⇧: 100) |
+| Space | Play / pause | | Return | Play the selected track |
+| ← / → | Seek 5 s (⇧: 30 s) | | `J` / ⌘F | Jump to track |
+| `+` / `−` | Volume | | `L` | Show the playing track |
+| `S` / `R` | Shuffle / repeat | | `Q` | Queue selected track |
+| ⇧V | Stop after current | | `I` / `E` | INFO drawer / equalizer |
+| ⌘1 / ⌘2 / ⌘3 | Player / radio / podcasts | | ⌘O / ⌘L | Add files / add URL |
+| ⌃⌘1 / ⌃⌘2 | Modern / classic look | | ⌘/ | All shortcuts |
 
 ## Get it
 

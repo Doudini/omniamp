@@ -9,6 +9,11 @@ protocol LookController: PlayerUI {
     func setFloating(_ on: Bool)
     /// One of this look's own windows (the Winamp keys only apply there).
     func owns(_ window: NSWindow) -> Bool
+    /// L: select the playing track in the playlist and scroll to it.
+    func showCurrentTrack()
+    /// I / E: the INFO drawer (modern) and the equalizer.
+    func toggleInfo()
+    func toggleEQ()
 }
 
 extension ModernWindowController: LookController {
@@ -183,6 +188,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private var settings: SettingsWindowController?
     private var radio: RadioWindowController?
+    private var shortcuts: ShortcutsWindowController?
+
+    @objc private func showShortcuts(_ sender: Any?) {
+        if shortcuts == nil { shortcuts = ShortcutsWindowController() }
+        shortcuts?.showWindow(nil)
+        shortcuts?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// ⌘1: the main window of whichever look is on.
+    @objc private func showPlayer(_ sender: Any?) {
+        look?.show()
+        NSApp.activate(ignoringOtherApps: true)
+    }
 
     private var podcasts: PodcastWindowController?
 
@@ -274,8 +292,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func addLookItems(to m: NSMenu) {
-        m.addItem(withTitle: "Modern Look", action: #selector(showModern(_:)), keyEquivalent: m === viewMenu ? "1" : "").target = self
-        m.addItem(withTitle: "Classic Skin", action: #selector(showClassic(_:)), keyEquivalent: m === viewMenu ? "2" : "").target = self
+        // ⌃⌘1 / ⌃⌘2: plain ⌘1–3 open the windows (Window menu).
+        let modern = m.addItem(withTitle: "Modern Look", action: #selector(showModern(_:)), keyEquivalent: m === viewMenu ? "1" : "")
+        let classic = m.addItem(withTitle: "Classic Skin", action: #selector(showClassic(_:)), keyEquivalent: m === viewMenu ? "2" : "")
+        for it in [modern, classic] {
+            it.target = self
+            it.keyEquivalentModifierMask = [.command, .control]
+        }
         m.addItem(.separator())
         let themeItem = NSMenuItem(title: "Modern Theme", action: nil, keyEquivalent: "")
         let themes = NSMenu(title: "Modern Theme")
@@ -372,12 +395,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Winamp keys, in the player's own windows (not the radio/podcast lists or open panels), unless a text
-    /// field is being edited. Held keys don't repeat, except the seek arrows.
+    /// field is being edited. Held transport keys don't repeat; arrows and page keys do.
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
             guard let self, let c = self.controller, let w = ev.window, self.look?.owns(w) == true else { return ev }
             if w.firstResponder is NSText { return ev } // typing in the filter
-            if ev.isARepeat, ev.keyCode != 123, ev.keyCode != 124 { return nil }
+            // Holding a transport key shouldn't fire it again and again (holding B skipped many tracks); list
+            // navigation (arrows, page keys) and seeking must repeat, so only these keys are held back.
+            if ev.isARepeat, let k = ev.charactersIgnoringModifiers?.lowercased(),
+               ["z", "x", "c", "v", "b", "q", "j", " ", "s", "r", "i", "e", "l"].contains(k) { return nil }
             let mods = ev.modifierFlags.intersection([.command, .control, .option])
             guard mods.isEmpty else { return ev }
             switch ev.charactersIgnoringModifiers?.lowercased() {
@@ -390,10 +416,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case "j": self.look?.focusFilter()
             case "q": self.queueSelected(nil)
             case " ": c.togglePlayPause()
+            case "s": c.toggleShuffle()
+            case "r": c.toggleRepeat()
+            case "l": self.look?.showCurrentTrack()
+            case "i": self.look?.toggleInfo()
+            case "e": self.look?.toggleEQ()
+            case "+", "=": c.changeVolume(by: 0.05)   // = is + without Shift on most layouts
+            case "-", "_": c.changeVolume(by: -0.05)
             default:
+                let shift = ev.modifierFlags.contains(.shift)
                 switch ev.keyCode {
-                case 123: c.seek(by: -5)          // ←
-                case 124: c.seek(by: 5)           // →
+                case 123: c.seek(by: shift ? -30 : -5)   // ← / ⇧←
+                case 124: c.seek(by: shift ? 30 : 5)     // → / ⇧→
+                case 69: c.changeVolume(by: 0.05)        // keypad +
+                case 78: c.changeVolume(by: -0.05)       // keypad −
                 default: return ev
                 }
             }
@@ -647,6 +683,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func find(_ sender: Any?) {
         // ⌘F searches in whichever window is in front.
         if let p = podcasts, NSApp.keyWindow === p.window { p.focusSearch(); return }
+        if let r = radio, NSApp.keyWindow === r.window { r.focusSearch(); return }
         look?.focusFilter()
     }
     /// Only when asked: there are no automatic update checks.
@@ -773,8 +810,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let ctlItem = NSMenuItem()
         let ctlMenu = NSMenu(title: "Controls")
-        ctlMenu.addItem(withTitle: "Volume Up", action: #selector(volUp(_:)), keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!)).target = self
-        ctlMenu.addItem(withTitle: "Volume Down", action: #selector(volDown(_:)), keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!)).target = self
+        // + and − work in the player windows (the key monitor); ⌘↑/⌘↓ now move through the playlist.
+        ctlMenu.addItem(withTitle: "Volume Up  (+)", action: #selector(volUp(_:)), keyEquivalent: "").target = self
+        ctlMenu.addItem(withTitle: "Volume Down  (−)", action: #selector(volDown(_:)), keyEquivalent: "").target = self
         ctlMenu.addItem(.separator())
         let sac = ctlMenu.addItem(withTitle: "Stop After Current  (⇧V)", action: #selector(toggleStopAfter(_:)), keyEquivalent: "")
         sac.target = self
@@ -810,6 +848,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ctlMenu.addItem(eqMenuItem())
         ctlItem.submenu = ctlMenu
         bar.addItem(ctlItem)
+
+        // Window: jump between OmniAmp's windows without the mouse.
+        let winItem = NSMenuItem()
+        let winMenu = NSMenu(title: "Window")
+        winMenu.addItem(withTitle: "Player", action: #selector(showPlayer(_:)), keyEquivalent: "1").target = self
+        winMenu.addItem(withTitle: "Internet Radio", action: #selector(showRadio(_:)), keyEquivalent: "2").target = self
+        winMenu.addItem(withTitle: "Podcasts", action: #selector(showPodcasts(_:)), keyEquivalent: "3").target = self
+        winMenu.addItem(.separator())
+        winMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        winItem.submenu = winMenu
+        bar.addItem(winItem)
+        NSApp.windowsMenu = winMenu
+
+        let helpItem = NSMenuItem()
+        let helpMenu = NSMenu(title: "Help")
+        helpMenu.addItem(withTitle: "Keyboard Shortcuts", action: #selector(showShortcuts(_:)), keyEquivalent: "/").target = self
+        helpItem.submenu = helpMenu
+        bar.addItem(helpItem)
+        NSApp.helpMenu = helpMenu
 
         NSApp.mainMenu = bar
     }
