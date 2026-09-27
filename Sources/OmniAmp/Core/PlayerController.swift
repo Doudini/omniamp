@@ -35,7 +35,7 @@ final class PlayerController {
     private(set) lazy var folders = FolderSync(controller: self)
 
     // Gapless: the track preloaded behind the current one, and whether we already tried for this track.
-    private var preloaded: (index: Int, path: String)?
+    private var preloaded: (index: Int, path: String)?   // path = Track.key
     private var preloadAttempted = false
     /// One-shot timer that fires ~8 s before the end of the track to preload the next one.
     private var preloadTimer: Timer?
@@ -347,7 +347,7 @@ final class PlayerController {
         preloaded = nil
         preloadAttempted = false
         applyReplayGain()
-        let ok = player.play(url: store.tracks[index].url, from: resumePosition(for: store.tracks[index]))
+        let ok = player.play(url: store.tracks[index].url, from: resumePosition(for: store.tracks[index]), range: store.tracks[index].cueRange)
         if ok { Scrobbler.shared.trackStarted(store.tracks[index], duration: store.tracks[index].duration ?? player.duration) }
         schedulePreloadCheck()
         ui?.currentTrackDidChange(old: old, new: index)
@@ -455,22 +455,22 @@ final class PlayerController {
         preloadAttempted = true
         guard let t = nextTarget(), t != currentIndex else { return }
         let track = store.tracks[t]
-        if player.queueNext(url: track.url) { preloaded = (t, track.path) }
+        if player.queueNext(url: track.url, range: track.cueRange) { preloaded = (t, track.key) }
     }
 
     private func gaplessAdvanced() {
         let old = currentIndex
         var new: Int?
         if let q = preloaded {
-            if q.index < store.tracks.count, store.tracks[q.index].path == q.path { new = q.index }
-            else { new = store.tracks.firstIndex { $0.path == q.path } }
+            if q.index < store.tracks.count, store.tracks[q.index].key == q.path { new = q.index }
+            else { new = store.tracks.firstIndex { $0.key == q.path } }
         }
         preloaded = nil
         preloadAttempted = false
         if let o = old, o != new { pushHistory(o) }
         currentIndex = new
         if let n = new { dequeue(n) }
-        if let o = old { forgetPosition(store.tracks.indices.contains(o) ? store.tracks[o].path : nil) }
+        if let o = old { forgetPosition(store.tracks.indices.contains(o) ? store.tracks[o].key : nil) }
         applyReplayGain()
         Scrobbler.shared.trackStarted(currentTrack, duration: currentTrack?.duration ?? player.duration)
         schedulePreloadCheck()
@@ -585,7 +585,7 @@ final class PlayerController {
 
     /// A track reached its end on its own (not Next).
     private func trackFinished() {
-        forgetPosition(currentTrack?.path)
+        forgetPosition(currentTrack?.key)
         if stopAfterCurrent {
             stopAfterCurrent = false
             player.stop()
@@ -646,7 +646,7 @@ final class PlayerController {
 
     private func resumePosition(for t: Track) -> Double {
         // Only long tracks are ever stored, so a stored position is enough (the duration may not be known yet).
-        guard resumeLongTracks, let p = resumePositions[t.path] else { return 0 }
+        guard resumeLongTracks, let p = resumePositions[t.key] else { return 0 }
         return max(0, p - 3)   // a few seconds back, for context
     }
 
@@ -655,7 +655,7 @@ final class PlayerController {
         guard resumeLongTracks, let t = currentTrack, isLong(t), player.state != .stopped else { return }
         let pos = player.currentTime
         var all = resumePositions
-        if pos > 30, pos < player.duration - 30 { all[t.path] = pos } else { all.removeValue(forKey: t.path) }
+        if pos > 30, pos < player.duration - 30 { all[t.key] = pos } else { all.removeValue(forKey: t.key) }
         // Keep the list small.
         if all.count > 300 { for k in all.keys.prefix(all.count - 300) { all.removeValue(forKey: k) } }
         resumePositions = all
@@ -711,7 +711,7 @@ final class PlayerController {
     func removeDuplicates() -> Int {
         var seen = Set<String>()
         var dupes = IndexSet()
-        for (i, t) in store.tracks.enumerated() where !seen.insert(t.path).inserted { dupes.insert(i) }
+        for (i, t) in store.tracks.enumerated() where !seen.insert(t.key).inserted { dupes.insert(i) }
         if !dupes.isEmpty { remove(trackIndices: dupes) }
         return dupes.count
     }

@@ -16,6 +16,14 @@ struct Track: Codable, Sendable {
     var rgTrackPeak: Float?
     var rgAlbumPeak: Float?
     var tagsLoaded: Bool = false
+    // CUE sheet track: a slice of `path` (seconds). nil for normal files.
+    var cueStart: Double?
+    var cueEnd: Double?
+    var cueNumber: Int?
+
+    /// Identity in the playlist: CUE tracks share their file's path, so the start time is part of it.
+    var key: String { cueStart.map { "\(path)#\($0)" } ?? path }
+    var cueRange: (start: Double, end: Double?)? { cueStart.map { ($0, cueEnd) } }
 
     var url: URL { URL(fileURLWithPath: path) }
 

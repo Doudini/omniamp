@@ -272,9 +272,11 @@ final class ModernInfoView: NSView {
         guard let c = controller, i < c.tracks.count else { return }
         let t = c.tracks[i]
         art.image = thumb
-        title.stringValue = d?.title ?? t.title ?? t.fileStem
-        let artist = d?.artist ?? t.artist
-        let album = d?.album ?? t.album
+        // CUE tracks: the sheet knows the track; the file's own tags describe the whole album file.
+        let cue = t.cueStart != nil
+        title.stringValue = (cue ? t.title : nil) ?? d?.title ?? t.title ?? t.fileStem
+        let artist = cue ? (t.artist ?? d?.artist) : (d?.artist ?? t.artist)
+        let album = cue ? (t.album ?? d?.album) : (d?.album ?? t.album)
         // Artist and album on their own lines, so a long album name can't push the artist out of view.
         byline.stringValue = artist ?? ""
         byline.isHidden = byline.stringValue.isEmpty
@@ -286,7 +288,8 @@ final class ModernInfoView: NSView {
         albumTitle.toolTip = al.isEmpty ? nil : al
 
         var nums: [String] = []
-        if let n = d?.track { nums.append("Track \(n)" + (d?.trackTotal.map { " / \($0)" } ?? "")) }
+        if cue, let n = t.cueNumber { nums.append("Track \(n) (CUE)") }
+        else if let n = d?.track { nums.append("Track \(n)" + (d?.trackTotal.map { " / \($0)" } ?? "")) }
         if let n = d?.disc, (d?.discTotal ?? 2) > 1 { nums.append("Disc \(n)" + (d?.discTotal.map { " / \($0)" } ?? "")) }
         if let g = d?.genre { nums.append(g) }
         nums.append(TimeFormat.mmss(t.duration))

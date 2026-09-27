@@ -18,13 +18,33 @@ private func dlog(_ s: @autoclosure () -> String) { if debugAudio { NSLog("OmniA
 final class AudioPlayer {
     enum State { case stopped, playing, paused }
 
+    /// A track being played: a whole file, or a slice of one (CUE sheet track).
     private struct Item {
+        let id: Int
         let file: AVAudioFile
         let url: URL
-        /// Frame in the file where playback of this item began (non-zero after a seek).
+        /// The track's range in the file (whole file unless it is a CUE track).
+        let trackStart: AVAudioFramePosition
+        let trackEnd: AVAudioFramePosition
+        /// Frame where playback of this item began (≥ trackStart; later after a seek or resume).
         var startFrame: AVAudioFramePosition
-        var frames: AVAudioFramePosition { file.length - startFrame }
+        var frames: AVAudioFramePosition { trackEnd - startFrame }
+        var sampleRate: Double { file.processingFormat.sampleRate }
+
+        init(id: Int, file: AVAudioFile, url: URL, range: (start: Double, end: Double?)?, offset: Double) {
+            self.id = id
+            self.file = file
+            self.url = url
+            let sr = file.processingFormat.sampleRate
+            let len = file.length
+            let ts = min(max(0, AVAudioFramePosition((range?.start ?? 0) * sr)), max(0, len - 1))
+            let te = range?.end.map { min(len, max(ts + 1, AVAudioFramePosition($0 * sr))) } ?? len
+            trackStart = ts
+            trackEnd = te
+            startFrame = min(ts + AVAudioFramePosition(max(0, offset) * sr), max(ts, te - 1))
+        }
     }
+    private var nextItemID = 1
 
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
@@ -93,7 +113,7 @@ final class AudioPlayer {
 
     var duration: Double {
         guard let c = current else { return 0 }
-        return Double(c.file.length) / c.file.processingFormat.sampleRate
+        return Double(c.trackEnd - c.trackStart) / c.sampleRate
     }
 
     var currentTime: Double {
@@ -105,7 +125,7 @@ final class AudioPlayer {
     /// Start the clock at the current item's start frame (called right after node.play()).
     private func startClock() {
         guard let c = current else { return }
-        clockBase = Double(c.startFrame) / c.file.processingFormat.sampleRate
+        clockBase = Double(c.startFrame - c.trackStart) / c.sampleRate
         clockStart = CACurrentMediaTime()
     }
 
@@ -334,7 +354,8 @@ final class AudioPlayer {
 
     /// Play a file, optionally starting at `start` seconds (resume position).
     @discardableResult
-    func play(url: URL, from start: Double = 0) -> Bool {
+    /// `range`: the track's slice of the file in seconds (CUE tracks); `start`: offset within the track.
+    func play(url: URL, from start: Double = 0, range: (start: Double, end: Double?)? = nil) -> Bool {
         stopNode()
         upcoming = nil
         let file: AVAudioFile
@@ -357,8 +378,8 @@ final class AudioPlayer {
             onOutputChange?()
         }
         connect(format: file.processingFormat)
-        let startFrame = min(AVAudioFramePosition(max(0, start) * file.processingFormat.sampleRate), max(0, file.length - 1))
-        current = Item(file: file, url: url, startFrame: startFrame)
+        current = Item(id: nextItemID, file: file, url: url, range: range, offset: start)
+        nextItemID += 1
         clockBase = 0
         clockStart = nil
         state = .playing
@@ -403,17 +424,18 @@ final class AudioPlayer {
     /// Schedule `url` to start exactly when the current track ends. Returns false if it can't be gapless
     /// (different sample rate / channel count, unreadable), in which case the normal end-of-track path is used.
     @discardableResult
-    func queueNext(url: URL) -> Bool {
+    func queueNext(url: URL, range: (start: Double, end: Double?)? = nil) -> Bool {
         guard let c = current, upcoming == nil, state != .stopped else { return false }
         guard let file = try? AVAudioFile(forReading: url) else { return false }
         let a = file.processingFormat, b = c.file.processingFormat
         guard a.sampleRate == b.sampleRate, a.channelCount == b.channelCount, a.commonFormat == b.commonFormat else { return false }
-        let item = Item(file: file, url: url, startFrame: 0)
+        let item = Item(id: nextItemID, file: file, url: url, range: range, offset: 0)
+        nextItemID += 1
         upcoming = item
-        let gen = generation
-        node.scheduleSegment(file, startingFrame: 0, frameCount: AVAudioFrameCount(max(0, file.length)), at: nil,
+        let gen = generation, id = item.id
+        node.scheduleSegment(file, startingFrame: item.startFrame, frameCount: AVAudioFrameCount(max(0, item.frames)), at: nil,
                              completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            DispatchQueue.main.async { self?.segmentFinished(gen: gen, url: url) }
+            DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
         }
         return true
     }
@@ -445,7 +467,7 @@ final class AudioPlayer {
         awaitingRateSettle = false
         stopNode()
         upcoming = nil
-        if var c = current { c.startFrame = 0; current = c }
+        if var c = current { c.startFrame = c.trackStart; current = c }
         clockBase = 0
         clockStart = nil
         state = .stopped
@@ -456,10 +478,10 @@ final class AudioPlayer {
         guard var c = current else { return }
         awaitingRateSettle = false
         let wasPaused = state == .paused
-        let frame = AVAudioFramePosition(max(0, min(seconds, duration)) * c.file.processingFormat.sampleRate)
+        let frame = c.trackStart + AVAudioFramePosition(max(0, min(seconds, duration)) * c.sampleRate)
         stopNode()
         upcoming = nil
-        c.startFrame = min(frame, c.file.length)
+        c.startFrame = min(frame, max(c.trackStart, c.trackEnd - 1))
         current = c
         clockStart = nil
         scheduleCurrent()
@@ -476,16 +498,16 @@ final class AudioPlayer {
         guard let c = current, c.frames > 0 else { return }
         generation += 1
         let gen = generation
-        let url = c.url
+        let id = c.id
         node.scheduleSegment(c.file, startingFrame: c.startFrame, frameCount: AVAudioFrameCount(c.frames), at: nil,
                              completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            DispatchQueue.main.async { self?.segmentFinished(gen: gen, url: url) }
+            DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
         }
     }
 
     /// A scheduled segment finished playing out of the speakers.
-    private func segmentFinished(gen: Int, url: URL) {
-        guard gen == generation, state == .playing, current?.url == url else { return }
+    private func segmentFinished(gen: Int, id: Int) {
+        guard gen == generation, state == .playing, current?.id == id else { return }
         if let next = upcoming {
             current = next
             upcoming = nil

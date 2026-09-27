@@ -44,12 +44,12 @@ final class PlaylistStore {
     /// Completion gets the insertion index and the number of tracks added.
     func add(urls: [URL], at position: Int? = nil, completion: ((Int, Int) -> Void)? = nil) {
         let t0 = Date()
-        let cached = Dictionary(tracks.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let cached = Dictionary(tracks.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         DispatchQueue.global(qos: .userInitiated).async {
             var found = FolderScanner.scan(urls)
             // Reuse metadata we already know for identical files.
             for i in found.indices {
-                if let c = cached[found[i].path], c.size == found[i].size, c.mtime == found[i].mtime, c.tagsLoaded {
+                if let c = cached[found[i].key], c.size == found[i].size, c.mtime == found[i].mtime, c.tagsLoaded {
                     found[i] = c
                 }
             }
@@ -221,11 +221,24 @@ final class PlaylistStore {
         for (id, info) in batch {
             inFlight.remove(id)
             guard let i = indexByID?[id] else { continue } // removed meanwhile
-            tracks[i].title = info.title
-            tracks[i].artist = info.artist
-            tracks[i].album = info.album
-            tracks[i].duration = info.duration
-            tracks[i].bitrate = info.bitrate
+            if let start = tracks[i].cueStart {
+                // CUE track: the sheet's title/artist win; the file only fills gaps and gives the format.
+                tracks[i].title = tracks[i].title ?? info.title
+                tracks[i].artist = tracks[i].artist ?? info.artist
+                tracks[i].album = tracks[i].album ?? info.album
+                let end = tracks[i].cueEnd ?? info.duration
+                tracks[i].duration = end.map { max(0, $0 - start) }
+                // The bitrate belongs to the whole file, not to this slice of it.
+                if let whole = info.duration, whole > 0 {
+                    tracks[i].bitrate = info.bitrate ?? Int(Double(tracks[i].size) * 8 / whole / 1000)
+                }
+            } else {
+                tracks[i].title = info.title
+                tracks[i].artist = info.artist
+                tracks[i].album = info.album
+                tracks[i].duration = info.duration
+            }
+            if tracks[i].cueStart == nil { tracks[i].bitrate = info.bitrate }
             tracks[i].sampleRate = info.sampleRate
             tracks[i].bitDepth = info.bitDepth
             tracks[i].rgTrackGain = info.rgTrackGain

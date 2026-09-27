@@ -127,7 +127,10 @@ final class FolderSync {
             for p in paths.map({ Self.canonical($0, roots: roots) }) where root(of: p) != nil {
                 let name = (p as NSString).lastPathComponent
                 guard !name.hasPrefix(".") else { continue }  // .DS_Store, temp files
-                pending.insert(p)
+                // A changed file is rescanned with its folder: a .cue there may split it into tracks.
+                var isDir: ObjCBool = false
+                let exists = FileManager.default.fileExists(atPath: p, isDirectory: &isDir)
+                pending.insert(exists && !isDir.boolValue ? (p as NSString).deletingLastPathComponent : p)
             }
         }
         // Coalesce bursts (copying an album fires one event per file).
@@ -174,7 +177,7 @@ final class FolderSync {
     }
 
     private func apply(dirs: [String], gone: [String], found: [Track]) {
-        let foundPaths = Set(found.map(\.path))
+        let foundKeys = Set(found.map(\.key))
         func covered(_ path: String) -> Bool {
             dirs.contains { path.hasPrefix($0 + "/") } || gone.contains { path == $0 || path.hasPrefix($0 + "/") }
         }
@@ -183,17 +186,17 @@ final class FolderSync {
         let tracks = controller.tracks
         let removed = IndexSet(tracks.indices.filter { i in
             let p = tracks[i].path
-            return root(of: p) != nil && covered(p) && !foundPaths.contains(p)
+            return root(of: p) != nil && covered(p) && !foundKeys.contains(tracks[i].key)
         })
-        for r in roots { seen[r] = seen[r]?.filter { !(covered($0) && !foundPaths.contains($0)) } }
+        for r in roots { seen[r] = seen[r]?.filter { !(covered($0) && !foundKeys.contains($0)) } }
         if !removed.isEmpty { controller.remove(trackIndices: removed) }
 
         // 2. Changed on disk → re-read tags.
         var index: [String: Int] = [:]
-        for (i, t) in controller.tracks.enumerated() { index[t.path] = i }
+        for (i, t) in controller.tracks.enumerated() { index[t.key] = i }
         var updates: [(index: Int, size: Int64, mtime: Double)] = []
         for f in found {
-            if let i = index[f.path], controller.tracks[i].size != f.size || controller.tracks[i].mtime != f.mtime {
+            if let i = index[f.key], controller.tracks[i].size != f.size || controller.tracks[i].mtime != f.mtime {
                 updates.append((i, f.size, f.mtime))
             }
         }
@@ -203,9 +206,9 @@ final class FolderSync {
         var fresh: [Track] = []
         for f in found {
             guard let r = root(of: f.path) else { continue }
-            let isNew = !(seen[r]?.contains(f.path) ?? false)
-            seen[r, default: []].insert(f.path)
-            if isNew && index[f.path] == nil { fresh.append(f) }
+            let isNew = !(seen[r]?.contains(f.key) ?? false)
+            seen[r, default: []].insert(f.key)
+            if isNew && index[f.key] == nil { fresh.append(f) }
         }
         var byDir: [(String, [Track])] = []
         for f in fresh {

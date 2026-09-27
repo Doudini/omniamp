@@ -18,6 +18,7 @@ A small, fast, Winamp-inspired MP3/FLAC player for macOS, written in Swift with 
   - The device's original rate is restored on quit.
 - **Output device picker:** play to any output device, or follow the system default.
 - **Scrobbling** to **Last.fm** and **ListenBrainz** (Settings, ⌘,): Now Playing updates, standard scrobble rules, and an offline queue. Logins are stored in the Keychain.
+- **CUE sheets:** a single-file album rip (FLAC, WAV, ALAC…) plus its `.cue` shows up as separate tracks that play gaplessly. Old Windows-1252 cue files work, and so do cues that still point at the original `.wav`.
 - **Gapless playback** between tracks that share a sample format.
 - **ReplayGain** (track or album mode, with clipping protection), **stop after current** (⇧V), a **sleep timer** that fades out, **resume position** for long files and audiobooks, **always on top**, and a visualizer that cycles spectrum → oscilloscope → off.
 - **10-band equalizer** with preamp and presets, available in both looks.
