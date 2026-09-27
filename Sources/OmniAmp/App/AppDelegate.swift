@@ -41,7 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         } else {
             showLook(mode)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        // Test hook: OMNIAMP_BACKGROUND=1 leaves the app in the background (screenshots without taking the keyboard).
+        if ProcessInfo.processInfo.environment["OMNIAMP_BACKGROUND"] == nil { NSApp.activate(ignoringOtherApps: true) }
         // Test hook: OMNIAMP_SETTINGS=1 opens the Settings window at launch.
         if ProcessInfo.processInfo.environment["OMNIAMP_SETTINGS"] != nil { showSettings(nil) }
         if ProcessInfo.processInfo.environment["OMNIAMP_RADIO"] != nil { showRadio(nil) }
@@ -638,7 +639,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: Menu
 
-    @objc private func find(_ sender: Any?) { look?.focusFilter() }
+    @objc private func filterEpisodes(_ sender: Any?) {
+        showPodcasts(nil)
+        podcasts?.focusEpisodeFilter()
+    }
+
+    @objc private func find(_ sender: Any?) {
+        // ⌘F searches in whichever window is in front.
+        if let p = podcasts, NSApp.keyWindow === p.window { p.focusSearch(); return }
+        look?.focusFilter()
+    }
     /// Only when asked: there are no automatic update checks.
     @objc private func checkForUpdates(_ sender: Any?) { UpdateUI.shared.check() }
 
@@ -736,6 +746,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
         editMenu.addItem(withTitle: "Jump to Track…", action: #selector(find(_:)), keyEquivalent: "f").target = self
+        let filterItem = editMenu.addItem(withTitle: "Filter Podcast Episodes", action: #selector(filterEpisodes(_:)), keyEquivalent: "f")
+        filterItem.keyEquivalentModifierMask = [.command, .option]
+        filterItem.target = self
         editItem.submenu = editMenu
         bar.addItem(editItem)
 

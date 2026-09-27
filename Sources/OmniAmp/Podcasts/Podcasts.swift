@@ -517,6 +517,14 @@ final class PodcastLibrary {
         return cachedEpisodes(show).filter { ($0.published ?? 0) > since && !isPlayed($0.url) }.count
     }
 
+    /// Mark many episodes played at once (one save).
+    func markPlayed(_ urls: [String]) {
+        played.formUnion(urls)
+        if played.count > 5000 { played = Set(played.prefix(4000)) }
+        save(Array(played), "played.json")
+        NotificationCenter.default.post(name: Self.progressChanged, object: nil)
+    }
+
     func markSeen(_ show: PodcastShow) {
         guard let newest = cachedEpisodes(show).first?.published, seen[show.feedURL] != newest else { return }
         seen[show.feedURL] = newest

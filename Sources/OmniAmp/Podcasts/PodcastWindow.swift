@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 /// Podcast browser in the modern look: top shows per country, search, subscriptions (with new-episode
 /// counts), and the selected show's episodes. Episodes play like any track and remember their position.
 final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
-                                    NSSplitViewDelegate, NSMenuDelegate {
+                                    NSSplitViewDelegate, NSMenuDelegate, NSSearchFieldDelegate {
     private let controller: PlayerController
     private let library = PodcastLibrary.shared
     private var topButton: ModernButton!
@@ -12,15 +12,26 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var subscribeButton: ModernButton!
     private let search = NSSearchField()
     private let country = NSPopUpButton()
-    private let showsTable = NSTableView()
+    private let showsTable = KeyTableView()
     private let showsScroll = NSScrollView()
-    private let episodesTable = NSTableView()
+    private let episodesTable = KeyTableView()
+    /// Right-click menu of the show list; the show it was opened on.
+    private let showsMenu = NSMenu()
+    private var menuShow: PodcastShow?
+    /// Arrowing through the show list opens a show after a short pause (not every feed on the way).
+    private var showSelectionWork: DispatchWorkItem?
     private let episodesScroll = NSScrollView()
     private let showTitle = NSTextField(labelWithString: "")
     private let showInfo = NSTextField(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
     private var shows: [PodcastShow] = []
+    /// The open show's episodes, and the ones shown after the title filter and UNPLAYED.
+    private var allEpisodes: [PodcastEpisode] = []
     private var episodes: [PodcastEpisode] = []
+    private let episodeFilter = NSSearchField()
+    private var unplayedButton: ModernButton!
+    private static let unplayedKey = "podcastUnplayedOnly"
+    private var unplayedOnly: Bool { UserDefaults.standard.bool(forKey: Self.unplayedKey) }
     private var currentShow: PodcastShow?
     /// In the Continue listening / Downloads lists, each episode's own show (they mix shows).
     private var episodeShows: [String: PodcastShow] = [:]
@@ -183,6 +194,10 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             showsTable.addTableColumn(column("show", 300, flexible: true))
             style(showsTable, showsScroll, rowHeight: 46)
             showsTable.action = #selector(showClicked)
+            showsMenu.delegate = self
+            showsTable.menu = showsMenu
+            showsTable.onKey = { [weak self] e in self?.showsKey(e) ?? false }
+            episodesTable.onKey = { [weak self] e in self?.episodesKey(e) ?? false }
             episodesTable.addTableColumn(column("mark", 14))
             episodesTable.addTableColumn(column("art", 20))
             episodesTable.addTableColumn(column("title", 300, flexible: true))
@@ -220,7 +235,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         showInfo.textColor = Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)
         showInfo.lineBreakMode = .byTruncatingTail
         showInfo.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        subscribeButton = ModernButton(glyph: Fonts.Icon.rss, label: "SUBSCRIBE", target: self, action: #selector(toggleSubscription))
+        subscribeButton = ModernButton(glyph: Fonts.Icon.rss, label: "SUBSCRIBE", target: self, action: #selector(subscribeTapped))
         subscribeButton.glyphSize = 10
         subscribeButton.toolTip = "Subscribe: new episodes show up under SUBSCRIBED"
 
@@ -251,7 +266,24 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         folderButton.glyphSize = 10
         folderButton.toolTip = "Open the downloads folder in Finder (change it in Settings)"
         folderButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        episodeFilter.placeholderString = "Filter episodes"
+        episodeFilter.font = Fonts.hack(11)
+        episodeFilter.controlSize = .small
+        episodeFilter.sendsSearchStringImmediately = true   // it's local: filter on every key
+        episodeFilter.target = self
+        episodeFilter.action = #selector(episodeFilterChanged)
+        episodeFilter.delegate = self
+        episodeFilter.toolTip = "Show only episodes whose title has all these words (⌥⌘F)"
+        episodeFilter.setContentHuggingPriority(.defaultLow, for: .horizontal)   // stretches across its row
+        unplayedButton = ModernButton(glyph: "", label: "UNPLAYED", target: self, action: #selector(toggleUnplayed))
+        unplayedButton.isToggle = true
+        unplayedButton.isOn = unplayedOnly
+        unplayedButton.toolTip = "Hide episodes you've played"
+        unplayedButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
         let header = NSStackView(views: [showTitle, NSView(), folderButton, subscribeButton])
+        // The list's own toolbar: filter + UNPLAYED, above the episodes (the title line keeps its room).
+        let listBar = NSStackView(views: [episodeFilter, unplayedButton])
+        listBar.spacing = 8
         header.spacing = 8
         let bottom = NSStackView(views: [status, NSView(), notesButton, downloadButton, playedButton, add, play])
         bottom.spacing = 6
@@ -262,7 +294,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         // Right side: rebuilt with the theme (a new header each time), the episode/notes split moves over.
         rightPane.subviews.forEach { $0.removeFromSuperview() }
-        for v in [header, showInfo, split] as [NSView] {
+        for v in [header, showInfo, listBar, split] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             rightPane.addSubview(v)
         }
@@ -292,7 +324,10 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             showInfo.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
             showInfo.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             showInfo.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            split.topAnchor.constraint(equalTo: showInfo.bottomAnchor, constant: 8),
+            listBar.topAnchor.constraint(equalTo: showInfo.bottomAnchor, constant: 8),
+            listBar.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            listBar.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            split.topAnchor.constraint(equalTo: listBar.bottomAnchor, constant: 8),
             split.leadingAnchor.constraint(equalTo: header.leadingAnchor),
             split.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             split.bottomAnchor.constraint(equalTo: rightPane.bottomAnchor),
@@ -380,7 +415,57 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        if (notification.object as? NSTableView) === episodesTable { updateNotes(); updateDownloadButton() }
+        let table = notification.object as? NSTableView
+        if table === episodesTable { updateNotes(); updateDownloadButton() }
+        if table === showsTable {
+            showSelectionWork?.cancel()
+            let w = DispatchWorkItem { [weak self] in self?.showClicked() }
+            showSelectionWork = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: w)
+        }
+    }
+
+    // MARK: Keyboard
+
+    private enum Key { static let left: UInt16 = 123, right: UInt16 = 124, returnKey: UInt16 = 36, enter: UInt16 = 76, space: UInt16 = 49 }
+
+    /// Show list: → or Return goes to the episodes.
+    private func showsKey(_ e: NSEvent) -> Bool {
+        switch e.keyCode {
+        case Key.right, Key.returnKey, Key.enter:
+            showSelectionWork?.perform()   // open the highlighted show now
+            focusEpisodes()
+            return true
+        default: return false
+        }
+    }
+
+    /// Episode list: ← back to the shows, Return plays, Space pauses / resumes.
+    private func episodesKey(_ e: NSEvent) -> Bool {
+        switch e.keyCode {
+        case Key.left: window?.makeFirstResponder(showsTable); return true
+        case Key.returnKey, Key.enter: playSelected(); return true
+        case Key.space: controller.togglePlayPause(); return true
+        default:
+            // Letters and digits start the episode filter.
+            guard let c = e.characters, c.count == 1, c.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) else { return false }
+            focusEpisodeFilter(typing: c)
+            return true
+        }
+    }
+
+    private func focusEpisodes() {
+        window?.makeFirstResponder(episodesTable)
+        if episodesTable.selectedRow < 0, !episodes.isEmpty {
+            episodesTable.selectRowIndexes([0], byExtendingSelection: false)
+            episodesTable.scrollRowToVisible(0)
+        }
+    }
+
+    /// ⌘F while this window is in front.
+    func focusSearch() {
+        window?.makeFirstResponder(search)
+        search.currentEditor()?.selectAll(nil)
     }
 
     private func updateNotes() {
@@ -423,6 +508,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Played / started changed somewhere: markers and titles (played ones are dimmed).
     private func refreshMarks() {
+        if unplayedOnly { applyEpisodeFilter(); return }   // something played now hides
         guard !episodes.isEmpty else { return }
         episodesTable.reloadData(forRowIndexes: IndexSet(integersIn: 0..<episodes.count), columnIndexes: [0, 2])
         updateNotes()
@@ -442,8 +528,10 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             let subs = library.subscriptions.filter { lq.isEmpty || $0.title.lowercased().contains(lq) || $0.author.lowercased().contains(lq) }
             shows = (lq.isEmpty ? pinnedShows : []) + subs
             showsTable.reloadData()
+            syncShowSelection()
             scrollToTop(showsScroll)
-            status.stringValue = subs.isEmpty ? "No subscriptions yet: pick a show and press SUBSCRIBE." : "\(subs.count) subscriptions"
+            status.stringValue = library.subscriptions.isEmpty ? "No subscriptions yet: pick a show and press SUBSCRIBE."
+                : (subs.isEmpty ? "No subscriptions match “\(q)”." : "\(subs.count) subscriptions")
             selectFirstShowIfNeeded()
             return
         }
@@ -488,16 +576,78 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
     }
 
+    // MARK: Episode filter
+
+    /// The one way the episode list changes: keep the full list, show the filtered part, keep the selection.
+    private func setEpisodes(_ list: [PodcastEpisode]) {
+        allEpisodes = list
+        applyEpisodeFilter()
+    }
+
+    private func applyEpisodeFilter() {
+        let selected = Set(selectedEpisodes.map(\.url))
+        let words = episodeFilter.stringValue.lowercased().split(separator: " ").map(String.init)
+        let hidePlayed = unplayedOnly
+        episodes = allEpisodes.filter { e in
+            if hidePlayed, library.isPlayed(e.url) { return false }
+            guard !words.isEmpty else { return true }
+            let t = e.title.lowercased()
+            return words.allSatisfy { t.contains($0) }
+        }
+        episodesTable.reloadData()
+        let keep = IndexSet(episodes.indices.filter { selected.contains(episodes[$0].url) })
+        if !keep.isEmpty { episodesTable.selectRowIndexes(keep, byExtendingSelection: false) }
+        updateHeader()
+        updateNotes()
+        updateDownloadButton()
+    }
+
+    private var isFiltering: Bool { unplayedOnly || !episodeFilter.stringValue.isEmpty }
+
+    @objc private func episodeFilterChanged() {
+        applyEpisodeFilter()
+        if !episodes.isEmpty { episodesTable.scrollRowToVisible(0) }
+    }
+
+    @objc private func toggleUnplayed() {
+        UserDefaults.standard.set(!unplayedOnly, forKey: Self.unplayedKey)
+        unplayedButton.isOn = unplayedOnly
+        applyEpisodeFilter()
+    }
+
+    /// In the filter: ↓ or Return moves into the (filtered) list.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        guard control === episodeFilter else { return false }
+        if sel == #selector(NSResponder.moveDown(_:)) || sel == #selector(NSResponder.insertNewline(_:)) {
+            focusEpisodes()
+            return true
+        }
+        return false
+    }
+
+    /// ⌥⌘F, or typing in the episode list.
+    func focusEpisodeFilter(typing text: String? = nil) {
+        window?.makeFirstResponder(episodeFilter)
+        if let text { episodeFilter.currentEditor()?.insertText(text) }
+    }
+
+    /// Highlight the open show in the list (or nothing, if it isn't in this list): the row index alone would
+    /// point at another show after the list changed.
+    private func syncShowSelection() {
+        // By feed: the list's copy and the open one can differ in details filled in later (cover, author).
+        if let cur = currentShow, let r = shows.firstIndex(where: { $0.feedURL == cur.feedURL }) {
+            if showsTable.selectedRow != r { showsTable.selectRowIndexes([r], byExtendingSelection: false) }
+        } else if showsTable.selectedRow >= 0 {
+            showsTable.deselectAll(nil)
+        }
+    }
+
     /// Show a list of podcasts on the left; `keepSelection` when only adding to it (late search results).
     private func setShows(_ list: [PodcastShow], status text: String, keepSelection: Bool = false) {
-        let selected = keepSelection ? currentShow : nil
         shows = list
         showsTable.reloadData()
-        if let sel = selected, let r = shows.firstIndex(of: sel) {
-            showsTable.selectRowIndexes([r], byExtendingSelection: false)
-        } else if !keepSelection {
-            scrollToTop(showsScroll)
-        }
+        syncShowSelection()
+        if !keepSelection { scrollToTop(showsScroll) }
         status.stringValue = text
         selectFirstShowIfNeeded()
     }
@@ -524,8 +674,15 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             await withTaskGroup(of: Void.self) { group in
                 for s in subs { group.addTask { _ = try? await PodcastLibrary.shared.episodes(s) } }
             }
-            if showingSubscriptions { showsTable.reloadData() }
-            if let s = currentShow, !Self.isPinned(s) { episodes = library.cachedEpisodes(s); episodesTable.reloadData() }
+            if showingSubscriptions {
+                // Feeds may have filled in covers and authors (imported shows): take the updated entries.
+                let byFeed = Dictionary(library.subscriptions.map { ($0.feedURL, $0) }, uniquingKeysWith: { a, _ in a })
+                shows = shows.map { byFeed[$0.feedURL] ?? $0 }
+                if let c = currentShow, let updated = byFeed[c.feedURL] { currentShow = updated }
+                showsTable.reloadData()
+                syncShowSelection()
+            }
+            if let s = currentShow, !Self.isPinned(s) { setEpisodes(library.cachedEpisodes(s)) }
         }
     }
 
@@ -563,12 +720,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func openPinned(_ s: PodcastShow) {
         let list = pinnedEpisodes(s)
-        episodes = list.map(\.episode)
         episodeShows = Dictionary(list.map { ($0.episode.url, $0.show) }, uniquingKeysWith: { a, _ in a })
-        episodesTable.reloadData()
-        updateHeader()
-        updateNotes()
-        updateDownloadButton()
+        setEpisodes(list.map(\.episode))
         status.stringValue = s == Self.continueShow
             ? (episodes.isEmpty ? "Nothing started yet." : "Pick up where you left off.")
             : (episodes.isEmpty ? "No downloads: select episodes and press DOWNLOAD." : "Downloaded episodes play offline and are deleted once you finish them.")
@@ -579,23 +732,18 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         if showingSubscriptions, search.stringValue.isEmpty {
             let pinned = pinnedShows
             if pinned != Array(shows.prefix(while: Self.isPinned)) {
-                let selected = currentShow
                 shows = pinned + shows.drop(while: Self.isPinned)
                 showsTable.reloadData()
-                if let sel = selected, let r = shows.firstIndex(of: sel) { showsTable.selectRowIndexes([r], byExtendingSelection: false) }
+                syncShowSelection()
             } else {
                 showsTable.reloadData(forRowIndexes: IndexSet(integersIn: 0..<pinned.count), columnIndexes: [0])
             }
         }
         guard currentShow == s else { return }
-        let selected = Set(selectedEpisodes.map(\.url))
         let list = pinnedEpisodes(s)
-        guard list.map(\.episode.url) != episodes.map(\.url) else { return }
-        episodes = list.map(\.episode)
+        guard list.map(\.episode.url) != allEpisodes.map(\.url) else { return }
         episodeShows = Dictionary(list.map { ($0.episode.url, $0.show) }, uniquingKeysWith: { a, _ in a })
-        episodesTable.reloadData()
-        episodesTable.selectRowIndexes(IndexSet(episodes.indices.filter { selected.contains(episodes[$0].url) }), byExtendingSelection: false)
-        updateHeader()
+        setEpisodes(list.map(\.episode))
     }
 
     /// The show an episode row belongs to.
@@ -629,6 +777,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if menu === showsMenu { fillShowMenu(menu); return }
         let row = episodesTable.clickedRow >= 0 ? episodesTable.clickedRow : episodesTable.selectedRow
         guard row >= 0, row < episodes.count else { return }
         // Right-click on a row outside the selection works on that row (like Finder).
@@ -648,6 +797,60 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         add("Show in Finder…", #selector(menuReveal), enabled: states.contains(.done))
         menu.addItem(.separator())
         add(eps.allSatisfy { library.isPlayed($0.url) } ? "Mark as Unplayed" : "Mark as Played", #selector(togglePlayed))
+    }
+
+    /// Right-click on a show: subscription, refresh, mark all played, copy its feed.
+    private func fillShowMenu(_ menu: NSMenu) {
+        let row = showsTable.clickedRow >= 0 ? showsTable.clickedRow : showsTable.selectedRow
+        guard row >= 0, row < shows.count else { return }
+        let s = shows[row]
+        menuShow = s
+        func add(_ title: String, _ action: Selector) { menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self }
+        if s == Self.downloadsShow { add("Open Downloads Folder", #selector(showDownloadFolder)); return }
+        if Self.isPinned(s) { return }
+        add(library.isSubscribed(s) ? "Unsubscribe" : "Subscribe", #selector(menuToggleSubscription))
+        add("Refresh Episodes", #selector(menuRefresh))
+        add("Mark All as Played", #selector(menuMarkAllPlayed))
+        menu.addItem(.separator())
+        add("Copy Feed URL", #selector(menuCopyFeed))
+    }
+
+    @objc private func menuToggleSubscription() { if let s = menuShow { toggleSubscription(s) } }
+
+    @objc private func menuRefresh() {
+        guard let s = menuShow else { return }
+        status.stringValue = "Refreshing “\(s.title)”…"
+        Task { @MainActor in
+            do {
+                let eps = try await library.episodes(s, maxAge: 0)
+                if currentShow?.feedURL == s.feedURL { setEpisodes(eps) }
+                if let r = shows.firstIndex(of: s) { showsTable.reloadData(forRowIndexes: [r], columnIndexes: [0]) }
+                status.stringValue = "“\(s.title)”: \(eps.count) episodes."
+            } catch {
+                status.stringValue = "Couldn't refresh “\(s.title)”: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    @objc private func menuMarkAllPlayed() {
+        guard let s = menuShow else { return }
+        Task { @MainActor in
+            // A show never opened has no episodes cached yet: read its feed first.
+            var eps = library.cachedEpisodes(s)
+            if eps.isEmpty { eps = (try? await library.episodes(s)) ?? [] }
+            let urls = eps.map(\.url).filter { !library.isPlayed($0) }
+            library.markPlayed(urls)
+            library.markSeen(s)
+            if let r = shows.firstIndex(of: s) { showsTable.reloadData(forRowIndexes: [r], columnIndexes: [0]) }
+            status.stringValue = urls.isEmpty ? "Everything in “\(s.title)” was already played." : "Marked \(urls.count) episodes of “\(s.title)” as played."
+        }
+    }
+
+    @objc private func menuCopyFeed() {
+        guard let s = menuShow else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(s.feedURL, forType: .string)
+        status.stringValue = "Copied the feed address of “\(s.title)”."
     }
 
     @objc private func menuDownload() {
@@ -720,7 +923,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     @objc private func showClicked() {
         let r = showsTable.selectedRow
-        guard r >= 0, r < shows.count, shows[r] != currentShow else { return }
+        guard r >= 0, r < shows.count, shows[r].feedURL != currentShow?.feedURL else { return }
         open(shows[r])
     }
 
@@ -834,36 +1037,42 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         episodesTask?.cancel()
         if Self.isPinned(show) {
             newSince = nil
+            episodeFilter.stringValue = ""
+            episodesTable.deselectAll(nil)
             scrollToTop(episodesScroll)
             openPinned(show)
             return
         }
         episodeShows = [:]
         newSince = library.seenMark(show)
-        episodes = library.cachedEpisodes(show)
-        episodesTable.reloadData()
+        episodeFilter.stringValue = ""   // a filter typed for another show would only confuse
+        episodesTable.deselectAll(nil)
+        setEpisodes(library.cachedEpisodes(show))
         scrollToTop(episodesScroll)
-        updateHeader()
-        updateNotes()
         episodesTask?.cancel()
-        if episodes.isEmpty { status.stringValue = "Loading episodes…" }
+        if allEpisodes.isEmpty { status.stringValue = "Loading episodes…" }
         episodesTask = Task { @MainActor in
             do {
                 let eps = try await library.episodes(show)
-                guard !Task.isCancelled, currentShow == show else { return }
-                episodes = eps
-                episodesTable.reloadData()
-                updateHeader()
+                guard !Task.isCancelled, currentShow?.feedURL == show.feedURL else { return }
+                setEpisodes(eps)
                 status.stringValue = eps.isEmpty ? "This feed has no audio episodes." : "\(eps.count) episodes"
                 // Seen: the new-episode marks stay until the next visit.
                 try? await Task.sleep(for: .seconds(1))
                 library.markSeen(show)
                 showsTable.reloadData(forRowIndexes: IndexSet(integersIn: 0..<shows.count), columnIndexes: [0])
             } catch {
-                guard !Task.isCancelled, currentShow == show else { return }
-                status.stringValue = (episodes.isEmpty ? "Couldn't load this feed: " : "Showing saved episodes (offline): ") + error.localizedDescription
+                guard !Task.isCancelled, currentShow?.feedURL == show.feedURL else { return }
+                status.stringValue = (allEpisodes.isEmpty ? "Couldn't load this feed: " : "Showing saved episodes (offline): ") + error.localizedDescription
             }
         }
+    }
+
+    /// "494 episodes", or "12 of 494 episodes" while filtered.
+    private func countText(singular: String) -> String {
+        let n = allEpisodes.count
+        let noun = n == 1 ? singular : singular + "s"
+        return isFiltering && episodes.count != n ? "\(episodes.count) of \(n) \(noun)" : "\(n) \(noun)"
     }
 
     private func updateHeader() {
@@ -877,7 +1086,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         showTitle.stringValue = s.title
         if Self.isPinned(s) {
             showInfo.stringValue = s == Self.continueShow
-                ? "\(episodes.count) started episode\(episodes.count == 1 ? "" : "s")"
+                ? countText(singular: "started episode")
                 : "\(downloads.entries.count) episode\(downloads.entries.count == 1 ? "" : "s") · "
                   + ByteCountFormatter.string(fromByteCount: downloads.totalBytes, countStyle: .file)
                   + (downloads.isBusy ? " · \(downloads.pending.count) coming in" : "")
@@ -887,18 +1096,26 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             return
         }
         folderButton.isHidden = true
-        showInfo.stringValue = [s.author, s.genre ?? "", episodes.isEmpty ? "" : "\(episodes.count) episodes"]
+        showInfo.stringValue = [s.author, s.genre ?? "", allEpisodes.isEmpty ? "" : countText(singular: "episode")]
             .filter { !$0.isEmpty }.joined(separator: " · ")
         subscribeButton.isHidden = false
         subscribeButton.isOn = library.isSubscribed(s)
         subscribeButton.label = library.isSubscribed(s) ? "SUBSCRIBED" : "SUBSCRIBE"
     }
 
-    @objc private func toggleSubscription() {
-        guard let s = currentShow, !Self.isPinned(s) else { return }
+    @objc private func subscribeTapped() {
+        if let s = currentShow { toggleSubscription(s) }
+    }
+
+    private func toggleSubscription(_ s: PodcastShow) {
+        guard !Self.isPinned(s) else { return }
         library.toggleSubscription(s)
-        updateHeader()
-        if showingSubscriptions { load() } else { showsTable.reloadData() }
+        if currentShow?.feedURL == s.feedURL { updateHeader() }
+        if showingSubscriptions {
+            load()   // the list changes; setShows keeps the open show highlighted if it's still there
+        } else {
+            showsTable.reloadData()
+        }
         status.stringValue = library.isSubscribed(s) ? "Subscribed to “\(s.title)”." : "Unsubscribed from “\(s.title)”."
     }
 
@@ -927,8 +1144,10 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard !eps.isEmpty else { return }
         let makePlayed = !eps.allSatisfy { library.isPlayed($0.url) }
         for e in eps { library.markPlayed(e.url, makePlayed) }
-        episodesTable.reloadData(forRowIndexes: episodesTable.selectedRowIndexes, columnIndexes: IndexSet(integersIn: 0..<6))
-        updateNotes()
+        if unplayedOnly { applyEpisodeFilter() } else {
+            episodesTable.reloadData(forRowIndexes: episodesTable.selectedRowIndexes, columnIndexes: IndexSet(integersIn: 0..<6))
+            updateNotes()
+        }
     }
 
     // MARK: Tables

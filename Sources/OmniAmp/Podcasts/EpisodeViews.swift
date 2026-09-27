@@ -51,6 +51,15 @@ final class EpisodeMarkView: NSView {
     }
 }
 
+/// A table that first offers ←, →, Return and Space to its owner; everything else works as usual.
+final class KeyTableView: NSTableView {
+    var onKey: ((NSEvent) -> Bool)?
+    override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.intersection([.command, .control, .option]).isEmpty, onKey?(event) == true { return }
+        super.keyDown(with: event)
+    }
+}
+
 /// A row's small cover: the episode's own image, or the show's.
 final class EpisodeArtCell: NSView {
     private let art = ArtView()
