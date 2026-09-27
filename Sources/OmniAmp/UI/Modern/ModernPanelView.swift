@@ -235,11 +235,17 @@ final class ModernPanelView: NSView {
     private let volIcon = NSTextField(labelWithString: Fonts.Icon.volume)
     let seek = ModernSlider()
     let volume = ModernSlider()
-    private var shuffleButton: ModernButton!
-    private var repeatButton: ModernButton!
+    private var shuffleButton: LEDKey!
+    private var repeatButton: LEDKey!
+    // Transport row; tightened in narrow windows so everything fits down to the minimum width.
+    private var transportStrips: [KeyStrip] = []
+    private var rowGaps: [NSLayoutConstraint] = []
+    private var infoWidth: NSLayoutConstraint!
+    private var eqWidth: NSLayoutConstraint!
+    private var tight = false
     private var topConstraint: NSLayoutConstraint!
     /// Extra space at the top for a transparent titlebar.
-    var topInset: CGFloat = 0 { didSet { topConstraint.constant = 10 + topInset } }
+    var topInset: CGFloat = 0 { didSet { topConstraint.constant = 3 + topInset } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -307,37 +313,47 @@ final class ModernPanelView: NSView {
         seek.target = self
         seek.action = #selector(seekReleased)
 
-        shuffleButton = ModernButton(glyph: Fonts.Icon.shuffle, label: "SHUF", target: self, action: #selector(shuffleTapped))
-        repeatButton = ModernButton(glyph: Fonts.Icon.repeatAll, label: "REP", target: self, action: #selector(repeatTapped))
-        shuffleButton.isToggle = true; repeatButton.isToggle = true
-        shuffleButton.glyphSize = 10; repeatButton.glyphSize = 10
-        rightBox.addSubview(shuffleButton)
-        rightBox.addSubview(repeatButton)
+        shuffleButton = LEDKey(glyph: Fonts.Icon.shuffle, tip: "Shuffle", target: self, action: #selector(shuffleTapped))
+        repeatButton = LEDKey(glyph: Fonts.Icon.repeatAll, tip: "Repeat", target: self, action: #selector(repeatTapped))
         addSubview(seek)
 
-        let transport = [
-            ModernButton(glyph: Fonts.Icon.prev, target: self, action: #selector(prev)),
-            ModernButton(glyph: Fonts.Icon.play, target: self, action: #selector(play)),
-            ModernButton(glyph: Fonts.Icon.pause, target: self, action: #selector(pause)),
-            ModernButton(glyph: Fonts.Icon.stop, target: self, action: #selector(stop)),
-            ModernButton(glyph: Fonts.Icon.next, target: self, action: #selector(next)),
-        ]
-        let tips = ["Previous (Z)", "Play (X)", "Pause (C)", "Stop (V)", "Next (B)"]
-        for (b, t) in zip(transport, tips) { b.toolTip = t }
-        let eject = ModernButton(glyph: Fonts.Icon.eject, target: self, action: #selector(open))
-        eject.toolTip = "Add files or folder (⌘O)"
-        let buttons = NSStackView(views: transport)
-        buttons.spacing = 3
-        buttons.translatesAutoresizingMaskIntoConstraints = false
+        // Transport: one strip of joined keys, like a tape deck's.
+        let buttons = KeyStrip([
+            .init(glyph: Fonts.Icon.prev, tip: "Previous (Z)") { [weak self] in self?.prev() },
+            .init(glyph: Fonts.Icon.play, tip: "Play (X)") { [weak self] in self?.play() },
+            .init(glyph: Fonts.Icon.pause, tip: "Pause (C)") { [weak self] in self?.pause() },
+            .init(glyph: Fonts.Icon.stop, tip: "Stop (V)") { [weak self] in self?.stop() },
+            .init(glyph: Fonts.Icon.next, tip: "Next (B)") { [weak self] in self?.next() },
+        ])
+        let eject = KeyStrip([.init(glyph: Fonts.Icon.eject, tip: "Add files or folder (⌘O)") { [weak self] in self?.open() }])
         addSubview(buttons)
         addSubview(eject)
+        // Shuffle and repeat sit right after eject, where Winamp has them.
+        addSubview(shuffleButton)
+        addSubview(repeatButton)
+        transportStrips = [buttons, eject]
         eqButton = ModernButton(glyph: "", label: "EQ", target: self, action: #selector(eqTapped))
         eqButton.toolTip = "Equalizer"
+        eqButton.keyStyle = true
+        eqButton.housing = false
         addSubview(eqButton)
         infoButton = ModernButton(glyph: "", label: "INFO", target: self, action: #selector(infoTapped))
         infoButton.toolTip = "Track and album info"
+        infoButton.keyStyle = true
+        infoButton.housing = false
         addSubview(infoButton)
 
+        rowGaps = [eject.leadingAnchor.constraint(equalTo: buttons.trailingAnchor, constant: 10),
+                   shuffleButton.leadingAnchor.constraint(equalTo: eject.trailingAnchor, constant: 10)]
+        infoWidth = infoButton.widthAnchor.constraint(equalToConstant: 50)
+        eqWidth = eqButton.widthAnchor.constraint(equalToConstant: 44)
+        // Keeps INFO clear of the keys; below the window's resize priority, so it never forces the window wider
+        // (the tight layout below makes the row fit at the minimum width instead).
+        let clear = infoButton.leadingAnchor.constraint(greaterThanOrEqualTo: repeatButton.trailingAnchor, constant: 10)
+        clear.priority = NSLayoutConstraint.Priority(450)
+        NSLayoutConstraint.activate(rowGaps + [infoWidth, eqWidth, clear])
+        KeyHousing.wrap([shuffleButton, repeatButton], in: self)
+        KeyHousing.wrap([infoButton, eqButton], in: self)
         topConstraint = leftBox.topAnchor.constraint(equalTo: topAnchor, constant: 10)
         NSLayoutConstraint.activate([
             topConstraint,
@@ -383,20 +399,13 @@ final class ModernPanelView: NSView {
             badge.topAnchor.constraint(equalTo: infoLabel.bottomAnchor, constant: 1),
 
             volIcon.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 8),
-            volIcon.centerYAnchor.constraint(equalTo: repeatButton.centerYAnchor),
+            volIcon.centerYAnchor.constraint(equalTo: rightBox.bottomAnchor, constant: -17),
             volume.leadingAnchor.constraint(equalTo: volIcon.trailingAnchor, constant: 4),
-            volume.centerYAnchor.constraint(equalTo: repeatButton.centerYAnchor),
-            volume.widthAnchor.constraint(lessThanOrEqualToConstant: 84),
+            volume.centerYAnchor.constraint(equalTo: volIcon.centerYAnchor),
+            volume.widthAnchor.constraint(lessThanOrEqualToConstant: 140),
             volume.widthAnchor.constraint(greaterThanOrEqualToConstant: 40),
+            volume.trailingAnchor.constraint(lessThanOrEqualTo: rightBox.trailingAnchor, constant: -10),
             volume.heightAnchor.constraint(equalToConstant: 16),
-
-            repeatButton.trailingAnchor.constraint(equalTo: rightBox.trailingAnchor, constant: -6),
-            repeatButton.bottomAnchor.constraint(equalTo: rightBox.bottomAnchor, constant: -6),
-            repeatButton.heightAnchor.constraint(equalToConstant: 20),
-            shuffleButton.trailingAnchor.constraint(equalTo: repeatButton.leadingAnchor, constant: -4),
-            shuffleButton.centerYAnchor.constraint(equalTo: repeatButton.centerYAnchor),
-            shuffleButton.heightAnchor.constraint(equalToConstant: 20),
-            shuffleButton.leadingAnchor.constraint(greaterThanOrEqualTo: volume.trailingAnchor, constant: 8),
 
             seek.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             seek.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
@@ -406,14 +415,20 @@ final class ModernPanelView: NSView {
             buttons.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             buttons.topAnchor.constraint(equalTo: seek.bottomAnchor, constant: 8),
             buttons.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-            eject.leadingAnchor.constraint(equalTo: buttons.trailingAnchor, constant: 10),
             eject.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
+            shuffleButton.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
+            shuffleButton.widthAnchor.constraint(equalToConstant: LEDKey.size),
+            shuffleButton.heightAnchor.constraint(equalToConstant: LEDKey.size),
+            repeatButton.leadingAnchor.constraint(equalTo: shuffleButton.trailingAnchor, constant: KeyHousing.seam),
+            repeatButton.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
+            repeatButton.widthAnchor.constraint(equalToConstant: LEDKey.size),
+            repeatButton.heightAnchor.constraint(equalToConstant: LEDKey.size),
             eqButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             eqButton.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
-            eqButton.widthAnchor.constraint(equalToConstant: 44),
-            infoButton.trailingAnchor.constraint(equalTo: eqButton.leadingAnchor, constant: -4),
+
+            infoButton.trailingAnchor.constraint(equalTo: eqButton.leadingAnchor, constant: -KeyHousing.seam),
             infoButton.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
-            infoButton.widthAnchor.constraint(equalToConstant: 50),
+
         ])
     }
 
@@ -477,11 +492,19 @@ final class ModernPanelView: NSView {
         }
         super.layout()
         styleBackground()
+        // Very narrow windows: slimmer transport keys and gaps, so the whole row still fits.
+        let isTight = bounds.width < 440
+        if isTight != tight {
+            tight = isTight
+            transportStrips.forEach { $0.keyWidth = isTight ? 27 : 32 }
+            rowGaps[0].constant = isTight ? 6 : 10
+            rowGaps[1].constant = isTight ? 8 : 10
+            infoWidth.constant = isTight ? 42 : 50
+            eqWidth.constant = isTight ? 34 : 44
+        }
         let narrow = bounds.width < 520
         if narrow != compact {
             compact = narrow
-            shuffleButton.compact = narrow
-            repeatButton.compact = narrow
             updateInfoLines()
         }
         time.digitHeight = leftBox.frame.width >= 150 ? 29 : 23

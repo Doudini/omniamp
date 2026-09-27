@@ -186,6 +186,11 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         podcastBtn = ModernButton(glyph: Fonts.Icon.podcast, label: "PODCASTS", target: self, action: #selector(podcastsTapped))
         podcastBtn.toolTip = "Podcasts (⌘⌥P)"
         addBtn.glyphSize = 10; radioBtn.glyphSize = 11; podcastBtn.glyphSize = 11
+        for b in [addBtn!, radioBtn!, podcastBtn!] {
+            b.keyStyle = true
+            b.housing = false
+            b.keyBase = Theme.background.blended(withFraction: 0.35, of: Theme.panelTop)!   // matches the darker bottom bar
+        }
         root.addSubview(podcastBtn)
         root.addSubview(addBtn)
         root.addSubview(radioBtn)
@@ -210,16 +215,16 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
             scroll.bottomAnchor.constraint(equalTo: filterField.topAnchor, constant: -8),
 
-            addBtn.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
+            addBtn.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             addBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
             addBtn.heightAnchor.constraint(equalToConstant: 22),
-            radioBtn.leadingAnchor.constraint(equalTo: addBtn.trailingAnchor, constant: 4),
+            radioBtn.leadingAnchor.constraint(equalTo: addBtn.trailingAnchor, constant: KeyHousing.seam),
             radioBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
             radioBtn.heightAnchor.constraint(equalToConstant: 22),
-            podcastBtn.leadingAnchor.constraint(equalTo: radioBtn.trailingAnchor, constant: 4),
+            podcastBtn.leadingAnchor.constraint(equalTo: radioBtn.trailingAnchor, constant: KeyHousing.seam),
             podcastBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
             podcastBtn.heightAnchor.constraint(equalToConstant: 22),
-            filterField.leadingAnchor.constraint(equalTo: podcastBtn.trailingAnchor, constant: 10),
+            filterField.leadingAnchor.constraint(equalTo: podcastBtn.trailingAnchor, constant: 12),
             filterField.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
             filterField.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
 
@@ -227,6 +232,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             statusLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             statusLabel.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
         ])
+        KeyHousing.wrap([addBtn, radioBtn, podcastBtn], in: root)
         // Push the panel's content below the transparent titlebar.
         panel.topInset = titlebarHeight
     }
