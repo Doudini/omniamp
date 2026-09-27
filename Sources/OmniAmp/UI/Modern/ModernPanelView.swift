@@ -268,7 +268,11 @@ final class ModernPanelView: NSView {
         stateLabel.stringValue = st == .playing ? Fonts.Icon.play : (st == .paused ? Fonts.Icon.pause : Fonts.Icon.stop)
         let d = p.duration
         if !seek.isDragging { seek.value = d > 0 && st != .stopped ? p.currentTime / d : 0 }
-        spectrum.update(with: st == .playing && Analyzer.isOn ? p.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount))
+        if Analyzer.mode == .oscilloscope {
+            spectrum.update(wave: st == .playing ? p.spectrum.wave() : [])
+        } else {
+            spectrum.update(with: st == .playing && Analyzer.isOn ? p.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount))
+        }
         marquee.tick()
     }
 

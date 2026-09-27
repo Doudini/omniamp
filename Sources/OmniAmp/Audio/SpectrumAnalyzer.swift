@@ -22,6 +22,10 @@ final class SpectrumAnalyzer: @unchecked Sendable {
     private var bandsRate: Float = 0
     private let latest = OSAllocatedUnfairLock(initialState: [Float](repeating: 0, count: SpectrumAnalyzer.barCount))
     private let enabledFlag = OSAllocatedUnfairLock(initialState: false)
+    /// Oscilloscope: 128 mono samples of the latest buffer (-1…1).
+    static let waveCount = 128
+    private var waveWork = [Float](repeating: 0, count: SpectrumAnalyzer.waveCount)
+    private let latestWave = OSAllocatedUnfairLock(initialState: [Float](repeating: 0, count: SpectrumAnalyzer.waveCount))
 
     /// Turned on only while an analyzer is on screen and music plays.
     var isEnabled: Bool {
@@ -45,7 +49,11 @@ final class SpectrumAnalyzer: @unchecked Sendable {
 
     func reset() {
         latest.withLock { for i in $0.indices { $0[i] = 0 } }
+        latestWave.withLock { for i in $0.indices { $0[i] = 0 } }
     }
+
+    /// Latest waveform for the oscilloscope.
+    func wave() -> [Float] { latestWave.withLock { $0 } }
 
     /// Latest bar levels in 0...1.
     func bars() -> [Float] { latest.withLock { $0 } }
@@ -77,6 +85,10 @@ final class SpectrumAnalyzer: @unchecked Sendable {
         for c in 0..<channels { vDSP_vadd(mono, 1, ch[c], 1, &mono, 1, vDSP_Length(count)) }
         var scale = 1 / Float(max(channels, 1))
         vDSP_vsmul(mono, 1, &scale, &mono, 1, vDSP_Length(n))
+        // Oscilloscope: pick evenly spaced samples before windowing.
+        let step = max(1, count / Self.waveCount)
+        for i in 0..<Self.waveCount { waveWork[i] = mono[min(count - 1, i * step)] }
+        latestWave.withLock { for i in 0..<Self.waveCount { $0[i] = waveWork[i] } }
         vDSP_vmul(mono, 1, window, 1, &mono, 1, vDSP_Length(n))
 
         let half = n / 2

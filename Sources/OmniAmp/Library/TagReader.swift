@@ -8,6 +8,26 @@ struct TagInfo: Equatable {
     var bitrate: Int?
     var sampleRate: Int?
     var bitDepth: Int?
+    // ReplayGain (dB / linear peak).
+    var rgTrackGain: Float?
+    var rgAlbumGain: Float?
+    var rgTrackPeak: Float?
+    var rgAlbumPeak: Float?
+
+    /// REPLAYGAIN_TRACK_GAIN = "-6.54 dB", REPLAYGAIN_TRACK_PEAK = "0.98" … (any container, any case).
+    mutating func setReplayGain(key: String, value: String) {
+        let k = key.uppercased()
+        guard k.hasPrefix("REPLAYGAIN_") else { return }
+        let num = Float(value.replacingOccurrences(of: "dB", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
+        switch k {
+        case "REPLAYGAIN_TRACK_GAIN": rgTrackGain = num
+        case "REPLAYGAIN_ALBUM_GAIN": rgAlbumGain = num
+        case "REPLAYGAIN_TRACK_PEAK": rgTrackPeak = num
+        case "REPLAYGAIN_ALBUM_PEAK": rgAlbumPeak = num
+        default: break
+        }
+    }
 }
 
 /// Minimal, fast tag reader: reads only the head (and for ID3v1 the tail) of a file.
@@ -107,6 +127,7 @@ enum TagReader {
             case "TITLE": if info.title == nil { info.title = val }
             case "ARTIST": if info.artist == nil { info.artist = val }
             case "ALBUM": if info.album == nil { info.album = val }
+            case let k where k.hasPrefix("REPLAYGAIN_"): info.setReplayGain(key: k, value: val)
             default: break
             }
         }
@@ -176,6 +197,10 @@ enum TagReader {
                 case "TALB": info.album = decodeText(b, s, e)
                 case "TLEN":
                     if info.duration == nil, let ms = Double(decodeText(b, s, e) ?? ""), ms > 0 { info.duration = ms / 1000 }
+                case "TXXX":
+                    // User text: description\0value (ReplayGain lives here).
+                    let parts = decodeParts(b, s, e)
+                    if parts.count >= 2 { info.setReplayGain(key: parts[0], value: parts[1]) }
                 default: break
                 }
             }
@@ -204,6 +229,23 @@ enum TagReader {
         let first = str?.split(separator: "\0", omittingEmptySubsequences: true).first.map(String.init)
         let t = first?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (t?.isEmpty ?? true) ? nil : t
+    }
+
+    /// All NUL-separated values of a text frame (TXXX needs description + value).
+    static func decodeParts(_ b: [UInt8], _ s: Int, _ e: Int) -> [String] {
+        guard s < e else { return [] }
+        let enc = b[s]
+        let bytes = Array(b[(s + 1)..<e])
+        let str: String?
+        switch enc {
+        case 0: str = String(bytes: bytes, encoding: .isoLatin1)
+        case 1: str = String(bytes: bytes.count % 2 == 1 ? Array(bytes.dropLast()) : bytes, encoding: .utf16)
+        case 2: str = String(bytes: bytes.count % 2 == 1 ? Array(bytes.dropLast()) : bytes, encoding: .utf16BigEndian)
+        default: str = String(bytes: bytes, encoding: .utf8)
+        }
+        return (str ?? "").components(separatedBy: "\0")
+            .map { $0.replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     private static func stripUTF16Null(_ bytes: [UInt8]) -> [UInt8] {

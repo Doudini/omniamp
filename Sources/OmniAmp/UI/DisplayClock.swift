@@ -1,17 +1,34 @@
 import AppKit
 import QuartzCore
 
-/// The spectrum analyzer can be switched off (click it, like Winamp); then the UI only needs a slow clock.
+/// The visualizer, like Winamp's: click it to cycle spectrum → oscilloscope → off.
+/// When off, the UI only needs a slow clock.
 enum Analyzer {
+    enum Mode: String, CaseIterable {
+        case spectrum, oscilloscope, off
+        var title: String { self == .spectrum ? "Spectrum Analyzer" : (self == .oscilloscope ? "Oscilloscope" : "Off") }
+    }
+
     static let changed = Notification.Name("OmniAmpAnalyzerChanged")
-    static var isOn: Bool {
-        get { UserDefaults.standard.object(forKey: "analyzerOn") as? Bool ?? true }
+
+    static var mode: Mode {
+        get {
+            if let m = Mode(rawValue: UserDefaults.standard.string(forKey: "analyzerMode") ?? "") { return m }
+            return UserDefaults.standard.object(forKey: "analyzerOn") as? Bool == false ? .off : .spectrum
+        }
         set {
-            UserDefaults.standard.set(newValue, forKey: "analyzerOn")
+            UserDefaults.standard.set(newValue.rawValue, forKey: "analyzerMode")
             NotificationCenter.default.post(name: changed, object: nil)
         }
     }
-    static func toggle() { isOn.toggle() }
+
+    static var isOn: Bool { mode != .off }
+
+    /// Click: spectrum → oscilloscope → off → spectrum.
+    static func toggle() {
+        let all = Mode.allCases
+        mode = all[(all.firstIndex(of: mode)! + 1) % all.count]
+    }
 }
 
 /// Seconds since launch, for animations that must not depend on the frame rate.
@@ -63,7 +80,7 @@ final class DisplayClock {
     /// Call when playback state or visibility may have changed.
     func update() {
         let visible = isVisible
-        let analyzer = Analyzer.isOn
+        let analyzer = Analyzer.isOn   // spectrum and oscilloscope both need the tap and 20 fps
         let wanted: Double = !visible ? 0 : (player.state == .playing ? (analyzer ? 20 : 8) : (player.state == .paused ? 4 : 0))
         player.setAnalyzerActive(visible && player.state == .playing && analyzer)
         guard wanted != fps else { return }

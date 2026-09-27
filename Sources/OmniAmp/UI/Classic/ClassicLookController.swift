@@ -109,6 +109,10 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
         mainWindow.orderOut(nil)
     }
 
+    func setFloating(_ on: Bool) {
+        for w in [mainWindow, eqWindow, playlistWindow] { w.level = on ? .floating : .normal }
+    }
+
     func apply(skin: Skin) {
         self.skin = skin
         mainView.skin = skin

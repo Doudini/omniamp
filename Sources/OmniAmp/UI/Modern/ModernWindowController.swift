@@ -396,7 +396,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     private func uiTick() {
         tick += 1
         panel.refresh(tick: tick)
-        if tick % 30 == 0, controller.store.isLoadingTags { updateStatus() }
+        if tick % 30 == 0, controller.store.isLoadingTags || controller.sleepAt != nil { updateStatus() }
     }
 
     func playbackStateDidChange() {

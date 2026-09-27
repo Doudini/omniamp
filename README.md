@@ -18,6 +18,7 @@ A small, fast, Winamp-inspired MP3/FLAC player for macOS, written in Swift with 
   - The device's original rate is restored on quit.
 - **Output device picker:** play to any output device, or follow the system default.
 - **Gapless playback** between tracks that share a sample format.
+- **ReplayGain** (track or album mode, with clipping protection), **stop after current** (⇧V), a **sleep timer** that fades out, **resume position** for long files and audiobooks, **always on top**, and a visualizer that cycles spectrum → oscilloscope → off.
 - **10-band equalizer** with preamp and presets, available in both looks.
 - **Watched folders:** the playlist follows your music folders live. New files are added next to their folder-mates, deleted files are removed and edited files are re-tagged, and tracks you removed by hand stay removed. Your folder structure is never touched.
 - **Playlists:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists.

@@ -84,6 +84,8 @@ final class ClassicMainView: SkinCanvasView {
     private var marqueeStart = animationTime
     private var tick = 0
     private var levels = [Float](repeating: 0, count: 19)
+    /// Oscilloscope samples (empty unless in oscilloscope mode and playing).
+    private var scope: [Float] = []
     private var peaks = [Float](repeating: 0, count: 19)
 
     static let size = CGSize(width: 275, height: 116)
@@ -129,7 +131,14 @@ final class ClassicMainView: SkinCanvasView {
         tick += 1
         guard let c = controller else { return }
         let playing = c.player.state == .playing
-        let bars = playing && Analyzer.isOn ? c.player.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount)
+        if Analyzer.mode == .oscilloscope {
+            scope = playing ? c.player.spectrum.wave() : []
+            invalidate(CGRect(x: 24, y: 43, width: 76, height: 16))
+        } else if !scope.isEmpty {
+            scope = []
+            invalidate(CGRect(x: 24, y: 43, width: 76, height: 16))
+        }
+        let bars = playing && Analyzer.mode == .spectrum ? c.player.spectrum.bars() : [Float](repeating: 0, count: SpectrumAnalyzer.barCount)
         var visChanged = false
         for i in 0..<19 {
             let v = bars[min(bars.count - 1, i * bars.count / 19)]
@@ -300,6 +309,22 @@ final class ClassicMainView: SkinCanvasView {
             for x in stride(from: 1, to: 76, by: 2) {
                 ctx.fill(CGRect(x: origin.x + CGFloat(x), y: origin.y + CGFloat(y), width: 1, height: 1))
             }
+        }
+        if Analyzer.mode == .oscilloscope {
+            // Winamp's scope: one dot per column, joined vertically, colored by distance from center (VISCOLOR 18-22).
+            guard scope.count > 1 else { return }
+            var lastY: Int?
+            for x in 0..<76 {
+                let v = scope[x * (scope.count - 1) / 75]
+                let y = max(0, min(15, 8 - Int((v * 1.6 * 8).rounded())))
+                let from = lastY.map { min($0, y) } ?? y, to = lastY.map { max($0, y) } ?? y
+                for yy in from...to {
+                    ctx.setFillColor(vc[18 + min(4, abs(yy - 8) / 2)].cgColor)
+                    ctx.fill(CGRect(x: origin.x + CGFloat(x), y: origin.y + CGFloat(yy), width: 1, height: 1))
+                }
+                lastY = y
+            }
+            return
         }
         guard active || peaks.contains(where: { $0 > 0.01 }) else { return }
         for i in 0..<19 {

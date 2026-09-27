@@ -12,7 +12,16 @@ final class SpectrumView: NSView {
 
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 
+    /// Oscilloscope samples (nil = spectrum mode).
+    private var wave: [Float]?
+
+    func update(wave w: [Float]) {
+        wave = w
+        needsDisplay = true
+    }
+
     func update(with bars: [Float]) {
+        if wave != nil { wave = nil; needsDisplay = true }
         var changed = false
         for i in 0..<min(bars.count, levels.count) {
             let old = (levels[i], peaks[i])
@@ -26,6 +35,7 @@ final class SpectrumView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         if drawsBackground { Theme.lcd.setFill(); bounds.fill() }
+        if let w = wave { drawScope(w); return }
         let n = levels.count
         let gap: CGFloat = 2
         let w = floor((bounds.width - gap * CGFloat(n - 1)) / CGFloat(n))
@@ -53,5 +63,29 @@ final class SpectrumView: NSView {
                 NSRect(x: x, y: py, width: w, height: 1).fill()
             }
         }
+    }
+
+    /// Winamp-style oscilloscope: a glowing phosphor trace over a faint center line.
+    private func drawScope(_ w: [Float]) {
+        let mid = bounds.midY
+        Theme.phosphorGhost.setFill()
+        NSRect(x: 0, y: mid - 0.5, width: bounds.width, height: 1).fill()
+        guard w.count > 1 else { return }
+        let path = NSBezierPath()
+        let amp = bounds.height / 2 - 2
+        for (i, v) in w.enumerated() {
+            let p = NSPoint(x: CGFloat(i) / CGFloat(w.count - 1) * bounds.width, y: mid + CGFloat(max(-1, min(1, v * 1.6))) * amp)
+            i == 0 ? path.move(to: p) : path.line(to: p)
+        }
+        path.lineWidth = 1.5
+        path.lineJoinStyle = .round
+        NSGraphicsContext.saveGraphicsState()
+        let glow = NSShadow()
+        glow.shadowColor = Theme.phosphor.withAlphaComponent(0.8)
+        glow.shadowBlurRadius = 4
+        glow.set()
+        Theme.phosphor.setStroke()
+        path.stroke()
+        NSGraphicsContext.restoreGraphicsState()
     }
 }

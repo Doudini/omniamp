@@ -115,6 +115,7 @@ final class AudioPlayer {
     }
 
     var remaining: Double { max(0, duration - currentTime) }
+    var currentURL: URL? { current?.url }
     var hasQueuedNext: Bool { upcoming != nil }
     var sampleRate: Double { current?.file.fileFormat.sampleRate ?? 0 }
     var channelCount: Int { Int(current?.file.fileFormat.channelCount ?? 0) }
@@ -204,8 +205,18 @@ final class AudioPlayer {
         eq.installTap(onBus: 0, bufferSize: 2048, format: f) { [spectrum] buf, _ in spectrum.process(buf) }
     }
 
+    /// ReplayGain for the current track (linear). Ignored in bit-perfect mode, which must not alter samples.
+    var replayGain: Float = 1 { didSet { applyGainStage() } }
+    /// Fade multiplier (sleep timer fade-out).
+    var fadeGain: Float = 1 { didSet { applyGainStage() } }
+
+    private func applyGainStage() {
+        converter.outputVolume = (bitPerfect ? 1 : replayGain) * fadeGain
+    }
+
     /// EQ bypass and mixer volume for the current mode.
     private func applyMixState() {
+        applyGainStage()
         eq.bypass = bitPerfect || !eqSettings.enabled
         eq.globalGain = eqSettings.preamp
         for (i, g) in eqSettings.bands.prefix(eq.bands.count).enumerated() { eq.bands[i].gain = g }
@@ -321,8 +332,9 @@ final class AudioPlayer {
 
     // MARK: Transport
 
+    /// Play a file, optionally starting at `start` seconds (resume position).
     @discardableResult
-    func play(url: URL) -> Bool {
+    func play(url: URL, from start: Double = 0) -> Bool {
         stopNode()
         upcoming = nil
         let file: AVAudioFile
@@ -345,7 +357,8 @@ final class AudioPlayer {
             onOutputChange?()
         }
         connect(format: file.processingFormat)
-        current = Item(file: file, url: url, startFrame: 0)
+        let startFrame = min(AVAudioFramePosition(max(0, start) * file.processingFormat.sampleRate), max(0, file.length - 1))
+        current = Item(file: file, url: url, startFrame: startFrame)
         clockBase = 0
         clockStart = nil
         state = .playing

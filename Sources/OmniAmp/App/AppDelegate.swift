@@ -5,10 +5,13 @@ import UniformTypeIdentifiers
 protocol LookController: PlayerUI {
     func show()
     func dismantle()
+    /// Always on top.
+    func setFloating(_ on: Bool)
 }
 
 extension ModernWindowController: LookController {
     func show() { showWindow(nil) }
+    func setFloating(_ on: Bool) { window?.level = on ? .floating : .normal }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
@@ -88,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         if persist { mode = m }
         look?.show()
+        look?.setFloating(alwaysOnTop)
     }
 
     /// Classic look with the last used skin; asks for one if there is none yet.
@@ -149,6 +153,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let u = sender.representedObject as? URL { loadSkin(u) }
     }
 
+    // MARK: Quick wins
+
+    private var alwaysOnTop: Bool {
+        get { UserDefaults.standard.bool(forKey: "alwaysOnTop") }
+        set { UserDefaults.standard.set(newValue, forKey: "alwaysOnTop") }
+    }
+
+    @objc private func toggleOnTop(_ sender: Any?) {
+        alwaysOnTop.toggle()
+        look?.setFloating(alwaysOnTop)
+    }
+    @objc private func toggleStopAfter(_ sender: Any?) { controller.stopAfterCurrent.toggle() }
+    @objc private func setSleep(_ sender: NSMenuItem) { controller.setSleepTimer(minutes: sender.tag == 0 ? nil : sender.tag) }
+    @objc private func toggleResume(_ sender: Any?) { controller.resumeLongTracks.toggle() }
+    @objc private func setReplayGain(_ sender: NSMenuItem) {
+        if let m = PlayerController.ReplayGainMode(rawValue: sender.representedObject as? String ?? "") { controller.replayGainMode = m }
+    }
+    @objc private func setAnalyzer(_ sender: NSMenuItem) {
+        if let m = Analyzer.Mode(rawValue: sender.representedObject as? String ?? "") { Analyzer.mode = m }
+    }
+    @objc private func removeDuplicates(_ sender: Any?) {
+        let n = controller.removeDuplicates()
+        let a = NSAlert()
+        a.messageText = n == 0 ? "No duplicates found." : "Removed \(n) duplicate\(n == 1 ? "" : "s")."
+        a.runModal()
+    }
+
     @objc private func pickPlaylistFont(_ sender: NSMenuItem) {
         if let f = PlaylistStyle.Font(rawValue: sender.representedObject as? String ?? "") { PlaylistStyle.font = f }
     }
@@ -199,6 +230,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         themeItem.submenu = themes
         m.addItem(themeItem)
+        let anItem = NSMenuItem(title: "Visualizer", action: nil, keyEquivalent: "")
+        let an = NSMenu(title: "Visualizer")
+        for mode in Analyzer.Mode.allCases {
+            let it = an.addItem(withTitle: mode.title, action: #selector(setAnalyzer(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = mode.rawValue
+        }
+        anItem.submenu = an
+        m.addItem(anItem)
+        m.addItem(withTitle: "Always on Top", action: #selector(toggleOnTop(_:)), keyEquivalent: "").target = self
         let fontItem = NSMenuItem(title: "Playlist Font", action: nil, keyEquivalent: "")
         let fonts = NSMenu(title: "Playlist Font")
         for f in PlaylistStyle.Font.allCases {
@@ -241,6 +282,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if item.action == #selector(showModern(_:)) { item.state = mode == .modern ? .on : .off }
         if item.action == #selector(showClassic(_:)) { item.state = mode == .classic ? .on : .off }
         if item.action == #selector(toggleEQ(_:)) { item.state = controller.eqSettings.enabled ? .on : .off }
+        if item.action == #selector(toggleOnTop(_:)) { item.state = alwaysOnTop ? .on : .off }
+        if item.action == #selector(toggleStopAfter(_:)) { item.state = controller.stopAfterCurrent ? .on : .off }
+        if item.action == #selector(toggleResume(_:)) { item.state = controller.resumeLongTracks ? .on : .off }
+        if item.action == #selector(setSleep(_:)) {
+            let left = controller.sleepAt.map { Int(ceil($0.timeIntervalSinceNow / 60)) }
+            item.state = (item.tag == 0 && left == nil) ? .on : .off
+            if item.tag == 0, let l = left { item.title = "Off  (\(l) min left)" } else if item.tag == 0 { item.title = "Off" }
+        }
+        if item.action == #selector(setReplayGain(_:)) {
+            item.state = (item.representedObject as? String) == controller.replayGainMode.rawValue ? .on : .off
+            item.toolTip = controller.player.bitPerfect ? "Bypassed in bit-perfect mode." : nil
+        }
+        if item.action == #selector(setAnalyzer(_:)) { item.state = (item.representedObject as? String) == Analyzer.mode.rawValue ? .on : .off }
         if item.action == #selector(pickPlaylistFont(_:)) { item.state = (item.representedObject as? String) == PlaylistStyle.font.rawValue ? .on : .off }
         if item.action == #selector(toggleNumbers(_:)) { item.state = PlaylistStyle.showNumbers ? .on : .off }
         if item.action == #selector(pickTheme(_:)) { item.state = (item.representedObject as? String) == Theme.palette.id ? .on : .off }
@@ -262,7 +316,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case "z": c.previous()
             case "x": c.playOrResume()
             case "c": c.pause()
-            case "v": c.stop()
+            case "v":
+                if ev.modifierFlags.contains(.shift) { c.stopAfterCurrent.toggle() } else { c.stop() }
             case "b": c.next()
             case "j": self.look?.focusFilter()
             case "q": self.queueSelected(nil)
@@ -445,6 +500,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sortItem.submenu = makeSortMenu()
         m.addItem(sortItem)
         item("Remove Missing Files", #selector(removeDeadFiles(_:)), m)
+        item("Remove Duplicates", #selector(removeDuplicates(_:)), m)
     }
 
     // MARK: Output
@@ -575,6 +631,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ctlMenu.addItem(withTitle: "Volume Up", action: #selector(volUp(_:)), keyEquivalent: String(UnicodeScalar(NSUpArrowFunctionKey)!)).target = self
         ctlMenu.addItem(withTitle: "Volume Down", action: #selector(volDown(_:)), keyEquivalent: String(UnicodeScalar(NSDownArrowFunctionKey)!)).target = self
         ctlMenu.addItem(.separator())
+        let sac = ctlMenu.addItem(withTitle: "Stop After Current  (⇧V)", action: #selector(toggleStopAfter(_:)), keyEquivalent: "")
+        sac.target = self
+        let sleepItem = NSMenuItem(title: "Sleep Timer", action: nil, keyEquivalent: "")
+        let sleep = NSMenu(title: "Sleep Timer")
+        for m in [0, 15, 30, 45, 60, 90] {
+            let it = sleep.addItem(withTitle: m == 0 ? "Off" : "\(m) minutes", action: #selector(setSleep(_:)), keyEquivalent: "")
+            it.target = self
+            it.tag = m
+        }
+        sleepItem.submenu = sleep
+        ctlMenu.addItem(sleepItem)
+        ctlMenu.addItem(withTitle: "Resume Long Tracks", action: #selector(toggleResume(_:)), keyEquivalent: "").target = self
+        ctlMenu.addItem(.separator())
+        let rgItem = NSMenuItem(title: "ReplayGain", action: nil, keyEquivalent: "")
+        let rg = NSMenu(title: "ReplayGain")
+        for mode in PlayerController.ReplayGainMode.allCases {
+            let it = rg.addItem(withTitle: mode.title, action: #selector(setReplayGain(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = mode.rawValue
+        }
+        rgItem.submenu = rg
+        ctlMenu.addItem(rgItem)
         ctlMenu.addItem(eqMenuItem())
         ctlItem.submenu = ctlMenu
         bar.addItem(ctlItem)

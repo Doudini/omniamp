@@ -2,8 +2,11 @@ import Foundation
 
 /// Persists the playlist (with tags) so relaunch is instant.
 enum LibraryCache {
+    /// Bump when tags gain new fields: older caches are then re-read in the background.
+    static let currentVersion = 2
+
     struct Payload: Codable {
-        var version = 1
+        var version = LibraryCache.currentVersion
         var tracks: [Track]
         var currentIndex: Int?
         var volume: Float?
@@ -21,8 +24,14 @@ enum LibraryCache {
     }
 
     static func load() -> Payload? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? PropertyListDecoder().decode(Payload.self, from: data)
+        guard let data = try? Data(contentsOf: fileURL),
+              var p = try? PropertyListDecoder().decode(Payload.self, from: data) else { return nil }
+        if p.version < currentVersion {
+            // v2 added ReplayGain: re-read tags once (fast, in the background).
+            for i in p.tracks.indices { p.tracks[i].tagsLoaded = false }
+            p.version = currentVersion
+        }
+        return p
     }
 
     static func save(_ payload: Payload) {

@@ -189,9 +189,13 @@ enum ContainerTags {
                 walkMP4(b, body + 4, bodyEnd, into: &info, validSamples: &validSamples)   // full box: skip version/flags
             case "----":
                 // Freeform iTunes item: mean / name / data. We only want iTunSMPB.
-                if let (name, value) = freeform(b, body, bodyEnd), name == "iTunSMPB" {
-                    let f = value.split(separator: " ")
-                    if f.count > 3, let n = Int64(f[3], radix: 16) { validSamples = n }
+                if let (name, value) = freeform(b, body, bodyEnd) {
+                    if name == "iTunSMPB" {
+                        let f = value.split(separator: " ")
+                        if f.count > 3, let n = Int64(f[3], radix: 16) { validSamples = n }
+                    } else {
+                        info.setReplayGain(key: name, value: value)   // ----:com.apple.iTunes:replaygain_*
+                    }
                 }
             case "mdhd":
                 // Audio track media header: timescale is usually the sample rate.

@@ -228,6 +228,10 @@ final class PlaylistStore {
             tracks[i].bitrate = info.bitrate
             tracks[i].sampleRate = info.sampleRate
             tracks[i].bitDepth = info.bitDepth
+            tracks[i].rgTrackGain = info.rgTrackGain
+            tracks[i].rgAlbumGain = info.rgAlbumGain
+            tracks[i].rgTrackPeak = info.rgTrackPeak
+            tracks[i].rgAlbumPeak = info.rgAlbumPeak
             tracks[i].tagsLoaded = true
             changed.insert(i)
         }

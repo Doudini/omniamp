@@ -50,7 +50,7 @@ final class PlayerController {
             self?.ui?.optionsDidChange()
             self?.scheduleSave()
         }
-        player.onTrackFinished = { [weak self] in self?.advance() }
+        player.onTrackFinished = { [weak self] in self?.trackFinished() }
         player.onGaplessAdvance = { [weak self] in self?.gaplessAdvanced() }
         player.apply(eqSettings)
         player.onOutputChange = { [weak self] in self?.ui?.optionsDidChange() }
@@ -333,12 +333,14 @@ final class PlayerController {
     func play(index: Int, recordHistory: Bool = true) {
         guard index >= 0, index < store.tracks.count else { return }
         let old = currentIndex
+        rememberPosition()
         if recordHistory, let o = old, o != index { pushHistory(o) }
         currentIndex = index
         dequeue(index)
         preloaded = nil
         preloadAttempted = false
-        let ok = player.play(url: store.tracks[index].url)
+        applyReplayGain()
+        let ok = player.play(url: store.tracks[index].url, from: resumePosition(for: store.tracks[index]))
         schedulePreloadCheck()
         ui?.currentTrackDidChange(old: old, new: index)
         updateNowPlaying()
@@ -380,11 +382,12 @@ final class PlayerController {
     }
 
     func pause() {
-        if player.state == .playing { player.pause() } else if player.state == .paused { player.resume() }
+        if player.state == .playing { player.pause(); rememberPosition() } else if player.state == .paused { player.resume() }
         updateNowPlaying()
     }
 
     func stop() {
+        rememberPosition()
         player.stop()
         updateNowPlaying()
     }
@@ -439,7 +442,7 @@ final class PlayerController {
 
     /// Near the end of a track, schedule the next one behind it on the audio engine.
     private func maybePreloadNext() {
-        guard player.state == .playing, !preloadAttempted, !player.hasQueuedNext,
+        guard player.state == .playing, !preloadAttempted, !player.hasQueuedNext, !stopAfterCurrent,
               player.duration > 0, player.remaining < 8 else { return }
         preloadAttempted = true
         guard let t = nextTarget(), t != currentIndex else { return }
@@ -459,6 +462,8 @@ final class PlayerController {
         if let o = old, o != new { pushHistory(o) }
         currentIndex = new
         if let n = new { dequeue(n) }
+        if let o = old { forgetPosition(store.tracks.indices.contains(o) ? store.tracks[o].path : nil) }
+        applyReplayGain()
         schedulePreloadCheck()
         NSLog("OmniAmp: gapless advance to #%d", (new ?? -2) + 1)
         ui?.currentTrackDidChange(old: old, new: new)
@@ -554,8 +559,152 @@ final class PlayerController {
     }
 
     func shutdown() {
+        rememberPosition()
         saveNow()
         player.shutdown()
+    }
+
+    // MARK: Stop after current / sleep timer
+
+    /// One-shot: stop when the current track ends (Winamp's Ctrl+V; here Shift+V).
+    var stopAfterCurrent = false {
+        didSet {
+            if stopAfterCurrent { invalidatePreload() } else { schedulePreloadCheck() }
+            ui?.optionsDidChange()
+        }
+    }
+
+    /// A track reached its end on its own (not Next).
+    private func trackFinished() {
+        forgetPosition(currentTrack?.path)
+        if stopAfterCurrent {
+            stopAfterCurrent = false
+            player.stop()
+            updateNowPlaying()
+            return
+        }
+        advance()
+    }
+
+    private(set) var sleepAt: Date?
+    private var sleepTimer: Timer?
+
+    /// Pause after `minutes` (fading out over the last seconds); nil cancels.
+    func setSleepTimer(minutes: Int?) {
+        sleepTimer?.invalidate()
+        sleepTimer = nil
+        player.fadeGain = 1
+        sleepAt = minutes.map { Date().addingTimeInterval(TimeInterval($0 * 60)) }
+        if let at = sleepAt {
+            let t = Timer(fire: at.addingTimeInterval(-8), interval: 0.1, repeats: true) { [weak self] _ in self?.sleepTick() }
+            RunLoop.main.add(t, forMode: .common)
+            sleepTimer = t
+        }
+        ui?.optionsDidChange()
+    }
+
+    /// Last 8 seconds: fade out, then pause and restore the level for next time.
+    private func sleepTick() {
+        guard let at = sleepAt else { return }
+        let left = at.timeIntervalSinceNow
+        if left > 0 {
+            player.fadeGain = Float(max(0, min(1, left / 8)))
+            return
+        }
+        if player.state == .playing { player.pause(); rememberPosition() }
+        updateNowPlaying()
+        setSleepTimer(minutes: nil)
+    }
+
+    // MARK: Resume position (audiobooks, podcasts, long mixes)
+
+    /// Long files resume where they were left (≥ 10 minutes, or any .m4b audiobook).
+    var resumeLongTracks: Bool {
+        get { UserDefaults.standard.object(forKey: "resumeLongTracks") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "resumeLongTracks") }
+    }
+
+    /// Uses the player's duration when the tags aren't read yet.
+    private func isLong(_ t: Track) -> Bool {
+        let d = t.duration ?? (t.path == player.currentURL?.path ? player.duration : 0)
+        return d >= 600 || (t.path as NSString).pathExtension.lowercased() == "m4b"
+    }
+
+    private var resumePositions: [String: Double] {
+        get { UserDefaults.standard.dictionary(forKey: "resumePositions") as? [String: Double] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "resumePositions") }
+    }
+
+    private func resumePosition(for t: Track) -> Double {
+        // Only long tracks are ever stored, so a stored position is enough (the duration may not be known yet).
+        guard resumeLongTracks, let p = resumePositions[t.path] else { return 0 }
+        return max(0, p - 3)   // a few seconds back, for context
+    }
+
+    /// Save the current position of a long track (not at the very start or end).
+    private func rememberPosition() {
+        guard resumeLongTracks, let t = currentTrack, isLong(t), player.state != .stopped else { return }
+        let pos = player.currentTime
+        var all = resumePositions
+        if pos > 30, pos < player.duration - 30 { all[t.path] = pos } else { all.removeValue(forKey: t.path) }
+        // Keep the list small.
+        if all.count > 300 { for k in all.keys.prefix(all.count - 300) { all.removeValue(forKey: k) } }
+        resumePositions = all
+    }
+
+    private func forgetPosition(_ path: String?) {
+        guard let p = path, resumePositions[p] != nil else { return }
+        var all = resumePositions
+        all.removeValue(forKey: p)
+        resumePositions = all
+    }
+
+    // MARK: ReplayGain
+
+    enum ReplayGainMode: String, CaseIterable {
+        case off, track, album
+        var title: String { self == .off ? "Off" : (self == .track ? "Track" : "Album") }
+    }
+
+    var replayGainMode: ReplayGainMode {
+        get { ReplayGainMode(rawValue: UserDefaults.standard.string(forKey: "replayGain") ?? "") ?? .off }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "replayGain"); applyReplayGain(); ui?.optionsDidChange() }
+    }
+
+    /// Gain for the playing track: album gain (falls back to track), clipped so peaks stay ≤ 1.0.
+    func replayGainFactor(for t: Track) -> Float {
+        let mode = replayGainMode
+        guard mode != .off else { return 1 }
+        let db = mode == .album ? (t.rgAlbumGain ?? t.rgTrackGain) : (t.rgTrackGain ?? t.rgAlbumGain)
+        guard let gain = db else { return 1 }
+        var linear = powf(10, gain / 20)
+        let peak = mode == .album ? (t.rgAlbumPeak ?? t.rgTrackPeak) : (t.rgTrackPeak ?? t.rgAlbumPeak)
+        if let pk = peak, pk > 0 { linear = min(linear, 1 / pk) }   // prevent clipping
+        return linear
+    }
+
+    private func applyReplayGain() {
+        guard var t = currentTrack else { player.replayGain = 1; return }
+        if replayGainMode != .off, !t.tagsLoaded {
+            // Tags not read yet (e.g. autoplay right after adding a folder): read this one file now (~ms),
+            // so the first second isn't played at the wrong level.
+            let i = TagReader.read(path: t.path, fileSize: t.size)
+            t.rgTrackGain = i.rgTrackGain; t.rgAlbumGain = i.rgAlbumGain
+            t.rgTrackPeak = i.rgTrackPeak; t.rgAlbumPeak = i.rgAlbumPeak
+        }
+        player.replayGain = replayGainFactor(for: t)
+    }
+
+    // MARK: Duplicates
+
+    /// Remove repeated entries of the same file (keeps the first). Returns how many were removed.
+    @discardableResult
+    func removeDuplicates() -> Int {
+        var seen = Set<String>()
+        var dupes = IndexSet()
+        for (i, t) in store.tracks.enumerated() where !seen.insert(t.path).inserted { dupes.insert(i) }
+        if !dupes.isEmpty { remove(trackIndices: dupes) }
+        return dupes.count
     }
 
     func toggleShuffle() {
@@ -651,6 +800,8 @@ final class PlayerController {
         let dur = store.totalDuration
         if dur > 0 { s += "  \(TimeFormat.mmss(dur))" }
         if store.isLoadingTags { s += "  …" }
+        if stopAfterCurrent { s = "⏹ after this · " + s }
+        if let at = sleepAt { s = "☾ \(max(1, Int(ceil(at.timeIntervalSinceNow / 60))))m · " + s }
         return s
     }
 
@@ -697,6 +848,8 @@ extension PlayerController: PlaylistStoreDelegate {
     }
 
     func playlistDidUpdate(indices: IndexSet) {
+        // Tags can arrive after playback started (autoplay right after a scan): pick up ReplayGain then.
+        if let c = currentIndex, indices.contains(c) { applyReplayGain() }
         ui?.playlistRowsDidUpdate(indices)
     }
 }
