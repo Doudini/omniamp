@@ -23,6 +23,20 @@ final class SkinTests: XCTestCase {
         XCTAssertNil(skin.sprite("cbuttons", CGRect(x: 500, y: 0, width: 5, height: 5)))
     }
 
+    func testBundledBaseSkin() throws {
+        let url = try XCTUnwrap(SkinLibrary.bundled, "Resources/base-2.91.wsz missing")
+        XCTAssertTrue(SkinLibrary.isBundled(url))
+        XCTAssertEqual(SkinLibrary.install(url), url, "the built-in skin is not copied into the library")
+        let skin = try Skin(url: url)
+        for f in ["main", "titlebar", "cbuttons", "numbers", "text", "pledit", "posbar", "volume", "shufrep", "monoster", "playpaus", "eqmain"] {
+            XCTAssertTrue(skin.has(f), "missing \(f)")
+        }
+        XCTAssertEqual(skin.size(of: "main"), CGSize(width: 275, height: 116))
+        XCTAssertEqual(skin.plFontName, "Arial")
+        XCTAssertEqual(skin.plNormal.greenComponent, 1, accuracy: 0.01)
+        XCTAssertEqual(skin.visColors.count, 24)
+    }
+
     func testRejectsNonZip() {
         XCTAssertThrowsError(try ZipArchive(data: Data("not a zip".utf8)))
     }

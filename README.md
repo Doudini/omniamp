@@ -53,7 +53,7 @@ Last.fm requires every app to have its own API key, so a build made from this re
    ```
 3. Run `./scripts/make-app.sh`. The key is built into your `OmniAmp.app`.
 
-To use classic skins, drag any `.wsz` onto the window or use View → Skins → Load Skin…. Thousands of skins are available at the [Winamp Skin Museum](https://skins.webamp.org).
+The classic look ships with Winamp 2.91's original base skin. To use other skins, drag any `.wsz` onto the window or use View → Skins → Load Skin…. Thousands of skins are available at the [Winamp Skin Museum](https://skins.webamp.org).
 
 ## Fonts
 

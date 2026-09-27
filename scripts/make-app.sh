@@ -18,6 +18,9 @@ if xcrun --find actool >/dev/null 2>&1; then
 else
   cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 fi
+# Built-in classic skin: Winamp 2.91's base skin.
+mkdir -p "$APP/Contents/Resources/Skins"
+cp Resources/base-2.91.wsz "$APP/Contents/Resources/Skins/"
 mkdir -p "$APP/Contents/Resources/Fonts"
 # Ship TTF, not WOFF2: TTFs are memory-mapped, WOFF2s get decompressed into RAM (~16 MB each).
 CONVERTER=.build/woff2-to-ttf

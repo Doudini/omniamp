@@ -183,9 +183,27 @@ enum SkinLibrary {
         return d
     }
 
+    /// The skin OmniAmp ships with: Winamp 2.91's base skin (app bundle; the repo copy for dev builds).
+    static var bundled: URL? {
+        if let u = Bundle.main.url(forResource: "base-2.91", withExtension: "wsz", subdirectory: "Skins") { return u }
+        let dev = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/base-2.91.wsz")
+        return FileManager.default.fileExists(atPath: dev.path) ? dev : nil
+    }
+    static let bundledTitle = "Winamp Classic (Base 2.91)"
+
+    static func isBundled(_ url: URL) -> Bool {
+        guard let b = bundled else { return false }
+        return url.standardizedFileURL.path == b.standardizedFileURL.path
+    }
+
+    /// The skin to use: the last one picked, else the built-in one.
+    static var active: URL? { current ?? bundled ?? installed.first }
+
     static var current: URL? {
         get { UserDefaults.standard.string(forKey: "skinPath").map { URL(fileURLWithPath: $0) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } }
-        set { UserDefaults.standard.set(newValue?.path, forKey: "skinPath") }
+        // The built-in skin is stored as "no choice", so a moved app bundle still finds it.
+        set { UserDefaults.standard.set(newValue.flatMap { isBundled($0) ? nil : $0.path }, forKey: "skinPath") }
     }
 
     static var installed: [URL] {
@@ -196,6 +214,7 @@ enum SkinLibrary {
 
     /// Copies the skin into the library (if needed) and returns the library copy.
     static func install(_ url: URL) -> URL {
+        if isBundled(url) { return url }
         let dest = directory.appendingPathComponent(url.lastPathComponent)
         if url.standardizedFileURL.path != dest.standardizedFileURL.path {
             try? FileManager.default.removeItem(at: dest)

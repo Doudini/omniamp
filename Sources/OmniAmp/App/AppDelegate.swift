@@ -98,9 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         look?.setFloating(alwaysOnTop)
     }
 
-    /// Classic look with the last used skin; asks for one if there is none yet.
+    /// Classic look with the last used skin, else the built-in Winamp base skin.
     private func makeClassicLook() -> LookController? {
-        guard let url = SkinLibrary.current ?? SkinLibrary.installed.first ?? chooseSkinFile() else { return nil }
+        guard let url = SkinLibrary.active ?? chooseSkinFile() else { return nil }
         let skin: Skin
         do { skin = try Skin(url: url) } catch {
             showSkinError(url, error)
@@ -274,13 +274,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         m.addItem(fontItem)
         let skinsItem = NSMenuItem(title: "Skins", action: nil, keyEquivalent: "")
         let skins = NSMenu(title: "Skins")
+        if let b = SkinLibrary.bundled {
+            let it = skins.addItem(withTitle: SkinLibrary.bundledTitle, action: #selector(pickInstalledSkin(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = b
+            if !SkinLibrary.installed.isEmpty { skins.addItem(.separator()) }
+        }
         for u in SkinLibrary.installed {
             let it = skins.addItem(withTitle: u.deletingPathExtension().lastPathComponent, action: #selector(pickInstalledSkin(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = u
-            it.state = SkinLibrary.current?.lastPathComponent == u.lastPathComponent ? .on : .off
         }
-        if !SkinLibrary.installed.isEmpty { skins.addItem(.separator()) }
+        if SkinLibrary.bundled != nil || !SkinLibrary.installed.isEmpty { skins.addItem(.separator()) }
         skins.addItem(withTitle: "Load Skin…", action: #selector(loadSkinMenu(_:)), keyEquivalent: "").target = self
         skinsItem.submenu = skins
         m.addItem(skinsItem)
@@ -321,7 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if item.action == #selector(pickTheme(_:)) { item.state = (item.representedObject as? String) == Theme.palette.id ? .on : .off }
         if item.action == #selector(setScale(_:)) { item.state = Int(SkinLibrary.scale) == item.tag ? .on : .off }
         if item.action == #selector(pickInstalledSkin(_:)) {
-            item.state = (item.representedObject as? URL)?.lastPathComponent == SkinLibrary.current?.lastPathComponent ? .on : .off
+            item.state = (item.representedObject as? URL)?.standardizedFileURL.path == SkinLibrary.active?.standardizedFileURL.path ? .on : .off
         }
         return true
     }
