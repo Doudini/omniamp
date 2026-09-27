@@ -279,7 +279,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         eqView.isHidden = d != .eq
         infoView.isHidden = d != .info
         drawerHost.isHidden = d == .none
-        drawerHeight.constant = d == .none ? 0 : (d == .info ? 168 : 150)
+        drawerHeight.constant = d == .none ? 0 : (d == .info ? 184 : 150)
         drawerGap.constant = d == .none ? 0 : 8
         panel.eqButton.isOn = d == .eq
         panel.infoButton.isOn = d == .info

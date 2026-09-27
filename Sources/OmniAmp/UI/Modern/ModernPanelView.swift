@@ -280,7 +280,9 @@ final class ModernPanelView: NSView {
         if leftWidth == nil {
             // Left display takes ~30% of the width between 118 and 158 pt.
             let c = leftBox.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.3)
-            c.priority = .defaultHigh
+            // Must stay below the window's resize priority (500), or this 30% rule would stop the window
+            // growing once the display hits its 158 pt cap.
+            c.priority = NSLayoutConstraint.Priority(450)
             c.isActive = true
             leftWidth = c
         }

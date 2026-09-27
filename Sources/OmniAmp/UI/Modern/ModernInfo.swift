@@ -140,7 +140,8 @@ final class ModernInfoView: NSView {
     private let modeLabel = NSTextField(labelWithString: "")
     private let stack = NSStackView()
     private let title = NSTextField(labelWithString: "")
-    private let byline = NSTextField(labelWithString: "")
+    private let byline = NSTextField(labelWithString: "")       // artist
+    private let albumTitle = NSTextField(labelWithString: "")   // album (year)
     private let numbers = NSTextField(labelWithString: "")
     private let credits = NSTextField(labelWithString: "")
     private let format = NSTextField(labelWithString: "")
@@ -185,6 +186,7 @@ final class ModernInfoView: NSView {
         let dim = Theme.dimGreen.blended(withFraction: 0.35, of: Theme.green)!
         style(title, 14, bold: true, color: NSColor(calibratedWhite: 0.95, alpha: 1))
         style(byline, 12, color: Theme.green)
+        style(albumTitle, 11.5, color: Theme.green.blended(withFraction: 0.25, of: Theme.dimGreen)!)
         style(numbers, 10.5, color: dim)
         style(credits, 10.5, color: dim)
         style(format, 10.5, color: Theme.green)
@@ -207,7 +209,7 @@ final class ModernInfoView: NSView {
         fileRow.spacing = 8
         revealButton.heightAnchor.constraint(equalToConstant: 18).isActive = true
 
-        for v in [title, byline, numbers, credits, rule, format, fileRow, albumLine, comment] as [NSView] { stack.addArrangedSubview(v) }
+        for v in [title, byline, albumTitle, numbers, credits, rule, format, fileRow, albumLine, comment] as [NSView] { stack.addArrangedSubview(v) }
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 3
@@ -237,7 +239,7 @@ final class ModernInfoView: NSView {
             modeLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             title.trailingAnchor.constraint(lessThanOrEqualTo: modeLabel.leadingAnchor, constant: -8),
         ])
-        for l in [title, byline, numbers, credits, format, albumLine, comment] {
+        for l in [title, byline, albumTitle, numbers, credits, format, albumLine, comment] {
             l.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor).isActive = true
         }
     }
@@ -249,7 +251,7 @@ final class ModernInfoView: NSView {
             art.image = nil
             title.stringValue = "Nothing playing"
             modeLabel.stringValue = ""
-            for l in [byline, numbers, credits, format, albumLine, comment] { l.isHidden = true }
+            for l in [byline, albumTitle, numbers, credits, format, albumLine, comment] { l.isHidden = true }
             file.stringValue = ""
             revealButton.isHidden = true
             return
@@ -273,10 +275,15 @@ final class ModernInfoView: NSView {
         title.stringValue = d?.title ?? t.title ?? t.fileStem
         let artist = d?.artist ?? t.artist
         let album = d?.album ?? t.album
-        var by = [artist, album].compactMap { $0 }.joined(separator: " — ")
-        if let y = d?.year { by += by.isEmpty ? y : " (\(y))" }
-        byline.stringValue = by
-        byline.isHidden = by.isEmpty
+        // Artist and album on their own lines, so a long album name can't push the artist out of view.
+        byline.stringValue = artist ?? ""
+        byline.isHidden = byline.stringValue.isEmpty
+        var al = album ?? ""
+        if let y = d?.year { al += al.isEmpty ? y : " (\(y))" }
+        albumTitle.stringValue = al
+        albumTitle.isHidden = al.isEmpty
+        byline.toolTip = artist
+        albumTitle.toolTip = al.isEmpty ? nil : al
 
         var nums: [String] = []
         if let n = d?.track { nums.append("Track \(n)" + (d?.trackTotal.map { " / \($0)" } ?? "")) }
