@@ -149,6 +149,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let u = sender.representedObject as? URL { loadSkin(u) }
     }
 
+    @objc private func pickPlaylistFont(_ sender: NSMenuItem) {
+        if let f = PlaylistStyle.Font(rawValue: sender.representedObject as? String ?? "") { PlaylistStyle.font = f }
+    }
+    @objc private func toggleNumbers(_ sender: Any?) { PlaylistStyle.showNumbers.toggle() }
+
     /// Themes apply to the modern look; rebuilding its window picks up every color at once.
     @objc private func pickTheme(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, id != Theme.palette.id else { return }
@@ -194,6 +199,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         themeItem.submenu = themes
         m.addItem(themeItem)
+        let fontItem = NSMenuItem(title: "Playlist Font", action: nil, keyEquivalent: "")
+        let fonts = NSMenu(title: "Playlist Font")
+        for f in PlaylistStyle.Font.allCases {
+            let it = fonts.addItem(withTitle: f.title, action: #selector(pickPlaylistFont(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = f.rawValue
+        }
+        fonts.addItem(.separator())
+        fonts.addItem(withTitle: "Show Track Numbers", action: #selector(toggleNumbers(_:)), keyEquivalent: "").target = self
+        fontItem.submenu = fonts
+        m.addItem(fontItem)
         let skinsItem = NSMenuItem(title: "Skins", action: nil, keyEquivalent: "")
         let skins = NSMenu(title: "Skins")
         for u in SkinLibrary.installed {
@@ -225,6 +241,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if item.action == #selector(showModern(_:)) { item.state = mode == .modern ? .on : .off }
         if item.action == #selector(showClassic(_:)) { item.state = mode == .classic ? .on : .off }
         if item.action == #selector(toggleEQ(_:)) { item.state = controller.eqSettings.enabled ? .on : .off }
+        if item.action == #selector(pickPlaylistFont(_:)) { item.state = (item.representedObject as? String) == PlaylistStyle.font.rawValue ? .on : .off }
+        if item.action == #selector(toggleNumbers(_:)) { item.state = PlaylistStyle.showNumbers ? .on : .off }
         if item.action == #selector(pickTheme(_:)) { item.state = (item.representedObject as? String) == Theme.palette.id ? .on : .off }
         if item.action == #selector(setScale(_:)) { item.state = Int(SkinLibrary.scale) == item.tag ? .on : .off }
         if item.action == #selector(pickInstalledSkin(_:)) {

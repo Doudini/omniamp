@@ -97,7 +97,13 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
         table.headerView = nil
         table.backgroundColor = .black
-        table.rowHeight = 18
+        table.rowHeight = PlaylistStyle.rowHeight
+        NotificationCenter.default.addObserver(forName: PlaylistStyle.changed, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.table.rowHeight = PlaylistStyle.rowHeight
+            self.table.reloadData()
+            self.fitColumns()
+        }
         table.intercellSpacing = NSSize(width: 6, height: 0)
         table.allowsMultipleSelection = true
         table.style = .plain
@@ -222,9 +228,32 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         infoView.compact = narrow
     }
 
+    /// Number column: sized once for the longest number (so titles don't stagger), or hidden.
+    /// Time column: fits "12:34" (or "1:02:34"), plus room for "[2] " only while something is queued.
+    private func sizeFixedColumns() {
+        guard table.tableColumns.count == 3 else { return }
+        let pad: CGFloat = 6
+        func width(_ s: String, _ f: NSFont) -> CGFloat {
+            ceil((s as NSString).size(withAttributes: [.font: f, .kern: PlaylistStyle.kern]).width) + pad
+        }
+        let bold = PlaylistStyle.textFont(bold: true)
+        let numCol = table.tableColumns[0]
+        numCol.isHidden = !PlaylistStyle.showNumbers
+        if PlaylistStyle.showNumbers {
+            let digits = String(repeating: "8", count: String(max(controller.tracks.count, 9)).count) + "."
+            numCol.width = max(width(digits, bold), width(PlaylistStyle.playMarker, bold))
+        }
+        let long = controller.tracks.contains { ($0.duration ?? 0) >= 3600 }
+        var sample = long ? "8:88:88" : "88:88"
+        if !controller.playQueue.isEmpty { sample = "[\(String(repeating: "8", count: String(controller.playQueue.count).count))] " + sample }
+        table.tableColumns[2].width = width(sample, PlaylistStyle.timeFont(bold: true))
+    }
+
     private func fitColumns() {
         guard table.tableColumns.count == 3 else { return }
-        let fixed = table.tableColumns[0].width + table.tableColumns[2].width + table.intercellSpacing.width * 3
+        sizeFixedColumns()
+        let numW = table.tableColumns[0].isHidden ? 0 : table.tableColumns[0].width + table.intercellSpacing.width
+        let fixed = numW + table.tableColumns[2].width + table.intercellSpacing.width * 2
         let w = max(table.tableColumns[1].minWidth, scroll.contentSize.width - fixed)
         if abs(table.tableColumns[1].width - w) > 0.5 { table.tableColumns[1].width = w }
     }
@@ -233,6 +262,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
     func playlistDidReload() {
         table.reloadData()
+        fitColumns()
         updateStatus()
     }
 
@@ -297,6 +327,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
 
     func optionsDidChange() {
+        fitColumns()
         eqView.refresh()
         panel.refreshOptions()
         updateStatus()
@@ -422,7 +453,7 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
         let i = controller.trackIndex(forRow: row)
         let t = controller.tracks[i]
         let isCurrent = i == controller.currentIndex
-        cell.font = Fonts.hack(11.5, bold: isCurrent)
+        cell.font = id == Self.colTime ? PlaylistStyle.timeFont(bold: isCurrent) : PlaylistStyle.textFont(bold: isCurrent)
         cell.textColor = isCurrent ? Theme.current : Theme.playlistText
         if isCurrent {
             let glow = NSShadow()
@@ -432,13 +463,23 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
         } else {
             cell.shadow = nil
         }
+        let text: String
         switch id {
-        case Self.colNum: cell.stringValue = isCurrent ? "\(Fonts.Icon.play) \(i + 1)." : "\(i + 1)."
-        case Self.colTitle: cell.stringValue = t.displayTitle
+        // The playing row shows ▶ in its number slot (its number is in the marquee), so no row needs extra room.
+        case Self.colNum: text = isCurrent ? PlaylistStyle.playMarker : "\(i + 1)."
+        case Self.colTitle: text = (isCurrent && !PlaylistStyle.showNumbers ? PlaylistStyle.playMarker + " " : "") + t.displayTitle
         default:
             // Queue position in Winamp style: "[2] 3:45".
             let q = controller.queuePosition(of: i).map { "[\($0)] " } ?? ""
-            cell.stringValue = q + TimeFormat.mmss(t.duration)
+            text = q + TimeFormat.mmss(t.duration)
+        }
+        if PlaylistStyle.kern != 0 {
+            cell.attributedStringValue = NSAttributedString(string: text, attributes: [
+                .font: cell.font!, .foregroundColor: cell.textColor!, .kern: PlaylistStyle.kern,
+                .paragraphStyle: { let p = NSMutableParagraphStyle(); p.alignment = cell.alignment; p.lineBreakMode = .byTruncatingTail; return p }(),
+            ])
+        } else {
+            cell.stringValue = text
         }
         return cell
     }
