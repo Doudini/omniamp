@@ -327,9 +327,14 @@ final class AudioPlayer {
         systemInfo = nil
     }
 
+    /// The format the player is connected with for the current engine stream (nil until the station's format
+    /// is known). Buffers are only scheduled when they match it: AVAudioPlayerNode throws on a channel mismatch.
+    private var streamFormat: AVAudioFormat?
+
     private func openStream(_ url: URL) {
         let src = StreamSource(url: url)
         stream = src
+        streamFormat = nil
         streamStarted = false
         bufferedFrames.withLock { $0 = 0 }
         isBuffering = true
@@ -338,6 +343,7 @@ final class AudioPlayer {
                 guard let self, let src, self.stream === src else { return }
                 if info.sampleRate > 0, let f = AVAudioFormat(standardFormatWithSampleRate: info.sampleRate, channels: AVAudioChannelCount(max(1, info.channels))) {
                     self.connect(format: f)
+                    self.streamFormat = f
                     self.startEngineIfNeeded()
                 }
                 self.onStreamChange?()
@@ -351,27 +357,27 @@ final class AudioPlayer {
             }
         }
         src.onBuffer = { [weak self, weak src] buf in
-            guard let self, self.stream === src else { return }
-            let frames = AVAudioFramePosition(buf.frameLength)
-            let sr = buf.format.sampleRate
-            let total = self.bufferedFrames.withLock { $0 += frames; return $0 }
-            self.node.scheduleBuffer(buf) { [weak self] in
-                guard let self else { return }
-                let left = self.bufferedFrames.withLock { $0 -= frames; return $0 }
-                if left <= 0 { DispatchQueue.main.async { if self.stream === src, self.state == .playing { self.isBuffering = true } } }
-            }
-            // Start (or leave the stall) once 2 s are queued.
-            if Double(total) >= sr * 2 {
-                DispatchQueue.main.async {
-                    guard self.stream === src, self.state == .playing else { return }
-                    if !self.streamStarted {
-                        self.streamStarted = true
-                        self.startEngineIfNeeded()
-                        self.node.play()
-                        self.clockStart = CACurrentMediaTime()
-                    }
-                    self.isBuffering = false
+            // Scheduled on the main thread, after onInfo has connected the player in the station's format
+            // (same queue, so in order), and only while this is still the current stream.
+            DispatchQueue.main.async {
+                guard let self, let src, self.stream === src, let f = self.streamFormat,
+                      f.channelCount == buf.format.channelCount, f.sampleRate == buf.format.sampleRate else { return }
+                let frames = AVAudioFramePosition(buf.frameLength)
+                let total = self.bufferedFrames.withLock { $0 += frames; return $0 }
+                self.node.scheduleBuffer(buf) { [weak self] in
+                    guard let self else { return }
+                    let left = self.bufferedFrames.withLock { $0 -= frames; return $0 }
+                    if left <= 0 { DispatchQueue.main.async { if self.stream === src, self.state == .playing { self.isBuffering = true } } }
                 }
+                // Start (or leave the stall) once 2 s are queued.
+                guard Double(total) >= f.sampleRate * 2, self.state == .playing else { return }
+                if !self.streamStarted {
+                    self.streamStarted = true
+                    self.startEngineIfNeeded()
+                    guard self.playNode() else { return }
+                    self.clockStart = CACurrentMediaTime()
+                }
+                self.isBuffering = false
             }
         }
         src.onUnsupported = { [weak self, weak src] type in
@@ -424,6 +430,7 @@ final class AudioPlayer {
     private func stopStream(keepState: Bool = false) {
         stream?.stop()
         stream = nil
+        streamFormat = nil
         stopSystemStream()
         stopEpisode()
         if !keepState { streamURL = nil; isBuffering = false }
@@ -619,6 +626,14 @@ final class AudioPlayer {
         if matchRate, current != nil { matchDeviceRate(to: sampleRate) }
         rebuildGraph()
         if let f = current?.file { connect(format: f.processingFormat) }
+        // Radio through our engine: the stopped engine dropped its queued audio, so reconnect the station
+        // (without this it stayed silent while showing "playing").
+        if stream != nil, let u = streamURL {
+            stopNode()
+            stopStream(keepState: true)
+            if wasState == .playing { openStream(u) }
+            return
+        }
         guard current != nil, wasState != .stopped else { return }
         state = .playing
         seek(to: t)
@@ -689,7 +704,7 @@ final class AudioPlayer {
         // Taking exclusive access reconfigures the device too: wait for that before any audio goes out.
         if startEngineIfNeeded() { awaitSettle(); return }
         scheduleCurrent()
-        if state == .playing { node.play(); startClock() }   // paused while waiting: resume() starts it
+        if state == .playing, playNode() { startClock() }   // paused while waiting: resume() starts it
     }
 
     /// Wait for the configuration change that follows a rate switch / hog grab (or give up after 0.8 s).
@@ -768,7 +783,7 @@ final class AudioPlayer {
         if let p = episodePlayer { p.play(); state = .playing; return }
         if let u = streamURL, !isStreaming { playStream(url: u); return }
         startEngineIfNeeded()
-        node.play()
+        guard playNode() else { return }
         if !awaitingRateSettle { clockStart = CACurrentMediaTime() }
         state = .playing
     }
@@ -801,7 +816,7 @@ final class AudioPlayer {
         clockStart = nil
         scheduleCurrent()
         startEngineIfNeeded()
-        node.play()
+        guard playNode() else { return }
         startClock()
         state = .playing
         if wasPaused { node.pause(); freezeClock(); state = .paused }
@@ -839,6 +854,21 @@ final class AudioPlayer {
         // Player → converter in the file's own format; the converter resamples/upmixes only if needed.
         engine.disconnectNodeOutput(node)
         engine.connect(node, to: converter, format: format)
+    }
+
+    /// Start the player, but only on a running engine: AVAudioPlayerNode throws (crashes the app) otherwise.
+    /// If the output can't start (another app holds the device exclusively, it was unplugged…), stop and say why.
+    @discardableResult
+    private func playNode() -> Bool {
+        guard engine.isRunning else {
+            NSLog("OmniAmp: the audio output isn't running, stopping")
+            stop()
+            streamError = "The audio output couldn't start. Another app may be using the device exclusively."
+            onStreamChange?()
+            return false
+        }
+        node.play()
+        return true
     }
 
     private func stopNode() {

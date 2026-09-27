@@ -62,7 +62,7 @@ enum ContainerTags {
                 byteRate = le32(b, 8)
                 info.bitDepth = le16(b, 14)
             case "data":
-                dataSize = (len == 0xFFFF_FFFF ? ds64DataSize : nil) ?? min(len, fileSize - body)
+                dataSize = min(max((len == 0xFFFF_FFFF ? ds64DataSize : nil) ?? len, 0), fileSize - body)
             case "LIST":
                 let b = r.bytes(body, Int(min(len, 64 * 1024)))
                 if fourCC(b, 0) == "INFO" { parseRiffInfo(b, into: &info) }
@@ -70,7 +70,8 @@ enum ContainerTags {
                 merge(TagReader.parseID3Tag(r.bytes(body, Int(min(len, 512 * 1024)))), into: &info)
             default: break
             }
-            let chunk = id == "data" ? dataSize : len
+            // Sizes come from the file: clamp so a bogus ds64 value can't overflow.
+            let chunk = min(max(id == "data" ? dataSize : len, 0), fileSize - body)
             p = body + chunk + (chunk & 1)       // chunks are word aligned
         }
         if byteRate > 0, dataSize > 0 {
@@ -112,7 +113,7 @@ enum ContainerTags {
                 let channels = be16(b, 0), frames = be32(b, 2)
                 info.bitDepth = be16(b, 6)
                 let sr = extended80(Array(b[min(8, b.count)..<min(18, b.count)]))
-                if sr > 0 {
+                if sr > 0, sr.isFinite, sr < 10_000_000 {
                     info.sampleRate = Int(sr.rounded())
                     info.duration = Double(frames) / sr
                     info.bitrate = Int(sr) * channels * (info.bitDepth ?? 16) / 1000
@@ -153,7 +154,7 @@ enum ContainerTags {
             let type = fourCC(h, 4)
             var header: Int64 = 8
             if len == 1 { len = be64(h, 8); header = 16 } else if len == 0 { len = fileSize - p }
-            guard len >= header else { break }
+            guard len >= header, len <= fileSize - p else { break }
             if type == "moov" {
                 moov = r.bytes(p + header, Int(min(len - header, 32 * 1024 * 1024)))
                 break
@@ -179,7 +180,7 @@ enum ContainerTags {
             let type = fourCC(b, p + 4)
             var header = 8
             if len == 1 { len = Int(be64(b, p + 8)); header = 16 } else if len == 0 { len = end - p }
-            guard len >= header, p + len <= end else { return }
+            guard len >= header, len <= end - p else { return }
             let body = p + header
             let bodyEnd = p + len
             switch type {
@@ -199,6 +200,7 @@ enum ContainerTags {
                 }
             case "mdhd":
                 // Audio track media header: timescale is usually the sample rate.
+                guard body < bodyEnd else { break }
                 let v1 = b[body] == 1
                 let ts = be32(b, body + (v1 ? 20 : 12))
                 let dur = v1 ? Double(be64(b, body + 24)) : Double(be32(b, body + 16))
@@ -239,7 +241,7 @@ enum ContainerTags {
             let len = be32(b, p)
             guard len >= 8, p + len <= end else { break }
             switch fourCC(b, p + 4) {
-            case "name": name = text(Array(b[(p + 12)..<(p + len)]))           // 4 bytes version/flags
+            case "name": name = len > 12 ? text(Array(b[(p + 12)..<(p + len)])) : nil           // 4 bytes version/flags
             case "data": value = len > 16 ? text(Array(b[(p + 16)..<(p + len)])) : nil
             default: break
             }

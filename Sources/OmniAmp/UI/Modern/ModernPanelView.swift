@@ -539,6 +539,7 @@ final class ModernPanelView: NSView {
             if path != artPath {
                 artPath = path
                 let t = c.tracks[i]
+                art.placeholder = ArtView.placeholder(for: t)
                 if t.isRemote {
                     // Radio / podcasts: the station logo or show artwork takes the cover's place.
                     art.image = LogoStore.shared.cached(t.logo)

@@ -156,10 +156,14 @@ final class PlayerController {
     func add(_ urls: [URL], at position: Int? = nil) {
         let t0 = Date()
         if position != nil { invalidatePreload() }
-        let currentID = currentIndex.map { store.id(at: $0) }
         store.add(urls: urls, at: position, onBatch: { [weak self] start, n in
             guard let self else { return }
-            self.remapCurrent(currentID)
+            // Each batch is n rows inserted at `start`: shift whatever is current *now* (it may have
+            // changed since the scan began, e.g. autoplay from the first batch).
+            if let c = self.currentIndex, c >= start {
+                self.currentIndex = c + n
+                self.ui?.currentTrackDidChange(old: nil, new: self.currentIndex)
+            }
             // Start playing the first track as soon as it shows up, if nothing is loaded yet.
             let autoplay = ProcessInfo.processInfo.environment["OMNIAMP_NO_AUTOPLAY"] == nil
             if autoplay, n > 0, self.player.state == .stopped, self.currentIndex == nil {

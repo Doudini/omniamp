@@ -325,6 +325,7 @@ final class LogoCell: NSView {
     init() {
         super.init(frame: .zero)
         art.cornerRadius = 3
+        art.placeholder = Fonts.Icon.radio
         addSubview(art)
         NSLayoutConstraint.activate([
             art.centerXAnchor.constraint(equalTo: centerXAnchor), art.centerYAnchor.constraint(equalTo: centerYAnchor),

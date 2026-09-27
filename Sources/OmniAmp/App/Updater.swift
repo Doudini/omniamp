@@ -183,7 +183,10 @@ enum Updater {
         while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done
         T=\(q(target.path)); N=\(q(newApp.path))
         rm -rf "$T.old"
-        if mv "$T" "$T.old" && /usr/bin/ditto "$N" "$T"; then rm -rf "$T.old"; else rm -rf "$T"; mv "$T.old" "$T"; fi
+        if mv "$T" "$T.old"; then
+          # Only once the old bundle is safely aside: copy the new one, or put the old one back.
+          if /usr/bin/ditto "$N" "$T"; then rm -rf "$T.old"; else rm -rf "$T"; mv "$T.old" "$T"; fi
+        fi
         /usr/bin/open "$T"
         rm -rf \(q(newApp.deletingLastPathComponent().path))
         """.write(to: script, atomically: true, encoding: .utf8)

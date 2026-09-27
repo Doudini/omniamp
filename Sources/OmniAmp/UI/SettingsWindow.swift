@@ -115,8 +115,7 @@ final class SettingsWindowController: NSWindowController {
         ownKeyRows.isHidden = ownKeyBox.state == .off
         // Unticking goes back to the built-in key.
         if ownKeyBox.state == .off, LastFM.shared.usesCustomKey {
-            LastFM.shared.setCustomKey(nil, secret: nil)
-            Scrobbler.shared.clearQueue(LastFM.shared.id)
+            LastFM.shared.setCustomKey(nil, secret: nil)   // queued scrobbles stay; they go out once reconnected
             ownKey.stringValue = ""
             ownSecret.stringValue = ""
         }
@@ -130,7 +129,6 @@ final class SettingsWindowController: NSWindowController {
             return
         }
         LastFM.shared.setCustomKey(ownKey.stringValue, secret: ownSecret.stringValue)
-        Scrobbler.shared.clearQueue(LastFM.shared.id)
         ownSecret.stringValue = ""
         refresh()
     }

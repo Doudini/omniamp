@@ -475,6 +475,7 @@ final class ShowCell: NSView {
     init() {
         super.init(frame: .zero)
         art.cornerRadius = 3
+        art.placeholder = Fonts.Icon.podcast
         for l in [title, author, badge] {
             l.translatesAutoresizingMaskIntoConstraints = false
             l.lineBreakMode = .byTruncatingTail

@@ -27,10 +27,12 @@ final class FakeService: ScrobbleService {
     let maxBatch = 2
     var isConnected = true
     var fail = false
+    var refuse: Set<String> = []   // titles the service answers 400 for
     var received: [[Scrobble]] = []
     func nowPlaying(_ s: Scrobble) async throws {}
     func submit(_ batch: [Scrobble]) async throws -> Int {
         if fail { throw ScrobbleError.http(503, "down") }
+        if batch.contains(where: { refuse.contains($0.title) }) { throw ScrobbleError.http(400, "invalid parameters") }
         received.append(batch)
         return batch.count
     }
@@ -154,6 +156,19 @@ final class ScrobbleTests: XCTestCase {
         s.enqueue(Scrobble(artist: "A", title: "later", album: nil, duration: 60, timestamp: 9))
         try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertEqual(Scrobbler(services: [svc]).pendingCount("fake"), 1)
+    }
+
+    func testRefusedScrobbleIsDroppedWithoutBlockingTheQueue() async throws {
+        let svc = FakeService()
+        svc.refuse = ["bad"]
+        svc.fail = true
+        let s = Scrobbler(services: [svc])
+        for t in ["T0", "bad", "T2", "T3"] { s.enqueue(Scrobble(artist: "A", title: t, album: nil, duration: 60, timestamp: 1)) }
+        svc.fail = false
+        s.flushAll()
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(s.pendingCount("fake"), 0, "only the refused one is dropped; the rest go out")
+        XCTAssertEqual(svc.received.flatMap { $0 }.map(\.title), ["T0", "T2", "T3"])
     }
 }
 

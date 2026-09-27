@@ -56,6 +56,7 @@ final class Scrobbler {
     private(set) var services: [ScrobbleService] = []
     private var queues: [String: [Scrobble]] = [:]
     private var flushing = Set<String>()
+    private var oneByOne = Set<String>()
     var onChange: (() -> Void)?
     private(set) var lastError: [String: String] = [:]
 
@@ -169,16 +170,31 @@ final class Scrobbler {
     private func flush(_ svc: ScrobbleService) {
         guard !flushing.contains(svc.id), let q = queues[svc.id], !q.isEmpty else { return }
         flushing.insert(svc.id)
-        let batch = Array(q.prefix(svc.maxBatch))
+        // After a rejected batch, go one at a time to find the scrobble the service refuses.
+        let batch = Array(q.prefix(oneByOne.contains(svc.id) ? 1 : svc.maxBatch))
         Task { @MainActor in
             do {
                 let n = try await svc.submit(batch)
                 self.queues[svc.id] = Array((self.queues[svc.id] ?? []).dropFirst(max(1, n)))
                 self.lastError[svc.id] = nil
+                if (self.queues[svc.id] ?? []).isEmpty { self.oneByOne.remove(svc.id) }
                 self.saveQueue()
                 self.flushing.remove(svc.id)
                 self.onChange?()
                 if !(self.queues[svc.id] ?? []).isEmpty { self.flush(svc) }
+            } catch ScrobbleError.http(400, let msg) {
+                // The service refused the content itself (not auth, not an outage): retrying it as is
+                // would block the queue for good. Split the batch; drop a single refused scrobble.
+                self.flushing.remove(svc.id)
+                if batch.count > 1 {
+                    self.oneByOne.insert(svc.id)
+                } else {
+                    NSLog("OmniAmp: %@ refused a scrobble (%@), dropping it", svc.id, msg)
+                    self.queues[svc.id] = Array((self.queues[svc.id] ?? []).dropFirst())
+                    self.oneByOne.remove(svc.id)
+                    self.saveQueue()
+                }
+                self.flush(svc)
             } catch {
                 // Keep everything queued (offline, server trouble); retried on the next scrobble or launch.
                 self.lastError[svc.id] = error.localizedDescription

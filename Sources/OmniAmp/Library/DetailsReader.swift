@@ -104,9 +104,9 @@ enum DetailsReader {
     /// ID3 genre "(17)" / "17" → "Rock" for the common numeric codes.
     private static func genreName(_ g: String) -> String {
         let digits = g.trimmingCharacters(in: CharacterSet(charactersIn: "()"))
-        if let n = Int(digits), n < id3Genres.count { return id3Genres[n] }
+        if let n = Int(digits), n >= 0, n < id3Genres.count { return id3Genres[n] }
         if g.hasPrefix("("), let close = g.firstIndex(of: ")"), let n = Int(g[g.index(after: g.startIndex)..<close]),
-           n < id3Genres.count { return g[g.index(after: close)...].isEmpty ? id3Genres[n] : String(g[g.index(after: close)...]) }
+           n >= 0, n < id3Genres.count { return g[g.index(after: close)...].isEmpty ? id3Genres[n] : String(g[g.index(after: close)...]) }
         return g
     }
 
@@ -248,7 +248,7 @@ enum DetailsReader {
             let h = bytes(p, 16)
             var len = Int64(be32(h, 0)), header: Int64 = 8
             if len == 1 { len = Int64(be32(h, 8)) << 32 | Int64(be32(h, 12)); header = 16 } else if len == 0 { len = size - p }
-            guard len >= header else { return }
+            guard len >= header, len <= size - p else { return }
             if String(decoding: h[4..<8], as: UTF8.self) == "moov" {
                 let m = bytes(p + header, Int(min(len - header, 64 << 20)))
                 walk(m, 0, m.count, into: &d)
@@ -284,7 +284,7 @@ enum DetailsReader {
             case "aART": d.albumArtist = d.albumArtist ?? text()
             case "\u{A9}day": d.year = d.year ?? text().map { String($0.prefix(4)) }
             case "\u{A9}gen": d.genre = d.genre ?? text()
-            case "gnre": if d.genre == nil, let v = value(), v.count >= 2 { d.genre = genreName(String(be16(v, 0) - 1)) }
+            case "gnre": if d.genre == nil, let v = value(), v.count >= 2, be16(v, 0) > 0 { d.genre = genreName(String(be16(v, 0) - 1)) }
             case "\u{A9}wrt": d.composer = d.composer ?? text()
             case "\u{A9}cmt": d.comment = d.comment ?? text()
             case "trkn": if let v = value(), v.count >= 6 { d.track = be16(v, 2); d.trackTotal = be16(v, 4) > 0 ? be16(v, 4) : nil }

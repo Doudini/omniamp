@@ -221,24 +221,28 @@ final class PlaylistStore {
         if activeLoads == 1 { loadStart = Date() }
         startFlushTimer()
 
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .utility).async {   // the volume check can stall on a slow share
             // Network shares: reads mostly wait on the server, so keep many in flight; local disks: one per core.
+            // Shared queues bound the total width however many loads overlap, and nothing blocks a thread waiting.
             let remote = Self.isNetworkVolume(work[0].path)
             let chunk = remote ? 8 : 64
-            let chunks = (work.count + chunk - 1) / chunk
-            let lanes = remote ? 24 : ProcessInfo.processInfo.activeProcessorCount
-            Self.forEachConcurrently(chunks, lanes: lanes) { c in
-                var local: [(Int, TagInfo)] = []
-                local.reserveCapacity(chunk)
-                let buffer = TagReadBuffer()
-                for w in work[(c * chunk)..<min((c + 1) * chunk, work.count)] {
-                    local.append((w.id, TagReader.read(path: w.path, fileSize: w.size, buffer: buffer)))
+            let queue = remote ? Self.remoteTagQueue : Self.localTagQueue
+            let group = DispatchGroup()
+            for start in stride(from: 0, to: work.count, by: chunk) {
+                let slice = work[start..<min(start + chunk, work.count)]
+                group.enter()
+                queue.addOperation {
+                    var local: [(id: Int, info: TagInfo)] = []
+                    local.reserveCapacity(slice.count)
+                    let buffer = TagReadBuffer()
+                    for w in slice { local.append((w.id, TagReader.read(path: w.path, fileSize: w.size, buffer: buffer))) }
+                    self.pendingLock.lock()
+                    self.pending.append(contentsOf: local)
+                    self.pendingLock.unlock()
+                    group.leave()
                 }
-                self.pendingLock.lock()
-                self.pending.append(contentsOf: local.map { (id: $0.0, info: $0.1) })
-                self.pendingLock.unlock()
             }
-            DispatchQueue.main.async {
+            group.notify(queue: .main) {
                 self.activeLoads -= 1
                 self.flush()
                 if self.activeLoads == 0 {
@@ -253,22 +257,18 @@ final class PlaylistStore {
         }
     }
 
+    private static func tagQueue(_ name: String, width: Int) -> OperationQueue {
+        let q = OperationQueue()
+        q.name = name
+        q.qualityOfService = .utility
+        q.maxConcurrentOperationCount = width
+        return q
+    }
+    private static let localTagQueue = tagQueue("omniamp.tags.local", width: ProcessInfo.processInfo.activeProcessorCount)
+    private static let remoteTagQueue = tagQueue("omniamp.tags.remote", width: 24)
+
     static func isNetworkVolume(_ path: String) -> Bool {
         (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal == false
-    }
-
-    /// Like concurrentPerform, but with a chosen width (concurrentPerform stops at the core count, which
-    /// leaves a network share mostly idle).
-    static func forEachConcurrently(_ n: Int, lanes: Int, _ body: @escaping (Int) -> Void) {
-        let group = DispatchGroup(), slots = DispatchSemaphore(value: max(1, lanes))
-        for i in 0..<n {
-            slots.wait()
-            DispatchQueue.global(qos: .utility).async(group: group) {
-                body(i)
-                slots.signal()
-            }
-        }
-        group.wait()
     }
 
     private func startFlushTimer() {

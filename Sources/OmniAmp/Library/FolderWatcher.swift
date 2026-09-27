@@ -106,6 +106,14 @@ final class FolderSync {
         roots.first { path == $0 || path.hasPrefix($0 + "/") }
     }
 
+    /// A missing path only counts as deleted while its watched root is still there. With the root missing
+    /// too, the drive or share is unmounted (or the folder moved away): keep its tracks and seen files
+    /// rather than wiping them; they come back on remount.
+    static func deletionIsReal(_ path: String, roots: [String]) -> Bool {
+        guard let r = roots.first(where: { path == $0 || path.hasPrefix($0 + "/") }) else { return false }
+        return FileManager.default.fileExists(atPath: r)
+    }
+
     /// Rewrite a path into its root's stored spelling. The file system hands out several spellings of
     /// the same folder (e.g. /var/… vs /private/var/… from the enumerator and FSEvents).
     static func canonical(_ path: String, roots: [String]) -> String {
@@ -168,7 +176,7 @@ final class FolderSync {
                         t.path = Self.canonical(t.path, roots: rootsSnapshot)
                         return t
                     }
-                } else {
+                } else if Self.deletionIsReal(s, roots: rootsSnapshot) {
                     gone.append(s)
                 }
             }

@@ -273,6 +273,8 @@ final class PodcastLibrary {
     }
 
     /// Downloads the feed (unless it was fetched in the last `maxAge` seconds) and returns its episodes, newest first.
+    /// Main-actor isolated: the library's state is only ever touched on main (refreshes run several of these at once).
+    @MainActor
     func episodes(_ show: PodcastShow, maxAge: Double = 600) async throws -> [PodcastEpisode] {
         _ = cachedEpisodes(show)   // loads the disk cache
         if let c = feeds[show.feedURL], Date().timeIntervalSince1970 - c.fetched < maxAge { return c.episodes }
@@ -282,13 +284,12 @@ final class PodcastLibrary {
         req.timeoutInterval = 20
         let (data, status) = try await transport.send(req)
         guard (200..<300).contains(status) else { throw ScrobbleError.http(status, "podcast feed") }
-        let parsed = PodcastFeedParser.parse(data)
-        let eps = parsed.episodes.sorted { ($0.published ?? 0) > ($1.published ?? 0) }
-        await MainActor.run {
-            let c = FeedCache(fetched: Date().timeIntervalSince1970, episodes: eps)
-            self.feeds[show.feedURL] = c
-            try? JSONEncoder().encode(c).write(to: self.feedFile(show.feedURL), options: .atomic)
-        }
+        let eps = await Task.detached(priority: .utility) {
+            PodcastFeedParser.parse(data).episodes.sorted { ($0.published ?? 0) > ($1.published ?? 0) }
+        }.value
+        let c = FeedCache(fetched: Date().timeIntervalSince1970, episodes: eps)
+        feeds[show.feedURL] = c
+        try? JSONEncoder().encode(c).write(to: feedFile(show.feedURL), options: .atomic)
         return eps
     }
 

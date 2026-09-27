@@ -1,8 +1,19 @@
 import AppKit
 
-/// Album art framed like part of the LCD: dark bezel, slight glass sheen, dim note glyph when there's no art.
+/// Album art framed like part of the LCD: dark bezel, slight glass sheen, and a dim icon when there's no art
+/// (a note for music, a radio for stations, …).
 final class ArtView: NSView {
     var image: CGImage? { didSet { needsDisplay = true } }
+    var placeholder = Fonts.Icon.music { didSet { if placeholder != oldValue { needsDisplay = true } } }
+
+    /// The placeholder for a track: what kind of thing is playing.
+    static func placeholder(for t: Track?) -> String {
+        guard let t else { return Fonts.Icon.music }
+        if t.isStream { return Fonts.Icon.radio }
+        if t.isWebFile { return Fonts.Icon.globe }
+        if t.isEpisode { return Fonts.Icon.podcast }
+        return Fonts.Icon.music
+    }
     var onHover: ((Bool) -> Void)?
     var onClick: (() -> Void)?
     var cornerRadius: CGFloat = 3
@@ -42,10 +53,14 @@ final class ArtView: NSView {
                 .draw(in: NSRect(x: 0, y: bounds.height * 0.5, width: bounds.width, height: bounds.height * 0.5), angle: -90)
         } else {
             Theme.lcd.setFill(); bounds.fill()
-            let glyph = Fonts.Icon.music as NSString
+            // Centered on the glyph's drawn shape (its text box has uneven spacing around icon glyphs).
             let attrs: [NSAttributedString.Key: Any] = [.font: Theme.icon(bounds.height * 0.4), .foregroundColor: Theme.phosphorDim.withAlphaComponent(0.6)]
-            let sz = glyph.size(withAttributes: attrs)
-            glyph.draw(at: NSPoint(x: (bounds.width - sz.width) / 2, y: (bounds.height - sz.height) / 2), withAttributes: attrs)
+            let line = CTLineCreateWithAttributedString(NSAttributedString(string: placeholder, attributes: attrs))
+            if let ctx = NSGraphicsContext.current?.cgContext {
+                let ink = CTLineGetImageBounds(line, ctx)
+                ctx.textPosition = CGPoint(x: (bounds.midX - ink.midX).rounded(), y: (bounds.midY - ink.midY).rounded())
+                CTLineDraw(line, ctx)
+            }
         }
         NSGraphicsContext.restoreGraphicsState()
         NSColor.black.setStroke(); path.lineWidth = 1; path.stroke()
@@ -311,6 +326,7 @@ final class ModernInfoView: NSView {
         }
         let t = c.tracks[i]
         let pathChanged = shownPath != t.path
+        art.placeholder = ArtView.placeholder(for: t)
         shownPath = t.path
         modeLabel.stringValue = pinned ? "SELECTED" : (i == c.currentIndex ? (t.isStream ? "● ON AIR" : "NOW PLAYING") : "")
         revealButton.isHidden = t.isRemote

@@ -29,7 +29,7 @@ struct ZipArchive {
         var p = u32(eocd + 16)
 
         for _ in 0..<count {
-            guard u32(p) == 0x0201_4B50 else { throw ZipError.corrupt }
+            guard p + 46 <= b.count, u32(p) == 0x0201_4B50 else { throw ZipError.corrupt }
             let method = UInt16(u16(p + 10))
             let compSize = u32(p + 20)
             let size = u32(p + 24)
@@ -53,6 +53,7 @@ struct ZipArchive {
 
     private static func inflate(_ src: Data, size: Int) throws -> Data {
         guard size > 0 else { return Data() }
+        guard size <= 64 * 1024 * 1024 else { throw ZipError.corrupt }   // no skin file is this big
         var out = Data(count: size)
         let n = out.withUnsafeMutableBytes { dst in
             src.withUnsafeBytes { s in

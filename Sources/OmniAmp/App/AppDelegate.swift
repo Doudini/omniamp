@@ -64,12 +64,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let media = urls.filter { $0.pathExtension.lowercased() != "wsz" }
         if let s = skins.first { loadSkin(s) }
         if !media.isEmpty { controller.add(media) }
+        if !openedBeforeLaunch.isEmpty {
+            let pending = openedBeforeLaunch
+            openedBeforeLaunch = []
+            application(NSApp, open: pending)
+        }
     }
 
+    /// Files opened before launch finished (double-clicking a file while OmniAmp isn't running): AppKit
+    /// delivers them before applicationDidFinishLaunching, when there's no player or window yet.
+    private var openedBeforeLaunch: [URL] = []
+
     func application(_ application: NSApplication, open urls: [URL]) {
+        guard controller != nil, viewMenu != nil else { openedBeforeLaunch += urls; return }
         if let s = urls.first(where: { $0.pathExtension.lowercased() == "wsz" }) { loadSkin(s) }
         let media = urls.filter { $0.pathExtension.lowercased() != "wsz" }
-        if !media.isEmpty { controller?.add(media) }
+        if !media.isEmpty { controller.add(media) }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

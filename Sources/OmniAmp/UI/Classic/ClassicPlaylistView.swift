@@ -124,7 +124,11 @@ final class ClassicPlaylistView: SkinCanvasView {
 
     private func drawTotals(_ ctx: CGContext) {
         guard let c = controller else { return }
-        let sel = selection.reduce(0.0) { $0 + (c.tracks[c.trackIndex(forRow: $1)].duration ?? 0) }
+        let sel = selection.reduce(0.0) { sum, row in
+            guard row < rowCount else { return sum }
+            let i = c.trackIndex(forRow: row)
+            return sum + (i < c.tracks.count ? c.tracks[i].duration ?? 0 : 0)
+        }
         let total = c.store.totalDuration
         let text = "\(TimeFormat.mmss(sel).isEmpty ? "0:00" : TimeFormat.mmss(sel))/\(TimeFormat.mmss(total).isEmpty ? "0:00" : TimeFormat.mmss(total))"
         let x = skinSize.width - 143
@@ -142,6 +146,8 @@ final class ClassicPlaylistView: SkinCanvasView {
 
     func reload() {
         selection = selection.filteredIndexSet { $0 < rowCount }
+        // The list may have shrunk: a Shift-click from a stale anchor would select rows that no longer exist.
+        if let a = anchor, a >= rowCount { anchor = rowCount > 0 ? rowCount - 1 : nil }
         clampScroll()
         needsDisplay = true
     }
@@ -224,7 +230,7 @@ final class ClassicPlaylistView: SkinCanvasView {
             c.play(index: c.trackIndex(forRow: r))
             return
         }
-        if event.modifierFlags.contains(.shift), let a = anchor {
+        if event.modifierFlags.contains(.shift), let a = anchor.map({ min($0, rowCount - 1) }), a >= 0 {
             selection = IndexSet(integersIn: min(a, r)...max(a, r))
         } else if event.modifierFlags.contains(.command) {
             if selection.contains(r) { selection.remove(r) } else { selection.insert(r) }
