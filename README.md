@@ -2,6 +2,8 @@
 
 A small, fast, Winamp-inspired MP3/FLAC player for macOS, written in Swift with AppKit and AVAudioEngine. It has no third-party dependencies.
 
+<p align="center"><img src="docs/screenshot.png" alt="OmniAmp modern look with album art and the INFO drawer" width="527"></p>
+
 ## Features
 
 - **Instant playlists:** drop a folder and 10,000 tracks show up in about 0.2 s. Tags are read in parallel in the background, and the playlist is cached, so relaunching restores it in about 20 ms.
