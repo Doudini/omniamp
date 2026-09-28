@@ -26,10 +26,10 @@ final class EpisodeMarkView: NSView {
         case .none:
             break
         case .new:
-            Theme.phosphor.setFill()
+            Dash.accent.setFill()
             NSBezierPath(ovalIn: NSRect(x: c.x - 3, y: c.y - 3, width: 6, height: 6)).fill()
         case .played:
-            let attrs: [NSAttributedString.Key: Any] = [.font: Theme.icon(9), .foregroundColor: Theme.phosphorDim]
+            let attrs: [NSAttributedString.Key: Any] = [.font: Theme.icon(9), .foregroundColor: Dash.text3]
             let s = NSAttributedString(string: Fonts.Icon.check, attributes: attrs)
             let size = s.size()
             s.draw(at: NSPoint(x: (c.x - size.width / 2).rounded(), y: (c.y - size.height / 2).rounded()))
@@ -37,7 +37,7 @@ final class EpisodeMarkView: NSView {
             let r: CGFloat = 4.5
             let ring = NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
             ring.lineWidth = 1
-            Theme.phosphor.withAlphaComponent(0.7).setStroke()
+            Dash.accent.withAlphaComponent(0.7).setStroke()
             ring.stroke()
             // The heard part, clockwise from 12 o'clock; at least a sliver so it never looks empty.
             let frac = CGFloat(max(0.08, min(1, f ?? 0.5)))
@@ -45,7 +45,7 @@ final class EpisodeMarkView: NSView {
             pie.move(to: c)
             pie.appendArc(withCenter: c, radius: r - 1.5, startAngle: 90, endAngle: 90 - 360 * frac, clockwise: true)
             pie.close()
-            Theme.phosphor.setFill()
+            Dash.accent.setFill()
             pie.fill()
         }
     }
@@ -58,13 +58,15 @@ final class EpisodeArtCell: NSView {
 
     init() {
         super.init(frame: .zero)
-        art.cornerRadius = 2
+        art.cornerRadius = 3
         art.placeholder = Fonts.Icon.podcast
+        art.surface = Dash.cardRaised
+        art.iconColor = Dash.text3
         art.translatesAutoresizingMaskIntoConstraints = false
         addSubview(art)
         NSLayoutConstraint.activate([
             art.centerXAnchor.constraint(equalTo: centerXAnchor), art.centerYAnchor.constraint(equalTo: centerYAnchor),
-            art.widthAnchor.constraint(equalToConstant: 20), art.heightAnchor.constraint(equalToConstant: 20),
+            art.widthAnchor.constraint(equalToConstant: 24), art.heightAnchor.constraint(equalToConstant: 24),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -94,11 +96,13 @@ final class EpisodeNotesView: NSView {
     init() {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.cornerRadius = 4
+        layer?.cornerRadius = 8
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.black.cgColor
-        art.cornerRadius = 3
+        layer?.borderColor = Dash.border.cgColor
+        art.cornerRadius = 4
         art.placeholder = Fonts.Icon.podcast
+        art.surface = Dash.cardRaised
+        art.iconColor = Dash.text3
         title.maximumNumberOfLines = 2
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -136,16 +140,16 @@ final class EpisodeNotesView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    private var dim: NSColor { Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor) ?? Theme.phosphorDim }
+    private var dim: NSColor { Dash.text2 }
 
     func applyTheme() {
         shownURL = nil
-        layer?.backgroundColor = Theme.lcd.cgColor
-        title.font = Fonts.hack(12, bold: true)
-        title.textColor = Theme.playlistText
-        meta.font = Fonts.hack(10)
+        layer?.backgroundColor = Dash.card.cgColor
+        title.font = Dash.font(14, .semibold)
+        title.textColor = Dash.text
+        meta.font = Dash.font(11.5)
         meta.textColor = dim
-        text.linkTextAttributes = [.foregroundColor: Theme.phosphor, .underlineStyle: NSUnderlineStyle.single.rawValue,
+        text.linkTextAttributes = [.foregroundColor: Dash.accent, .underlineStyle: NSUnderlineStyle.single.rawValue,
                                    .cursor: NSCursor.pointingHand]
         art.needsDisplay = true
     }
@@ -158,7 +162,7 @@ final class EpisodeNotesView: NSView {
             title.stringValue = ""
             meta.stringValue = ""
             text.textStorage?.setAttributedString(NSAttributedString(string: "Select an episode to read its show notes.",
-                                                                     attributes: [.font: Fonts.hack(11), .foregroundColor: dim]))
+                                                                     attributes: [.font: Dash.font(13), .foregroundColor: dim]))
             return
         }
         art.isHidden = false
@@ -183,7 +187,7 @@ final class EpisodeNotesView: NSView {
         guard e.url != shownURL || e.summary != shownSummary else { return }
         shownURL = e.url
         shownSummary = e.summary
-        text.textStorage?.setAttributedString(Self.notes(e, font: Fonts.hack(11), color: Theme.playlistText))
+        text.textStorage?.setAttributedString(Self.notes(e, font: Dash.font(13), color: Dash.text))
         text.scroll(.zero)
     }
 
@@ -241,20 +245,20 @@ final class DownloadMarkView: NSView {
         switch state {
         case .none:
             if failed { glyph(Fonts.Icon.warning, Theme.warning, size: 9) }
-            else { glyph(Fonts.Icon.download, Theme.phosphorDim.withAlphaComponent(0.55), size: 9) }
+            else { glyph(Fonts.Icon.download, Dash.text3, size: 9) }
         case .done:
-            glyph(Fonts.Icon.downloaded, Theme.phosphor)
+            glyph(Fonts.Icon.downloaded, Dash.accent)
         case .queued, .downloading:
             let r: CGFloat = 5
             let ring = NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
             ring.lineWidth = 1.5
-            Theme.phosphorDim.withAlphaComponent(0.5).setStroke()
+            Dash.text3.setStroke()
             ring.stroke()
             if case .downloading(let p) = state {
                 let arc = NSBezierPath()
                 arc.appendArc(withCenter: c, radius: r, startAngle: 90, endAngle: 90 - 360 * CGFloat(max(0.03, p)), clockwise: true)
                 arc.lineWidth = 1.5
-                Theme.phosphor.setStroke()
+                Dash.accent.setStroke()
                 arc.stroke()
             }
         }

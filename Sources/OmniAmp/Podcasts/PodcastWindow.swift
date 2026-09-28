@@ -7,9 +7,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
                                     NSSplitViewDelegate, NSMenuDelegate, NSSearchFieldDelegate {
     private let controller: PlayerController
     private let library = PodcastLibrary.shared
-    private var topButton: ModernButton!
-    private var subscribedButton: ModernButton!
-    private var subscribeButton: ModernButton!
+    private var topButton: Pill!
+    private var subscribedButton: Pill!
+    private var subscribeButton: Pill!
     private let search = NSSearchField()
     private let country = NSPopUpButton()
     private let showsTable = KeyTableView()
@@ -29,7 +29,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var allEpisodes: [PodcastEpisode] = []
     private var episodes: [PodcastEpisode] = []
     private let episodeFilter = NSSearchField()
-    private var unplayedButton: ModernButton!
+    private var unplayedButton: Pill!
     private static let unplayedKey = "podcastUnplayedOnly"
     private var unplayedOnly: Bool { UserDefaults.standard.bool(forKey: Self.unplayedKey) }
     private var currentShow: PodcastShow?
@@ -37,8 +37,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var episodeShows: [String: PodcastShow] = [:]
     private let downloads = PodcastDownloads.shared
     private var downloadsObserver: NSObjectProtocol?
-    private var downloadButton: ModernButton!
-    private var folderButton: ModernButton!
+    private var downloadButton: Pill!
+    private var folderButton: Pill!
 
     /// Pinned at the top of SUBSCRIBED when they have something.
     private static let continueShow = PodcastShow(feedURL: "omniamp:continue", title: "Continue listening", author: "")
@@ -59,7 +59,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let rightPane = NSView()
     private static let showsWidthKey = "podcastShowsWidth"
     private let notes = EpisodeNotesView()
-    private var notesButton: ModernButton!
+    private var notesButton: Pill!
     private var progressTimer: Timer?
     private static let notesOpenKey = "podcastNotesOpen", notesHeightKey = "podcastNotesHeight"
 
@@ -165,23 +165,20 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         table.dataSource = self
         table.delegate = self
         table.target = self
-        ListLook.apply(table, in: scroll, rowHeight: rowHeight)
+        Dash.applyList(table, in: scroll, rowHeight: rowHeight)
     }
 
     private func build() {
-        window?.backgroundColor = Theme.background
-        let title = NSTextField(labelWithString: "PODCASTS")
-        title.font = Fonts.hack(10, bold: true)
-        title.textColor = NSColor(calibratedWhite: 0.6, alpha: 1)
+        window?.backgroundColor = Dash.page
+        let title = Dash.label("Podcasts", Dash.font(12, .semibold), Dash.text2)
 
-        topButton = ModernButton(glyph: Fonts.Icon.podcast, label: "TOP", target: self, action: #selector(showTop))
-        subscribedButton = ModernButton(glyph: Fonts.Icon.rss, label: "SUBSCRIBED", target: self, action: #selector(showSubscribed))
-        for b in [topButton!, subscribedButton!] { b.glyphSize = 10 }
+        topButton = Pill("Top", glyph: Fonts.Icon.podcast, target: self, action: #selector(showTop))
+        subscribedButton = Pill("Subscribed", glyph: Fonts.Icon.rss, target: self, action: #selector(showSubscribed))
         topButton.isOn = !showingSubscriptions
         subscribedButton.isOn = showingSubscriptions
 
         search.placeholderString = "Search podcasts…"
-        search.font = Fonts.hack(11)
+        search.font = Dash.font(13)
         search.target = self
         search.action = #selector(searchChanged)
         search.delegate = self   // Esc in an empty field closes the window
@@ -194,18 +191,18 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         country.target = self
         country.action = #selector(countryChanged)
-        country.font = Fonts.hack(11)
+        country.font = Dash.font(12)
 
         if showsTable.tableColumns.isEmpty {
             showsTable.addTableColumn(column("show", 300, flexible: true))
-            style(showsTable, showsScroll, rowHeight: 46)
+            style(showsTable, showsScroll, rowHeight: 54)
             showsTable.action = #selector(showClicked)
             showsMenu.delegate = self
             showsTable.menu = showsMenu
             showsTable.onKey = { [weak self] e in self?.showsKey(e) ?? false }
             episodesTable.onKey = { [weak self] e in self?.episodesKey(e) ?? false }
             episodesTable.addTableColumn(column("mark", 14))
-            episodesTable.addTableColumn(column("art", 20))
+            episodesTable.addTableColumn(column("art", 26))
             episodesTable.addTableColumn(column("title", 300, flexible: true))
             episodesTable.addTableColumn(column("dl", 16))
             episodesTable.action = #selector(episodeClicked)
@@ -214,13 +211,13 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             episodesTable.menu = menu
             episodesTable.addTableColumn(column("date", 92))
             episodesTable.addTableColumn(column("length", 62))
-            style(episodesTable, episodesScroll, rowHeight: 26)
+            style(episodesTable, episodesScroll, rowHeight: 32)
             episodesTable.allowsMultipleSelection = true
             episodesTable.doubleAction = #selector(playSelected)
         } else {
             for (t, s) in [(showsTable, showsScroll), (episodesTable, episodesScroll)] {
-                t.backgroundColor = Theme.lcd
-                s.backgroundColor = Theme.lcd
+                t.backgroundColor = Dash.card
+                s.backgroundColor = Dash.card
             }
         }
         notes.applyTheme()
@@ -233,47 +230,42 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             notes.isHidden = !UserDefaults.standard.bool(forKey: Self.notesOpenKey)
         }
 
-        showTitle.font = Fonts.hack(13, bold: true)
-        showTitle.textColor = Theme.playlistText
+        showTitle.font = Dash.font(17, .semibold)
+        showTitle.textColor = Dash.text
         showTitle.lineBreakMode = .byTruncatingTail
         showTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        showInfo.font = Fonts.hack(10.5)
-        showInfo.textColor = Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)
+        showInfo.font = Dash.font(12)
+        showInfo.textColor = Dash.text2
         showInfo.lineBreakMode = .byTruncatingTail
         showInfo.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        subscribeButton = ModernButton(glyph: Fonts.Icon.rss, label: "SUBSCRIBE", target: self, action: #selector(subscribeTapped))
-        subscribeButton.glyphSize = 10
+        subscribeButton = Pill("Subscribe", glyph: Fonts.Icon.rss, target: self, action: #selector(subscribeTapped))
         subscribeButton.toolTip = "Subscribe: new episodes show up under SUBSCRIBED"
 
-        status.font = Fonts.hack(10)
-        status.textColor = Theme.phosphorDim.blended(withFraction: 0.4, of: Theme.phosphor)
+        status.font = Dash.font(11.5)
+        status.textColor = Dash.text2
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        notesButton = ModernButton(glyph: Fonts.Icon.info, label: "NOTES", target: self, action: #selector(toggleNotes))
+        notesButton = Pill("Notes", glyph: Fonts.Icon.info, target: self, action: #selector(toggleNotes))
         notesButton.isOn = !notes.isHidden
         notesButton.toolTip = "Show notes of the selected episode"
-        downloadButton = ModernButton(glyph: Fonts.Icon.download, label: "DOWNLOAD", target: self, action: #selector(downloadSelected))
+        downloadButton = Pill("Download", glyph: Fonts.Icon.download, target: self, action: #selector(downloadSelected))
         downloadButton.toolTip = "Save the selected episodes for offline listening (or remove them)"
-        let playedButton = ModernButton(glyph: Fonts.Icon.check, label: "PLAYED", target: self, action: #selector(togglePlayed))
-        let add = ModernButton(glyph: Fonts.Icon.plus, label: "ADD", target: self, action: #selector(addSelected))
-        let play = ModernButton(glyph: Fonts.Icon.play, label: "PLAY", target: self, action: #selector(playSelected))
-        for b in [notesButton!, downloadButton!, playedButton, add, play] { b.glyphSize = 10 }
+        let playedButton = Pill("Played", glyph: Fonts.Icon.check, target: self, action: #selector(togglePlayed))
+        let add = Pill("Add", glyph: Fonts.Icon.plus, target: self, action: #selector(addSelected))
+        let play = Pill("Play", glyph: Fonts.Icon.play, target: self, action: #selector(playSelected))
+        play.prominent = true
         playedButton.toolTip = "Mark the selected episodes as played / unplayed"
         add.toolTip = "Add the selected episodes to the playlist"
         play.toolTip = "Play now (double-click)"
 
-        let feedButton = ModernButton(glyph: Fonts.Icon.plus, label: "FEED", target: self, action: #selector(feedMenu(_:)))
-        feedButton.glyphSize = 10
+        let feedButton = Pill("Feed", glyph: Fonts.Icon.plus, target: self, action: #selector(feedMenu(_:)))
         feedButton.toolTip = "Add a podcast by its feed URL, or import / export your subscriptions (OPML)"
-        feedButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
         let top = NSStackView(views: [topButton, subscribedButton, search, country, feedButton])
         top.spacing = 6
-        folderButton = ModernButton(glyph: Fonts.Icon.folder, label: "FOLDER", target: self, action: #selector(showDownloadFolder))
-        folderButton.glyphSize = 10
+        folderButton = Pill("Folder", glyph: Fonts.Icon.folder, target: self, action: #selector(showDownloadFolder))
         folderButton.toolTip = "Open the downloads folder in Finder (change it in Settings)"
-        folderButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
         episodeFilter.placeholderString = "Filter episodes"
-        episodeFilter.font = Fonts.hack(11)
+        episodeFilter.font = Dash.font(12)
         episodeFilter.controlSize = .small
         episodeFilter.sendsSearchStringImmediately = true   // it's local: filter on every key
         episodeFilter.target = self
@@ -281,11 +273,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         episodeFilter.delegate = self
         episodeFilter.toolTip = "Show only episodes whose title has all these words (⇧⌘F)"
         episodeFilter.setContentHuggingPriority(.defaultLow, for: .horizontal)   // stretches across its row
-        unplayedButton = ModernButton(glyph: "", label: "UNPLAYED", target: self, action: #selector(toggleUnplayed))
-        unplayedButton.isToggle = true
+        unplayedButton = Pill("Unplayed", target: self, action: #selector(toggleUnplayed))
         unplayedButton.isOn = unplayedOnly
         unplayedButton.toolTip = "Hide episodes you've played"
-        unplayedButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
         let header = NSStackView(views: [showTitle, NSView(), folderButton, subscribeButton])
         // The list's own toolbar: filter + UNPLAYED, above the episodes (the title line keeps its room).
         let listBar = NSStackView(views: [episodeFilter, unplayedButton])
@@ -951,9 +941,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard downloadButton != nil else { return }
         let states = selectedEpisodes.map { downloads.state($0.url) }
         let label: String, glyph: String
-        if !states.isEmpty, states.allSatisfy({ $0 == .done }) { (label, glyph) = ("REMOVE", Fonts.Icon.trash) }
-        else if !states.isEmpty, states.allSatisfy({ $0 != .none && $0 != .done }) { (label, glyph) = ("CANCEL", Fonts.Icon.download) }
-        else { (label, glyph) = ("DOWNLOAD", Fonts.Icon.download) }
+        if !states.isEmpty, states.allSatisfy({ $0 == .done }) { (label, glyph) = ("Remove", Fonts.Icon.trash) }
+        else if !states.isEmpty, states.allSatisfy({ $0 != .none && $0 != .done }) { (label, glyph) = ("Cancel", Fonts.Icon.download) }
+        else { (label, glyph) = ("Download", Fonts.Icon.download) }
         downloadButton.label = label
         downloadButton.glyph = glyph
     }
@@ -1178,7 +1168,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             .filter { !$0.isEmpty }.joined(separator: " · ")
         subscribeButton.isHidden = false
         subscribeButton.isOn = library.isSubscribed(s)
-        subscribeButton.label = library.isSubscribed(s) ? "SUBSCRIBED" : "SUBSCRIBE"
+        subscribeButton.label = library.isSubscribed(s) ? "Subscribed" : "Subscribe"
     }
 
     @objc private func subscribeTapped() {
@@ -1232,7 +1222,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func numberOfRows(in tableView: NSTableView) -> Int { tableView === showsTable ? shows.count : episodes.count }
 
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { PlaylistRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CardRowView() }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let id = tableColumn?.identifier.rawValue else { return nil }
@@ -1295,22 +1285,21 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }()
         let cell = host.textField!
         let played = library.isPlayed(e.url)
-        let dim = Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)!
         cell.alignment = .left
         switch id {
         case "title":
             cell.stringValue = e.title
-            cell.font = Fonts.hack(12, bold: !played)
-            cell.textColor = played ? dim : Theme.playlistText
+            cell.font = Dash.font(13, played ? .regular : .medium)
+            cell.textColor = played ? Dash.text3 : Dash.text
             cell.toolTip = notes.isHidden ? e.summary : nil   // the notes pane shows them when open
         case "date":
             cell.stringValue = e.published.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .omitted) } ?? ""
-            cell.font = Fonts.hack(10.5)
-            cell.textColor = dim
+            cell.font = Dash.font(12)
+            cell.textColor = Dash.text2
         default:
             cell.stringValue = TimeFormat.mmss(e.duration)
-            cell.font = Fonts.hack(10.5)
-            cell.textColor = dim
+            cell.font = Dash.mono(11)
+            cell.textColor = Dash.text2
             cell.alignment = .right
         }
         return host
@@ -1339,8 +1328,10 @@ final class ShowCell: NSView {
 
     init() {
         super.init(frame: .zero)
-        art.cornerRadius = 3
+        art.cornerRadius = 4
         art.placeholder = Fonts.Icon.podcast
+        art.surface = Dash.cardRaised
+        art.iconColor = Dash.text3
         for l in [title, author, badge] {
             l.translatesAutoresizingMaskIntoConstraints = false
             l.lineBreakMode = .byTruncatingTail
@@ -1350,16 +1341,16 @@ final class ShowCell: NSView {
         badge.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(art)
         NSLayoutConstraint.activate([
-            art.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            art.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             art.centerYAnchor.constraint(equalTo: centerYAnchor),
-            art.widthAnchor.constraint(equalToConstant: 36), art.heightAnchor.constraint(equalToConstant: 36),
+            art.widthAnchor.constraint(equalToConstant: 40), art.heightAnchor.constraint(equalToConstant: 40),
             title.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 8),
             title.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -6),
             title.bottomAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             author.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             author.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -4),
             author.topAnchor.constraint(equalTo: centerYAnchor, constant: 2),
-            badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             badge.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
         ])
     }
@@ -1375,15 +1366,15 @@ final class ShowCell: NSView {
     func show(_ s: PodcastShow, newCount: Int, subscribed: Bool, updated: String? = nil) {
         art.placeholder = Fonts.Icon.podcast
         title.stringValue = s.title
-        title.font = Fonts.hack(12, bold: true)
-        title.textColor = Theme.playlistText
+        title.font = Dash.font(13, .semibold)
+        title.textColor = Dash.text
         author.stringValue = [s.author, updated.map { "updated " + $0 }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-        author.font = Fonts.hack(10)
-        author.textColor = Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)
-        badge.font = Fonts.hack(10, bold: true)
-        badge.textColor = Theme.phosphor
+        author.font = Dash.font(11.5)
+        author.textColor = Dash.text2
+        badge.font = Dash.mono(10, bold: true)
+        badge.textColor = Dash.accent
         badge.stringValue = newCount > 0 ? "● \(newCount) new" : (subscribed ? Fonts.Icon.rss : "")
-        if subscribed, newCount == 0 { badge.font = Theme.icon(10); badge.textColor = Theme.phosphorDim }
+        if subscribed, newCount == 0 { badge.font = Theme.icon(10); badge.textColor = Dash.text3 }
         let want = LogoStore.thumbnail(s.artwork)   // small file, small decode: the list shows 36 pt covers
         artwork = want
         art.image = LogoStore.shared.cached(want, size: .small)

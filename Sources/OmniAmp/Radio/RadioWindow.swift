@@ -5,8 +5,8 @@ import AppKit
 final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate,
                                   NSSearchFieldDelegate {
     private let controller: PlayerController
-    private var popularButton: ModernButton!
-    private var favoritesButton: ModernButton!
+    private var popularButton: Pill!
+    private var favoritesButton: Pill!
     private let search = NSSearchField()
     private let genre = NSPopUpButton()
     private let country = NSPopUpButton()
@@ -73,19 +73,16 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
     // MARK: Layout
 
     private func build() {
-        window?.backgroundColor = Theme.background
-        let title = NSTextField(labelWithString: "INTERNET RADIO")
-        title.font = Fonts.hack(10, bold: true)
-        title.textColor = NSColor(calibratedWhite: 0.6, alpha: 1)
+        window?.backgroundColor = Dash.page
+        let title = Dash.label("Internet Radio", Dash.font(12, .semibold), Dash.text2)
 
-        popularButton = ModernButton(glyph: Fonts.Icon.radio, label: "POPULAR", target: self, action: #selector(showPopular))
-        favoritesButton = ModernButton(glyph: Fonts.Icon.starFilled, label: "FAVORITES", target: self, action: #selector(showFavorites))
-        for b in [popularButton!, favoritesButton!] { b.glyphSize = 10 }
+        popularButton = Pill("Popular", glyph: Fonts.Icon.radio, target: self, action: #selector(showPopular))
+        favoritesButton = Pill("Favorites", glyph: Fonts.Icon.starFilled, target: self, action: #selector(showFavorites))
         popularButton.isOn = !showingFavorites
         favoritesButton.isOn = showingFavorites
 
         search.placeholderString = "Search stations…"
-        search.font = Fonts.hack(11)
+        search.font = Dash.font(13)
         search.target = self
         search.action = #selector(searchChanged)
         search.delegate = self   // Esc in an empty field closes the window
@@ -94,10 +91,10 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             genre.addItems(withTitles: Self.genres)
             country.addItems(withTitles: Self.countries.map(\.0))
         }
-        for p in [genre, country] { p.target = self; p.action = #selector(filterChanged); p.font = Fonts.hack(11) }
+        for p in [genre, country] { p.target = self; p.action = #selector(filterChanged); p.font = Dash.font(12) }
 
         if table.tableColumns.isEmpty {
-            for c in [ListLook.column("logo", 26), ListLook.column("fav", 22), ListLook.column("name", 260, flexible: true),
+            for c in [ListLook.column("logo", 32), ListLook.column("fav", 22), ListLook.column("name", 260, flexible: true),
                       ListLook.column("genre", 160), ListLook.column("country", 110), ListLook.column("format", 70)] { table.addTableColumn(c) }
             table.headerView = nil
             table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
@@ -111,40 +108,37 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             menu.delegate = self   // filled for the clicked row
             table.menu = menu
         }
-        ListLook.apply(table, in: scroll, rowHeight: 26)   // again on a theme change: the colors
+        Dash.applyList(table, in: scroll, rowHeight: 34)   // again on a theme change: the colors
 
-        status.font = Fonts.hack(10)
-        status.textColor = Theme.phosphorDim.blended(withFraction: 0.4, of: Theme.phosphor)
+        status.font = Dash.font(11.5)
+        status.textColor = Dash.text2
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let credit = NSButton(title: "radio-browser.info", target: self, action: #selector(openCredit))
         credit.isBordered = false
         credit.attributedTitle = NSAttributedString(string: "directory: radio-browser.info",
-                                                    attributes: [.font: Fonts.hack(9), .foregroundColor: Theme.phosphorDim])
-        let fav = ModernButton(glyph: Fonts.Icon.starFilled, label: "FAV", target: self, action: #selector(toggleFavorite))
-        let add = ModernButton(glyph: Fonts.Icon.plus, label: "ADD", target: self, action: #selector(addSelected))
-        let play = ModernButton(glyph: Fonts.Icon.play, label: "PLAY", target: self, action: #selector(playSelected))
-        for b in [fav, add, play] { b.glyphSize = 10 }
+                                                    attributes: [.font: Dash.font(11), .foregroundColor: Dash.text3])
+        let fav = Pill("Favorite", glyph: Fonts.Icon.starFilled, target: self, action: #selector(toggleFavorite))
+        let add = Pill("Add", glyph: Fonts.Icon.plus, target: self, action: #selector(addSelected))
+        let play = Pill("Play", glyph: Fonts.Icon.play, target: self, action: #selector(playSelected))
+        play.prominent = true
         fav.toolTip = "Add or remove from favorites"
         add.toolTip = "Add to the playlist"
         play.toolTip = "Play now (double-click)"
 
-        let urlButton = ModernButton(glyph: Fonts.Icon.plus, label: "URL", target: self, action: #selector(addCustom))
-        urlButton.glyphSize = 10
+        let urlButton = Pill("URL", glyph: Fonts.Icon.plus, target: self, action: #selector(addCustom))
         urlButton.toolTip = "Add a station by its stream or playlist URL (saved in Favorites)"
-        urlButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
         let top = NSStackView(views: [popularButton, favoritesButton, search, genre, country, urlButton])
         top.spacing = 6
         let bottom = NSStackView(views: [status, NSView(), credit, fav, add, play])
         bottom.spacing = 6
         let root = NSView()
         for v in [title, top, scroll, bottom] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(v) }
-        for b in [popularButton!, favoritesButton!, fav, add, play] { b.heightAnchor.constraint(equalToConstant: 22).isActive = true }
         search.setContentHuggingPriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
             title.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
             title.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            top.topAnchor.constraint(equalTo: root.topAnchor, constant: 34),
+            top.topAnchor.constraint(equalTo: root.topAnchor, constant: 32),
             top.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             top.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             scroll.topAnchor.constraint(equalTo: top.bottomAnchor, constant: 10),
@@ -365,7 +359,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
 
     func numberOfRows(in tableView: NSTableView) -> Int { stations.count }
 
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { PlaylistRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CardRowView() }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let id = tableColumn?.identifier.rawValue, row < stations.count else { return nil }
@@ -376,39 +370,34 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             v.show(s.favicon)
             return v
         }
-        let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? NSTextField) ?? {
-            let f = NSTextField(labelWithString: "")
-            f.identifier = NSUserInterfaceItemIdentifier(id)
-            f.lineBreakMode = .byTruncatingTail
-            return f
-        }()
-        let dim = Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)!
+        let textCell = libraryCell(tableView, id), cell = textCell.field   // centred on the row
+        cell.alignment = .left
         switch id {
         case "fav":
             let on = RadioFavorites.contains(s)
             cell.stringValue = on ? Fonts.Icon.starFilled : Fonts.Icon.starEmpty
             cell.font = Theme.icon(12)
-            cell.textColor = on ? Theme.phosphor : Theme.phosphorDim
+            cell.textColor = on ? Dash.accent : Dash.text3
             cell.alignment = .center
         case "name":
             cell.stringValue = s.name
-            cell.font = Fonts.hack(12, bold: true)
-            cell.textColor = Theme.playlistText
+            cell.font = Dash.font(13, .medium)
+            cell.textColor = Dash.text
         case "genre":
             cell.stringValue = s.genreLabel
-            cell.font = Fonts.hack(10.5)
-            cell.textColor = dim
+            cell.font = Dash.font(12)
+            cell.textColor = Dash.text2
         case "country":
             cell.stringValue = s.countryCode.isEmpty ? s.country : (Locale.current.localizedString(forRegionCode: s.countryCode) ?? s.country)
-            cell.font = Fonts.hack(10.5)
-            cell.textColor = dim
+            cell.font = Dash.font(12)
+            cell.textColor = Dash.text2
         default:
             cell.stringValue = s.formatLabel
-            cell.font = Fonts.hack(10.5)
-            cell.textColor = dim
+            cell.font = Dash.mono(10)
+            cell.textColor = Dash.text3
             cell.alignment = .right
         }
-        return cell
+        return textCell
     }
 }
 
@@ -419,12 +408,14 @@ final class LogoCell: NSView {
 
     init() {
         super.init(frame: .zero)
-        art.cornerRadius = 3
+        art.cornerRadius = 4
         art.placeholder = Fonts.Icon.radio
+        art.surface = Dash.cardRaised
+        art.iconColor = Dash.text3
         addSubview(art)
         NSLayoutConstraint.activate([
             art.centerXAnchor.constraint(equalTo: centerXAnchor), art.centerYAnchor.constraint(equalTo: centerYAnchor),
-            art.widthAnchor.constraint(equalToConstant: 20), art.heightAnchor.constraint(equalToConstant: 20),
+            art.widthAnchor.constraint(equalToConstant: 24), art.heightAnchor.constraint(equalToConstant: 24),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }

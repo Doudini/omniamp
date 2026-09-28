@@ -103,6 +103,9 @@ final class Pill: NSControl {
     var title: String { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
     var glyph: String?
     var isOn = false { didSet { needsDisplay = true } }
+    /// The title under the name the hardware-style buttons use.
+    var label: String { get { title } set { title = newValue } }
+    override var isEnabled: Bool { didSet { needsDisplay = true } }
     /// Filled with the accent (the main action on a page).
     var prominent = false { didSet { needsDisplay = true } }
     private var hovering = false { didSet { needsDisplay = true } }
@@ -120,7 +123,7 @@ final class Pill: NSControl {
     required init?(coder: NSCoder) { fatalError() }
 
     private var attributed: NSAttributedString {
-        let color: NSColor = prominent ? Dash.page : (isOn ? Dash.accent : (hovering ? Dash.text : Dash.text2))
+        let color: NSColor = !isEnabled ? Dash.text3 : prominent ? Dash.page : (isOn ? Dash.accent : (hovering ? Dash.text : Dash.text2))
         let s = NSMutableAttributedString()
         if let g = glyph { s.append(NSAttributedString(string: g + "  ", attributes: [.font: Fonts.hack(11), .foregroundColor: color])) }
         s.append(NSAttributedString(string: title, attributes: [.font: Dash.font(12, .medium), .foregroundColor: color]))
@@ -132,7 +135,8 @@ final class Pill: NSControl {
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 0.5, dy: 0.5)
         let path = NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2)
-        let fill: NSColor = prominent ? Dash.accent.withAlphaComponent(pressed ? 0.75 : (hovering ? 1 : 0.9))
+        let fill: NSColor = prominent && !isEnabled ? Dash.cardRaised
+            : prominent ? Dash.accent.withAlphaComponent(pressed ? 0.75 : (hovering ? 1 : 0.9))
             : isOn ? Dash.accent.withAlphaComponent(0.16) : (hovering || pressed ? Dash.cardRaised : Dash.card)
         fill.setFill()
         path.fill()
@@ -153,6 +157,7 @@ final class Pill: NSControl {
     override func mouseEntered(with event: NSEvent) { hovering = true }
     override func mouseExited(with event: NSEvent) { hovering = false }
     override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
         pressed = true
         while let e = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
             if e.type == .leftMouseUp {

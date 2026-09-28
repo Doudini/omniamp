@@ -1028,7 +1028,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         default:
             guard row < tracks.count, let id = tableColumn?.identifier.rawValue else { return nil }
             let t = tracks[row]
-            let f = libraryLabel(tableView, id)
+            let textCell = libraryCell(tableView, id), f = textCell.field
             f.font = Dash.font(12.5)
             f.textColor = Dash.text2
             f.alignment = .left
@@ -1055,7 +1055,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 if !t.playable { f.textColor = Theme.warning }
             }
             f.toolTip = t.playable ? nil : "OmniAmp can't play this format. Convert it to FLAC to play it."
-            return f
+            return textCell
         }
     }
 

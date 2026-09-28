@@ -123,8 +123,9 @@ final class TextCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-func libraryLabel(_ table: NSTableView, _ id: String) -> NSTextField {
-    ((table.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? TextCell) ?? TextCell(id)).field
+/// A reusable text cell; return the cell (not its field) from viewFor, or the text isn't centred.
+func libraryCell(_ table: NSTableView, _ id: String) -> TextCell {
+    (table.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? TextCell) ?? TextCell(id)
 }
 
 /// A sidebar entry: icon and name, each centred on the row (one label with both fonts sat high: the icon
