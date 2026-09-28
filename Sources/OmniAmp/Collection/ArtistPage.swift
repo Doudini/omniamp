@@ -1,4 +1,6 @@
 import AppKit
+import CryptoKit
+import ImageIO
 
 extension LibraryAlbum {
     /// A point in time: the concert's date, else the middle of its year.
@@ -193,15 +195,84 @@ final class ArtistPage: NSScrollView {
     func show(artist key: String) {
         generation += 1
         let gen = generation
+        info = nil
+        photoImage = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let d = (try? CollectionDB().artistDashboard(key)) ?? ArtistDashboard(key: key)
+            let db = try? CollectionDB()
+            let d = (try? db?.artistDashboard(key)) ?? ArtistDashboard(key: key)
+            let cached: CollectionDB.CachedInfo = (db.flatMap { try? $0.artistInfo(key) }) ?? .unknown
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.dash = d
+                if case .found(let i) = cached { self.info = i }
                 self.build()
                 self.scrollToTop()
+                self.loadInfo(key: key, name: d.name, cached: cached, gen: gen)
             }
         }
+    }
+
+    // MARK: Photo and bio (Wikipedia, via MusicBrainz and Wikidata)
+
+    private var info: MetadataLookup.ArtistInfo?
+    private var photoImage: CGImage?
+    private let photo = ArtView()
+    private let bio = NSTextField(wrappingLabelWithString: "")
+    private let about = NSTextField(labelWithString: "")
+    private var wikiButton: Pill?
+
+    /// Looked up when the page opens (never in the background), then kept; the photo is kept on disk.
+    private func loadInfo(key: String, name: String, cached: CollectionDB.CachedInfo, gen: Int) {
+        let online = UserDefaults.standard.object(forKey: Pref.libraryOnlineLookups) as? Bool ?? true
+        Task { @MainActor [weak self] in
+            var found: MetadataLookup.ArtistInfo?
+            switch cached {
+            case .found(let c): found = c
+            case .none: return
+            case .unknown: break
+            }
+            if found == nil, online, !name.isEmpty, !["unknown artist", "various artists"].contains(key) {
+                let mbid = await Task.detached { try? CollectionDB().artistMBID(key) }.value ?? nil
+                let r = await MetadataLookup.shared.artistInfo(name: name, mbid: mbid)
+                if !r.failed { let i = r.info; _ = await Task.detached { try? CollectionDB().saveArtistInfo(key, i) }.value }
+                found = r.info
+            }
+            guard let self, gen == self.generation, let found else { return }
+            if self.info != found { self.info = found; self.applyInfo() }
+            if let url = found.imageURL, let img = await Self.photo(url) {
+                guard gen == self.generation else { return }
+                self.photoImage = img
+                self.photo.image = img
+                self.photo.isHidden = false
+            }
+        }
+    }
+
+    /// The photo, from the disk cache or downloaded and kept there (small: 320 px).
+    private static func photo(_ url: URL) async -> CGImage? {
+        // A stable name (hashValue changes every launch).
+        let name = "artist-" + SHA256.hash(data: Data(url.absoluteString.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined() + ".png"
+        let file = LibraryArt.directory.appendingPathComponent(name)
+        if let img = ArtworkStore.image(contentsOf: file, maxPixels: 320) { return img }
+        guard let data = await MetadataLookup.shared.image(url), let img = ArtworkStore.image(data, maxPixels: 320) else { return nil }
+        if let dest = CGImageDestinationCreateWithURL(file as CFURL, "public.png" as CFString, 1, nil) {
+            CGImageDestinationAddImage(dest, img, nil)
+            CGImageDestinationFinalize(dest)
+        }
+        return img
+    }
+
+    private func applyInfo() {
+        about.stringValue = info?.description.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? ""
+        about.isHidden = about.stringValue.isEmpty
+        bio.stringValue = info?.extract ?? ""
+        bio.isHidden = bio.stringValue.isEmpty
+        wikiButton?.isHidden = info?.pageURL == nil
+        photo.isHidden = photoImage == nil
+    }
+
+    @objc private func openWikipedia() {
+        if let u = info?.pageURL { NSWorkspace.shared.open(u) }
     }
 
     private func button(_ glyph: String, _ label: String, _ action: Selector, tip: String, prominent: Bool = false) -> Pill {
@@ -274,11 +345,40 @@ final class ArtistPage: NSScrollView {
         }
         let actionRow = NSStackView(views: actions)
         actionRow.spacing = 6
-        let header = NSStackView(views: [top] + lines + [actionRow])
-        header.orientation = .vertical
-        header.alignment = .leading
-        header.spacing = 5
+        about.font = Dash.font(13, .medium)
+        about.textColor = Dash.text
+        bio.font = Dash.font(12.5)
+        bio.textColor = Dash.text2
+        bio.maximumNumberOfLines = 4
+        bio.lineBreakMode = .byWordWrapping          // wraps; the fourth line ends in "…"
+        bio.cell?.truncatesLastVisibleLine = true
+        bio.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let wiki = button("", "Wikipedia ↗", #selector(openWikipedia), tip: "Read more on Wikipedia")
+        wikiButton = wiki
+        actionRow.addArrangedSubview(wiki)
+        let text = NSStackView(views: [top] + lines + [about, bio, actionRow])
+        text.orientation = .vertical
+        text.alignment = .leading
+        text.spacing = 5
+        text.setCustomSpacing(10, after: lines.last ?? top)
+        text.setCustomSpacing(10, after: bio)
+        photo.cornerRadius = 10
+        photo.surface = Dash.cardRaised
+        photo.iconColor = Dash.text3
+        photo.placeholder = LibraryWindowController.Section.artists.glyph
+        photo.image = photoImage
+        photo.widthAnchor.constraint(equalToConstant: 132).isActive = true
+        photo.heightAnchor.constraint(equalToConstant: 132).isActive = true
+        // The text takes the width beside the photo; the bio wraps across it (up to 4 lines).
+        for v in [about, bio] { v.widthAnchor.constraint(equalTo: text.widthAnchor).isActive = true }
+        text.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let header = NSStackView(views: [photo, text])
+        header.alignment = .top
+        header.distribution = .fill
+        header.spacing = 18
+        applyInfo()
         stack.addArrangedSubview(header)
+        header.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         let career = CareerChart()
         career.releases = d.releases

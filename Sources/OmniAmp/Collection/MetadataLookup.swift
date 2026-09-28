@@ -261,6 +261,69 @@ final class MetadataLookup: @unchecked Sendable {
         return (nil, parent, false)
     }
 
+    // MARK: Artist info (photo and bio)
+
+    struct ArtistInfo: Sendable, Equatable {
+        var description: String?   // "American singer-songwriter"
+        var extract: String?       // the article's opening paragraph
+        var imageURL: URL?
+        var pageURL: URL?
+    }
+
+    /// From MusicBrainz's link to Wikidata, then Wikipedia's page summary (in the user's language when there's
+    /// an article, else English). Without an MBID, only a Wikipedia page whose description says it's a musician
+    /// or a band counts (so a namesake isn't shown). nil: nothing found; `failed` in the tuple: try again later.
+    func artistInfo(name: String, mbid: String?) async -> (info: ArtistInfo?, failed: Bool) {
+        var wikidata: String?
+        if let mbid {
+            guard let a = await get(URL(string: "https://musicbrainz.org/ws/2/artist/\(mbid)?inc=url-rels&fmt=json")!, musicBrainz: true)
+                as? [String: Any] else { return (nil, true) }
+            wikidata = ((a["relations"] as? [[String: Any]]) ?? []).first { ($0["type"] as? String) == "wikidata" }
+                .flatMap { (($0["url"] as? [String: Any])?["resource"] as? String)?.components(separatedBy: "/").last }
+        }
+        let languages = Array(NSOrderedSet(array: Locale.preferredLanguages.compactMap { $0.split(separator: "-").first.map(String.init) } + ["en"]))
+            .compactMap { $0 as? String }
+        if let q = wikidata {
+            guard let e = await get(URL(string: "https://www.wikidata.org/wiki/Special:EntityData/\(q).json")!) as? [String: Any],
+                  let entity = (e["entities"] as? [String: Any])?.values.first as? [String: Any] else { return (nil, true) }
+            let links = entity["sitelinks"] as? [String: Any] ?? [:]
+            for lang in languages {
+                if let title = (links["\(lang)wiki"] as? [String: Any])?["title"] as? String, let info = await summary(title, lang: lang) {
+                    return (info, false)
+                }
+            }
+            // No article: at least the photo.
+            let claims = entity["claims"] as? [String: Any] ?? [:]
+            if let file = ((claims["P18"] as? [[String: Any]])?.first?["mainsnak"] as? [String: Any])?["datavalue"] as? [String: Any],
+               let name = file["value"] as? String {
+                return (ArtistInfo(imageURL: Self.url("https://commons.wikimedia.org/wiki/Special:FilePath/\(name)", ["width": "500"])), false)
+            }
+            return (nil, false)
+        }
+        // No MBID: the article with the artist's name, or "(band)" / "(musician)", if it says it's about music.
+        for title in [name, "\(name) (band)", "\(name) (musician)", "\(name) (singer)"] {
+            if let info = await summary(title, lang: "en"), Self.isMusic(info.description) { return (info, false) }
+        }
+        return (nil, false)
+    }
+
+    static func isMusic(_ description: String?) -> Bool {
+        guard let d = description?.lowercased() else { return false }
+        return ["band", "singer", "musician", "rapper", "songwriter", "group", "duo", "composer", "guitarist", "drummer", "dj", "producer",
+                "musical", "orchestra", "ensemble", "vocalist", "pianist"].contains { d.contains($0) }
+    }
+
+    private func summary(_ title: String, lang: String) async -> ArtistInfo? {
+        let path = title.replacingOccurrences(of: " ", with: "_").addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? title
+        guard let url = URL(string: "https://\(lang).wikipedia.org/api/rest_v1/page/summary/\(path)?redirect=true"),
+              let d = await get(url) as? [String: Any], (d["type"] as? String) != "disambiguation", let extract = d["extract"] as? String,
+              !extract.isEmpty else { return nil }
+        let image = ((d["thumbnail"] as? [String: Any])?["source"] as? String) ?? ((d["originalimage"] as? [String: Any])?["source"] as? String)
+        let page = ((d["content_urls"] as? [String: Any])?["desktop"] as? [String: Any])?["page"] as? String
+        return ArtistInfo(description: d["description"] as? String, extract: extract, imageURL: image.flatMap(URL.init(string:)),
+                          pageURL: page.flatMap(URL.init(string:)))
+    }
+
     /// "alternative rock" → "Alternative Rock".
     static func titleCase(_ s: String) -> String { s.split(separator: " ").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ") }
 

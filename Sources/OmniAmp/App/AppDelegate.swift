@@ -600,6 +600,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func sortPlaylist(_ sender: NSMenuItem) {
         if let k = PlayerController.SortKey(rawValue: sender.representedObject as? String ?? "") { controller.sort(by: k) }
     }
+    @objc private func showInLibraryArtist(_ sender: NSMenuItem) {
+        guard let p = sender.representedObject as? [String] else { return }
+        showLibrary(nil)
+        library?.revealArtist(p[0])
+    }
+    @objc private func showInLibrarySong(_ sender: NSMenuItem) {
+        guard let p = sender.representedObject as? [String] else { return }
+        showLibrary(nil)
+        library?.revealSong(artist: p[0], titleKey: p[1])
+    }
+    @objc private func showInLibraryAlbum(_ sender: NSMenuItem) {
+        guard let p = sender.representedObject as? [String] else { return }
+        showLibrary(nil)
+        library?.revealAlbum(artist: p[0], album: p[2])
+    }
+
     @objc private func revealSelected(_ sender: Any?) {
         // Files, and podcast episodes that were downloaded.
         let urls = (look?.selectedTrackIndices ?? []).compactMap { i -> URL? in
@@ -661,6 +677,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if !controller.playQueue.isEmpty { item("Clear Queue (\(controller.playQueue.count))", #selector(clearQueue(_:)), m) }
         item("Remove", #selector(removeSelected(_:)), m)
         item("Show in Finder", #selector(revealSelected(_:)), m, key: withKeys ? "r" : "")
+        // A track that's in the music library: its artist, song or release there.
+        if sel.count == 1, MusicCollection.hasFolders, let i = sel.first, i < controller.tracks.count,
+           let place = try? MusicCollection.shared.reader?.place(ofTrack: controller.tracks[i].key) {
+            let sub = NSMenu(title: "Show in Music Library")
+            func add(_ title: String, _ action: Selector) {
+                let it = sub.addItem(withTitle: title, action: action, keyEquivalent: "")
+                it.target = self
+                it.representedObject = [place.artist, place.song, place.album]
+            }
+            add("Artist Page (\(place.artistName))", #selector(showInLibraryArtist(_:)))
+            add("All Versions of This Song", #selector(showInLibrarySong(_:)))
+            add("Album", #selector(showInLibraryAlbum(_:)))
+            let entry = NSMenuItem(title: "Show in Music Library", action: nil, keyEquivalent: "")
+            entry.submenu = sub
+            m.addItem(entry)
+        }
         m.addItem(.separator())
         let sortItem = NSMenuItem(title: "Sort", action: nil, keyEquivalent: "")
         sortItem.submenu = makeSortMenu()

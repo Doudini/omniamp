@@ -49,7 +49,8 @@ enum Dash {
     /// minimum width: text and stack views resist being narrowed more strongly than the window keeps its size.
     static func relaxWidth(_ view: NSView) {
         if let stack = view as? NSStackView { stack.setClippingResistancePriority(.defaultLow, for: .horizontal) }
-        if view is NSControl { view.setContentCompressionResistancePriority(.init(240), for: .horizontal) }
+        // Pills keep their size (squeezed, their labels ran into each other); text gives way.
+        if view is NSControl, !(view is Pill) { view.setContentCompressionResistancePriority(.init(240), for: .horizontal) }
         view.subviews.forEach(relaxWidth)
     }
 

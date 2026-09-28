@@ -441,6 +441,23 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         window?.makeFirstResponder(album == nil ? middle : albumTable)
     }
 
+    // MARK: Opened from elsewhere (the playlist's "Show in Music Library")
+
+    func revealArtist(_ key: String) {
+        pages = []
+        push(.artist(key))
+    }
+
+    func revealSong(artist: String, titleKey: String) {
+        pages = []
+        push(.song(artist: artist, title: titleKey))
+    }
+
+    func revealAlbum(artist: String, album: String) {
+        if searching { search.stringValue = ""; query = "" }
+        openRelease(artist: artist, album: album)
+    }
+
     /// The artist selected in the list: their page.
     @objc private func openArtistPage() {
         guard let e = selectedEntry, section == .artists || section == .shows || searching else { return }

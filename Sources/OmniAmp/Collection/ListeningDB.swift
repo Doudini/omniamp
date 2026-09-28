@@ -52,6 +52,50 @@ extension CollectionDB {
         """)
     }
 
+    // MARK: Artist info cache
+
+    func ensureArtistInfoTable() throws {
+        try db.exec("""
+        CREATE TABLE IF NOT EXISTS artist_info(artist_key TEXT PRIMARY KEY, description TEXT, extract TEXT, image_url TEXT, page_url TEXT,
+            found INTEGER, checked REAL);
+        """)
+    }
+
+    enum CachedInfo: Sendable {
+        case unknown                 // never looked up, or due again
+        case none                    // looked up, nothing found (not asked again for a while)
+        case found(MetadataLookup.ArtistInfo)
+    }
+
+    func artistInfo(_ key: String, retryAfter: TimeInterval = 30 * 86400) throws -> CachedInfo {
+        try ensureArtistInfoTable()
+        var out = CachedInfo.unknown
+        try db.query("SELECT description, extract, image_url, page_url, found, checked FROM artist_info WHERE artist_key = ?", [key]) { r in
+            if r.int(4) == 1 {
+                out = .found(MetadataLookup.ArtistInfo(description: r.optText(0), extract: r.optText(1), imageURL: r.optText(2).flatMap(URL.init(string:)),
+                                                       pageURL: r.optText(3).flatMap(URL.init(string:))))
+            } else if Date().timeIntervalSince1970 - r.double(5) < retryAfter {
+                out = .none
+            }
+        }
+        return out
+    }
+
+    func saveArtistInfo(_ key: String, _ info: MetadataLookup.ArtistInfo?) throws {
+        try ensureArtistInfoTable()
+        try db.run("INSERT OR REPLACE INTO artist_info(artist_key, description, extract, image_url, page_url, found, checked) VALUES (?,?,?,?,?,?,?)",
+                   [key, info?.description, info?.extract, info?.imageURL?.absoluteString, info?.pageURL?.absoluteString, info == nil ? 0 : 1,
+                    Date().timeIntervalSince1970])
+    }
+
+    /// The artist's MusicBrainz ID, if known (a lookup, or the files' tags).
+    func artistMBID(_ key: String) throws -> String? {
+        var m: String?
+        try db.query("SELECT mbid FROM artist_places WHERE artist_key = ? AND mbid IS NOT NULL", [key]) { m = $0.text(0) }
+        if m == nil { try db.query("SELECT max(mb_artist) FROM files WHERE artist_key = ?", [key]) { m = $0.optText(0) } }
+        return m
+    }
+
     /// Fill in the calendar of plays stored before it existed (one pass, the first time). Off the main thread.
     func fillPlayCalendar() throws {
         guard (try db.scalar("SELECT count(*) FROM scrobbles WHERE year IS NULL") ?? 0) > 0 else { return }

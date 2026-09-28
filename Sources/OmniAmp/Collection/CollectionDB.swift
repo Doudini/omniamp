@@ -562,6 +562,15 @@ final class CollectionDB {
         return p
     }
 
+    /// Where a playlist track sits in the library (its artist, song and release), if it's there.
+    func place(ofTrack key: String) throws -> (artist: String, artistName: String, song: String, album: String)? {
+        var out: (String, String, String, String)?
+        try db.query("SELECT artist_key, album_artist, title_key, album_key FROM files WHERE key = ?", [key]) {
+            out = ($0.text(0), $0.text(1), $0.text(2), $0.text(3))
+        }
+        return out
+    }
+
     /// The genre most of an album's tracks have (nil when none has one).
     func genre(album: String) throws -> String? {
         var g: String?

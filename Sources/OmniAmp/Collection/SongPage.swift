@@ -253,6 +253,7 @@ final class SongPage: NSScrollView {
         header.alignment = .leading
         header.spacing = 6
         stack.addArrangedSubview(header)
+        header.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true   // or its lines are cut short
 
         let timeline = VersionTimeline()
         timeline.playsFor = { [weak self] in self?.plays($0) ?? 0 }

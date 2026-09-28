@@ -92,4 +92,15 @@ final class SongPageTests: XCTestCase {
         XCTAssertEqual(a.playedAlbumKinds[Keys.fold("Bleach")], .album)
         XCTAssertEqual(a.showsPerYear.map(\.year), [1991, 1993])
     }
+
+    func testPlaceOfPlaylistTrack() throws {
+        let d = try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite"))
+        try d.upsert([file(1, album: "Bleach", title: "About a Girl", kind: .album, year: 1989)])
+        let p = try XCTUnwrap(try d.place(ofTrack: "/m/Nirvana/Bleach/1.flac"))
+        XCTAssertEqual(p.artist, "nirvana")
+        XCTAssertEqual(p.artistName, "Nirvana")
+        XCTAssertEqual(p.song, Keys.title("About a Girl"))
+        XCTAssertEqual(try d.albums(artist: "nirvana", LibraryFilter()).first?.key, p.album)
+        XCTAssertNil(try d.place(ofTrack: "/elsewhere/x.mp3"), "not in the library: no submenu")
+    }
 }
