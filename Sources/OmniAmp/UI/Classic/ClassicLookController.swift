@@ -180,7 +180,13 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
     func toggleInfo() { NSSound.beep() }
 
     func showCurrentTrack() {
-        guard let i = controller.currentIndex, let r = controller.row(forTrackIndex: i) else { NSSound.beep(); return }
+        guard let i = controller.currentIndex else { NSSound.beep(); return }
+        if controller.row(forTrackIndex: i) == nil, !controller.filterQuery.isEmpty {
+            jumpField?.stringValue = ""   // the filter hides it: show the whole playlist
+            controller.setFilter("")
+            jumpPanel?.orderOut(nil)
+        }
+        guard let r = controller.row(forTrackIndex: i) else { NSSound.beep(); return }
         if !playlistVisible { togglePlaylist() }
         playlistView.select(row: r)
         focusPlaylist()   // so the playlist keys work from here

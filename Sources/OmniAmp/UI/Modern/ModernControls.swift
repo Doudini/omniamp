@@ -4,7 +4,7 @@ import AppKit
 final class ModernButton: NSControl {
     var glyph: String { didSet { if glyph != oldValue { needsDisplay = true } } }
     var label: String? { didSet { if label != oldValue { invalidateIntrinsicContentSize(); needsDisplay = true } } }
-    private var fullLabel: String?
+    fileprivate var fullLabel: String?
     /// Icon-only when true (narrow windows); the label moves into the tooltip.
     var compact = false {
         didSet {
@@ -228,7 +228,9 @@ final class KeyStrip: NSControl, NSViewToolTipOwner {
         var tip: String
         var action: () -> Void
     }
-    private let keys: [Key]
+    fileprivate let keys: [Key]
+    /// VoiceOver's view of the keys: kept, since AppKit doesn't hold on to the elements it's given.
+    fileprivate var axKeys: [StripKeyElement] = []
     /// Width of each key (slimmer in tight windows).
     var keyWidth: CGFloat = 32 { didSet { if keyWidth != oldValue { invalidateIntrinsicContentSize(); needsDisplay = true } } }
     var glyphSize: CGFloat = 11
@@ -247,7 +249,7 @@ final class KeyStrip: NSControl, NSViewToolTipOwner {
         NSSize(width: CGFloat(keys.count) * keyWidth + CGFloat(keys.count - 1) * Self.seam + 2 * Self.inset, height: 26)
     }
 
-    private func keyRect(_ i: Int) -> NSRect {
+    fileprivate func keyRect(_ i: Int) -> NSRect {
         let x = Self.inset + CGFloat(i) * (keyWidth + Self.seam)
         return NSRect(x: x, y: Self.inset, width: keyWidth, height: bounds.height - 2 * Self.inset)
     }
@@ -478,4 +480,79 @@ extension NSTextField {
     /// Set the text only if it differs: every stringValue set redraws the field (and can re-run layout),
     /// which adds up for labels refreshed many times a second.
     func setIfChanged(_ s: String) { if stringValue != s { stringValue = s } }
+}
+
+// MARK: - VoiceOver
+// The controls draw themselves, so AppKit can't tell what they are: each says its role, name and state,
+// and can be pressed or adjusted from VoiceOver.
+
+extension ModernButton {
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { isToggle ? .checkBox : .button }
+    override func accessibilityLabel() -> String? {
+        // "PODCASTS" reads as "Podcasts"; short ones (EQ) are abbreviations and stay as they are.
+        super.accessibilityLabel() ?? (fullLabel ?? label).map { $0.count > 3 ? $0.capitalized : $0 } ?? toolTip
+    }
+    override func accessibilityValue() -> Any? { isToggle ? NSNumber(value: isOn) : nil }
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        if isToggle { isOn.toggle() }
+        return sendAction(action, to: target)
+    }
+}
+
+extension LEDKey {
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .checkBox }
+    override func accessibilityLabel() -> String? { super.accessibilityLabel() ?? toolTip }
+    override func accessibilityValue() -> Any? { NSNumber(value: isOn) }
+    override func accessibilityPerformPress() -> Bool { sendAction(action, to: target) }
+}
+
+/// One key of a KeyStrip, as VoiceOver sees it.
+fileprivate final class StripKeyElement: NSAccessibilityElement {
+    private let press: () -> Void
+    init(label: String, frame: NSRect, parent: NSView, press: @escaping () -> Void) {
+        self.press = press
+        super.init()
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(label)
+        setAccessibilityParent(parent)
+        setAccessibilityFrameInParentSpace(frame)
+    }
+    override func accessibilityPerformPress() -> Bool { press(); return true }
+}
+
+extension KeyStrip {
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityChildren() -> [Any]? {
+        if axKeys.isEmpty {
+            axKeys = keys.indices.map { i in
+                // The tooltip without its shortcut: "Play (X)" reads as "Play".
+                let name = keys[i].tip.replacingOccurrences(of: "\\s*\\([^)]*\\)$", with: "", options: .regularExpression)
+                return StripKeyElement(label: name, frame: keyRect(i), parent: self, press: keys[i].action)
+            }
+        }
+        for (i, e) in axKeys.enumerated() { e.setAccessibilityFrameInParentSpace(keyRect(i)) }   // the width changes
+        return axKeys
+    }
+}
+
+extension ModernSlider {
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .slider }
+    override func accessibilityValue() -> Any? { NSNumber(value: (value * 100).rounded()) }
+    override func accessibilityMinValue() -> Any? { NSNumber(value: 0) }
+    override func accessibilityMaxValue() -> Any? { NSNumber(value: 100) }
+    override func accessibilityValueDescription() -> String? { "\(Int((value * 100).rounded())) %" }
+    override func accessibilityPerformIncrement() -> Bool { step(0.05) }
+    override func accessibilityPerformDecrement() -> Bool { step(-0.05) }
+    private func step(_ d: Double) -> Bool {
+        guard isEnabled else { return false }
+        value = max(0, min(1, value + d))
+        onChange?(value)
+        sendAction(action, to: target)
+        return true
+    }
 }

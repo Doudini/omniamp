@@ -218,7 +218,10 @@ final class ModernPanelView: NSView {
     let art = ArtView()
     private let hoverCard = HoverCard()
     /// The look is going away: don't leave the cover card floating over the new one.
-    func dismissHoverCard() { hoverCard.hide() }
+    func dismissHoverCard() {
+        hoverWork?.cancel()   // one still on its way would open after the look (or the track) is gone
+        hoverCard.hide()
+    }
     private var hoverWork: DispatchWorkItem?
     private var artPath: String?
 
@@ -294,6 +297,10 @@ final class ModernPanelView: NSView {
             self.refresh(tick: 0)
         }
         time.toolTip = "Click: elapsed / remaining time"
+        seek.setAccessibilityLabel("Position")
+        // Icon-font glyphs would be read out as odd characters; the time and buttons already say the state.
+        [stateLabel, sourceLabel, volIcon, remainTag].forEach { $0.setAccessibilityElement(false) }
+        volume.setAccessibilityLabel("Volume")
         [art, marquee, infoLabel, volIcon, volume, badge].forEach(rightBox.addSubview)
         art.onHover = { [weak self] inside in self?.hover(inside) }
         art.onClick = { [weak self] in self?.hover(false); self?.onArtClick?() }
@@ -633,4 +640,25 @@ final class ModernPanelView: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: w)
     }
     @objc private func seekReleased() { controller?.seek(fraction: seek.value) }
+}
+
+// MARK: - VoiceOver
+
+extension LCDTimeView {
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { onClick != nil ? .button : .staticText }
+    override func accessibilityLabel() -> String? { super.accessibilityLabel() ?? "Time" }
+    override func accessibilityValue() -> Any? { text }
+    override func accessibilityPerformPress() -> Bool {
+        guard let onClick else { return false }
+        onClick()
+        return true
+    }
+}
+
+extension MarqueeView {
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .staticText }
+    override func accessibilityLabel() -> String? { super.accessibilityLabel() ?? "Now playing" }
+    override func accessibilityValue() -> Any? { text }
 }

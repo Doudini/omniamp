@@ -118,15 +118,21 @@ struct CueSheet {
     /// (the last one runs to the end of its file). Also returns the audio files it covers.
     func tracks(cueURL: URL) -> (tracks: [Track], covered: Set<String>) {
         let dir = cueURL.deletingLastPathComponent()
-        var resolved: [String: URL] = [:]
+        // Once per audio file, not per track: a 30-track sheet on one image listed its folder and read the
+        // file's details 30 times. (A name that doesn't resolve is remembered too.)
+        var resolved: [String: (url: URL, size: Int64, mtime: Double)?] = [:]
         var out: [Track] = []
         var covered = Set<String>()
         for (i, e) in entries.enumerated() {
-            if resolved[e.file] == nil, let u = Self.resolve(e.file, relativeTo: dir) { resolved[e.file] = u }
-            guard let url = resolved[e.file] else { continue }
-            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            var t = Track(path: url.path, size: Int64(values?.fileSize ?? 0),
-                          mtime: values?.contentModificationDate?.timeIntervalSince1970 ?? 0)
+            if resolved[e.file] == nil {
+                resolved[e.file] = .some(Self.resolve(e.file, relativeTo: dir).map { u in
+                    let v = try? u.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                    return (u, Int64(v?.fileSize ?? 0), v?.contentModificationDate?.timeIntervalSince1970 ?? 0)
+                })
+            }
+            guard let file = resolved[e.file] ?? nil else { continue }
+            let url = file.url
+            var t = Track(path: url.path, size: file.size, mtime: file.mtime)
             t.cueStart = e.start
             if i + 1 < entries.count, entries[i + 1].file == e.file { t.cueEnd = entries[i + 1].start }
             t.cueNumber = e.number

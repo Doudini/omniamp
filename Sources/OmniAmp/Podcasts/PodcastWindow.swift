@@ -567,7 +567,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private var countryCode: String { Self.countries[max(0, country.indexOfSelectedItem)].1 }
 
-    private func load() {
+    /// `keepPlace`: refresh the subscriptions where you are (after an import), not back at the top.
+    private func load(keepPlace: Bool = false) {
         loadTask?.cancel()
         topButton.isOn = !showingSubscriptions
         subscribedButton.isOn = showingSubscriptions
@@ -578,7 +579,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             shows = (lq.isEmpty ? pinnedShows : []) + subs
             showsTable.reloadData()
             syncShowSelection()
-            scrollToTop(showsScroll)
+            if !keepPlace { scrollToTop(showsScroll) }
             status.stringValue = library.subscriptions.isEmpty ? "No subscriptions yet: pick a show and press SUBSCRIBE."
                 : (subs.isEmpty ? "No subscriptions match “\(q)”." : "\(subs.count) subscriptions")
             selectFirstShowIfNeeded()
@@ -1082,7 +1083,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             await withTaskGroup(of: Void.self) { group in
                 for s in list { group.addTask { _ = try? await PodcastLibrary.shared.episodes(s) } }
             }
-            if showingSubscriptions { load() }
+            if showingSubscriptions { load(keepPlace: true) }
             status.stringValue = "Imported \(added) show\(added == 1 ? "" : "s")" + (already > 0 ? " (\(already) already subscribed)" : "")
                 + (complete ? "." : ". The file is damaged part-way: some shows may be missing.")
         }

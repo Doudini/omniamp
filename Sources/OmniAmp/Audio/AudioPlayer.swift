@@ -152,8 +152,8 @@ final class AudioPlayer {
     var remaining: Double { max(0, duration - currentTime) }
     var currentURL: URL? { current?.url }
     var hasQueuedNext: Bool { upcoming != nil }
-    var sampleRate: Double { stream.map { $0.info.sampleRate } ?? current?.file.fileFormat.sampleRate ?? 0 }
-    var channelCount: Int { stream.map { $0.info.channels } ?? Int(current?.file.fileFormat.channelCount ?? 0) }
+    var sampleRate: Double { stream != nil ? mainStreamInfo.sampleRate : current?.file.fileFormat.sampleRate ?? 0 }
+    var channelCount: Int { stream != nil ? mainStreamInfo.channels : Int(current?.file.fileFormat.channelCount ?? 0) }
 
     // MARK: Internet radio
 
@@ -167,7 +167,7 @@ final class AudioPlayer {
     /// True while waiting for enough audio (start, or after the connection stalled).
     private(set) var isBuffering = false { didSet { if isBuffering != oldValue { onStreamChange?() } } }
     var isStreaming: Bool { stream != nil || systemPlayer != nil }
-    var streamInfo: StreamSource.Info? { stream?.info ?? systemInfo }
+    var streamInfo: StreamSource.Info? { stream != nil ? mainStreamInfo : systemInfo }
     /// Latest "Artist - Title" from the station.
     private(set) var streamTitle: String?
     /// Why the last station stopped (shown instead of the title), cleared when a stream starts.
@@ -337,11 +337,15 @@ final class AudioPlayer {
     /// The format the player is connected with for the current engine stream (nil until the station's format
     /// is known). Buffers are only scheduled when they match it: AVAudioPlayerNode throws on a channel mismatch.
     private var streamFormat: AVAudioFormat?
+    /// The stream's details as last handed over on the main thread (the source itself updates its own copy
+    /// on the network queue: reading that from here was a data race).
+    private var mainStreamInfo = StreamSource.Info()
 
     private func openStream(_ url: URL) {
         let src = StreamSource(url: url)
         stream = src
         streamFormat = nil
+        mainStreamInfo = StreamSource.Info()
         connectionPlayingSince = nil
         streamStarted = false
         // Per connection: completions of an earlier connection's buffers must not count against this one.
@@ -350,6 +354,7 @@ final class AudioPlayer {
         src.onInfo = { [weak self, weak src] info in
             DispatchQueue.main.async {
                 guard let self, let src, self.stream === src else { return }
+                self.mainStreamInfo = info
                 if info.sampleRate > 0, let f = AVAudioFormat(standardFormatWithSampleRate: info.sampleRate, channels: AVAudioChannelCount(max(1, info.channels))) {
                     self.connect(format: f)
                     self.streamFormat = f
@@ -712,7 +717,8 @@ final class AudioPlayer {
         connect(format: file.processingFormat)
         current = Item(id: nextItemID, file: file, url: url, range: range, offset: start)
         nextItemID += 1
-        clockBase = 0
+        // The start offset, already while a rate switch settles: pausing then must not lose the resume point.
+        clockBase = current.map { Double($0.startFrame - $0.trackStart) / $0.sampleRate } ?? 0
         clockStart = nil
         state = .playing
         if settle { awaitSettle() } else { beginPlayback() }
@@ -914,6 +920,9 @@ final class AudioPlayer {
     /// A scheduled segment finished playing out of the speakers.
     private func segmentFinished(gen: Int, id: Int) {
         guard gen == generation, state == .playing, current?.id == id else { return }
+        // The engine stopping (device change, reconfiguration) also completes the schedule: that's not the end
+        // of the track unless we really are there.
+        guard engine.isRunning || currentTime >= duration - 1 else { return }
         if let next = upcoming {
             current = next
             upcoming = nil

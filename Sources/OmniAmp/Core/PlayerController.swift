@@ -67,6 +67,10 @@ final class PlayerController {
             self.updateNowPlaying()
         }
         player.onOutputChange = { [weak self] in self?.ui?.optionsDidChange() }
+        NotificationCenter.default.addObserver(forName: PodcastLibrary.episodesMoved, object: nil, queue: .main) { [weak self] n in
+            guard let moved = n.userInfo?["moved"] as? [String: String] else { return }
+            MainActor.assumeIsolated { self?.episodesMoved(moved) }
+        }
         restore()
         let d = UserDefaults.standard
         player.setOutputDevice(uid: d.string(forKey: "outputDeviceUID"))
@@ -111,7 +115,6 @@ final class PlayerController {
     }
 
     func setFilter(_ query: String) {
-        invalidatePreload()
         filterQuery = query
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if q.isEmpty {
@@ -124,6 +127,9 @@ final class PlayerController {
                 return words.allSatisfy { hay.contains($0) }
             }
         }
+        // Typing a filter near the end of a track mustn't break gapless when the next track stays the same.
+        let keep = preloaded.map { p in shuffle && playQueue.isEmpty ? playOrder().contains(p.index) : nextTarget() == p.index } ?? false
+        if !keep { invalidatePreload() }
         ui?.playlistDidReload()
         ui?.optionsDidChange()
     }
@@ -404,6 +410,7 @@ final class PlayerController {
             if let e = PodcastLibrary.shared.knownEpisode(store.tracks[index].path), let show = store.tracks[index].podcast {
                 store.updateEpisode(at: index, from: .episode(e.url, title: e.title, show: show, artwork: e.image, duration: e.duration,
                                                               published: e.published, summary: e.summary))
+                scheduleSave()
             }
             let t = store.tracks[index]
             player.rate = speed(for: t)
@@ -799,6 +806,19 @@ final class PlayerController {
             PodcastLibrary.shared.noteListened(t.path, track: t)
             NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil)
         }
+    }
+
+    /// A feed changed some episodes' audio addresses (same guid): positions and playlist entries follow.
+    private func episodesMoved(_ moved: [String: String]) {
+        var all = resumePositions
+        for (was, now) in moved {
+            if let p = all.removeValue(forKey: was) { all[now] = p }
+            if let d = resumeDates.removeValue(forKey: was) { resumeDates[now] = d }
+        }
+        UserDefaults.standard.set(resumeDates, forKey: "resumeDates")
+        resumePositions = all
+        store.moveEpisodes(moved)
+        scheduleSave()
     }
 
     private func forgetPosition(_ path: String?) {

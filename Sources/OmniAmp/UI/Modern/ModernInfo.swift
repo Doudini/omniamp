@@ -492,3 +492,16 @@ final class ModernInfoView: NSView {
         if let p = shownPath { onReveal?(p) }
     }
 }
+
+// MARK: - VoiceOver
+
+extension ArtView {
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { onClick != nil ? .button : .image }
+    override func accessibilityLabel() -> String? { super.accessibilityLabel() ?? "Cover art" }
+    override func accessibilityPerformPress() -> Bool {
+        guard let onClick else { return false }
+        onClick()
+        return true
+    }
+}

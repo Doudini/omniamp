@@ -235,7 +235,7 @@ final class StreamSource: NSObject, URLSessionDataDelegate {
                 guard !self.packetQueue.isEmpty else { outStatus.pointee = .noDataNow; return nil }
                 let (bytes, desc) = self.packetQueue.removeFirst()
                 let buf = AVAudioCompressedBuffer(format: inFmt, packetCapacity: 1, maximumPacketSize: max(bytes.count, 1))
-                bytes.withUnsafeBytes { p in buf.data.copyMemory(from: p.baseAddress!, byteCount: bytes.count) }
+                bytes.withUnsafeBytes { p in if let base = p.baseAddress { buf.data.copyMemory(from: base, byteCount: bytes.count) } }
                 buf.byteLength = UInt32(bytes.count)
                 buf.packetCount = 1
                 if var d = desc {

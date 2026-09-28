@@ -11,10 +11,11 @@ extension NSTableView {
         case 125 where f == .command: jump(by: 10)
         case 126 where f == [.command, .shift]: jump(by: -100)
         case 125 where f == [.command, .shift]: jump(by: 100)
-        case 116: jump(by: -pageRows)        // Page Up
-        case 121: jump(by: pageRows)         // Page Down
-        case 115: jump(to: 0)                // Home
-        case 119: jump(to: numberOfRows - 1) // End
+        // Page keys only on their own: with ⇧ or ⌘ AppKit's own handling (extend, scroll) applies.
+        case 116 where f.isEmpty: jump(by: -pageRows)        // Page Up
+        case 121 where f.isEmpty: jump(by: pageRows)         // Page Down
+        case 115 where f.isEmpty: jump(to: 0)                // Home
+        case 119 where f.isEmpty: jump(to: numberOfRows - 1) // End
         default: return false
         }
         return true

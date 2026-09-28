@@ -184,6 +184,17 @@ final class PlaylistStore {
         delegate?.playlistDidUpdate(indices: [i])
     }
 
+    /// Episodes whose audio address changed in their feed: the playlist entries follow (their identity is the address).
+    func moveEpisodes(_ moved: [String: String]) {
+        var changed: [Int] = []
+        for i in tracks.indices where tracks[i].isEpisode {
+            if let now = moved[tracks[i].path] { tracks[i].path = now; changed.append(i) }
+        }
+        guard !changed.isEmpty else { return }
+        indexByID = nil
+        delegate?.playlistDidUpdate(indices: IndexSet(changed))
+    }
+
     /// Files changed on disk: take the new size/mtime and read their tags again.
     func refresh(_ updates: [(index: Int, size: Int64, mtime: Double)]) {
         guard !updates.isEmpty else { return }
@@ -335,6 +346,6 @@ final class PlaylistStore {
             tracks[i].tagsLoaded = true
             changed.insert(i)
         }
-        delegate?.playlistDidUpdate(indices: changed)
+        delegate?.playlistDidUpdate(indices: IndexSet(changed))
     }
 }

@@ -199,6 +199,18 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
         startNext()
     }
 
+    /// Episodes whose audio address changed in their feed (same guid): the downloaded file follows.
+    func rekey(_ moved: [String: String]) {
+        var changed = false
+        for (was, now) in moved {
+            guard var e = entries.removeValue(forKey: was) else { continue }
+            e.episode.url = now
+            entries[now] = e
+            changed = true
+        }
+        if changed { save() }
+    }
+
     /// Stop a queued or running download.
     func cancel(_ url: String) {
         if let a = active.removeValue(forKey: url) { a.task.cancel() }

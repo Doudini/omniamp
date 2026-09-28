@@ -101,6 +101,7 @@ final class ModernEQView: NSView {
         addSubview(curve)
 
         preamp.onChange = { [weak self] v in self?.changed { $0.preamp = Float(v) * Equalizer.range } }
+        preamp.setAccessibilityLabel("Preamp")
         let preLabel = label("PRE")
         addSubview(preamp)
         addSubview(preLabel)
@@ -137,6 +138,7 @@ final class ModernEQView: NSView {
         var prev: NSView = scale[0]
         for i in 0..<Equalizer.frequencies.count {
             let s = ModernVSlider()
+            s.setAccessibilityLabel("\(Equalizer.labels[i]) Hz")
             s.onChange = { [weak self] v in self?.changed { $0.bands[i] = Float(v) * Equalizer.range } }
             let l = label(Equalizer.labels[i])
             addSubview(s)
@@ -231,5 +233,24 @@ final class EQCurveView: NSView {
         (enabled ? Theme.phosphor : Theme.phosphorDim).setStroke()
         path.stroke()
         NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
+// MARK: - VoiceOver
+
+extension ModernVSlider {
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .slider }
+    /// In dB, as the EQ shows it.
+    override func accessibilityValue() -> Any? { NSNumber(value: (value * Double(Equalizer.range)).rounded()) }
+    override func accessibilityValueDescription() -> String? { String(format: "%+.0f dB", value * Double(Equalizer.range)) }
+    override func accessibilityMinValue() -> Any? { NSNumber(value: -Double(Equalizer.range)) }
+    override func accessibilityMaxValue() -> Any? { NSNumber(value: Double(Equalizer.range)) }
+    override func accessibilityPerformIncrement() -> Bool { step(1) }
+    override func accessibilityPerformDecrement() -> Bool { step(-1) }
+    private func step(_ db: Double) -> Bool {
+        value = max(-1, min(1, value + db / Double(Equalizer.range)))
+        onChange?(value)
+        return true
     }
 }

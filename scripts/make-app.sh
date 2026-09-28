@@ -14,6 +14,9 @@ APP=${OMNIAMP_APP_PATH:-$PWD/OmniAmp.app}
 LASTFM_API_KEY=""; LASTFM_SECRET=""
 # OMNIAMP_NO_SECRETS=1 (used for public DMGs) leaves them out, so the secret isn't handed to everyone.
 [[ -f secrets.env && -z "${OMNIAMP_NO_SECRETS:-}" ]] && source secrets.env
+# They go into XML: an & or < in a value would make the whole Info.plist unreadable.
+xml_escape() { local s=${1//&/&amp;}; s=${s//</&lt;}; s=${s//>/&gt;}; printf '%s' "$s"; }
+LASTFM_API_KEY=$(xml_escape "$LASTFM_API_KEY"); LASTFM_SECRET=$(xml_escape "$LASTFM_SECRET")
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/OmniAmp" "$APP/Contents/MacOS/OmniAmp"
@@ -63,7 +66,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>CFBundleTypeRole</key><string>Viewer</string>
       <key>LSHandlerRank</key><string>Alternate</string>
       <key>LSItemContentTypes</key>
-      <array><string>public.mp3</string><string>org.xiph.flac</string><string>public.folder</string></array>
+      <array><string>public.audio</string><string>public.mp3</string><string>org.xiph.flac</string><string>public.folder</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Playlist</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array><string>public.m3u-playlist</string><string>public.pls-playlist</string></array>
+      <key>CFBundleTypeExtensions</key><array><string>m3u</string><string>m3u8</string><string>pls</string><string>cue</string></array>
     </dict>
     <dict>
       <key>CFBundleTypeName</key><string>Winamp Skin</string>

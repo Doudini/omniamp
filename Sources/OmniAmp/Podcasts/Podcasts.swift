@@ -22,6 +22,8 @@ struct PodcastEpisode: Codable, Equatable {
     var number: Int?           // episode number
     /// Links from the show notes as [text, url] pairs (the plain-text notes keep only the text).
     var links: [[String]]?
+    /// The feed's own id for the episode: stays the same when the audio address changes (tracking prefixes, CDNs).
+    var guid: String?
 
     /// The episode's own image, else the show's.
     func artwork(show: PodcastShow) -> String? { image ?? show.artwork }
@@ -103,7 +105,15 @@ final class PodcastDirectory {
         try await cachedSearch("fyyd|" + term.lowercased()) {
             var c = URLComponents(string: "https://api.fyyd.de/0.2/search/podcast")!
             c.queryItems = [URLQueryItem(name: "term", value: term), URLQueryItem(name: "count", value: "50")]
-            return Self.relevant(Self.decodeFyyd(try await get(c.url!, timeout: 10)), to: term)
+            // A request timeout only counts silence; a server that trickles could take much longer. Cap the whole thing.
+            let url = c.url!
+            let data = try await withThrowingTaskGroup(of: Data.self) { group in
+                group.addTask { try await self.get(url, timeout: 10) }
+                group.addTask { try await Task.sleep(for: .seconds(10)); throw URLError(.timedOut) }
+                defer { group.cancelAll() }
+                return try await group.next()!
+            }
+            return Self.relevant(Self.decodeFyyd(data), to: term)
         }
     }
 
@@ -212,6 +222,9 @@ enum XMLRepair {
     ]
     private static let predefined: Set<String> = ["amp", "lt", "gt", "quot", "apos"]
 
+    /// The code point of an HTML entity name we know ("hellip" → "8230").
+    static func namedCode(_ name: String) -> String? { named[name].map { String($0.dropFirst()) } }
+
     /// Works on the bytes: no String or UTF-16 copies of a feed that can be several MB, and no copy at all when
     /// nothing needs fixing. CDATA is taken literally by the parser, so those blocks are left as they are.
     static func repair(_ data: Data) -> Data {
@@ -318,14 +331,15 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if item != nil {
             switch n {
-            case "title", "pubdate", "itunes:duration", "description", "itunes:summary", "content:encoded", "itunes:season", "itunes:episode":
+            case "title", "pubdate", "itunes:duration", "description", "itunes:summary", "content:encoded", "itunes:season", "itunes:episode", "guid":
                 if item?[n] == nil, !value.isEmpty { item?[n] = value }
             case "item":
                 // Each episode's notes go through several text passes: free their temporaries per episode,
                 // not at the end of a feed of 800 (that pile-up doubled the app's memory while parsing).
                 if let it = item, let url = itemURL, Self.isAudio(url: url, type: itemType) { autoreleasepool {
                     let notes = it["description"] ?? it["itunes:summary"] ?? it["content:encoded"]
-                    let links = notes.map(Self.links) ?? []
+                    // The long form usually has the links (descriptions are often plain text).
+                    let links = (it["content:encoded"] ?? notes).map(Self.links) ?? []
                     episodes.append(PodcastEpisode(title: it["title"] ?? "Untitled episode", url: url,
                                                    published: it["pubdate"].flatMap(Self.date),
                                                    duration: it["itunes:duration"].flatMap(Self.duration),
@@ -333,7 +347,7 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
                                                    image: it["image"],
                                                    season: it["itunes:season"].flatMap { Int($0) },
                                                    number: it["itunes:episode"].flatMap { Int($0) },
-                                                   links: links.isEmpty ? nil : links))
+                                                   links: links.isEmpty ? nil : links, guid: it["guid"]))
                 } }
                 item = nil
             default: break
@@ -401,13 +415,39 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
         return out
     }
 
+    private static let entityPattern = try! NSRegularExpression(pattern: "&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z]{2,10});")
+    private static let namedText: [String: String] = ["amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": " "]
+
+    /// One pass over the text: every entity once (so "&amp;lt;" stays "&lt;"), numeric ones too (&#8230;, &#x27;).
+    static func decodeEntities(_ s: String) -> String {
+        guard s.contains("&") else { return s }
+        let ns = s as NSString
+        var out = "", last = 0
+        for m in entityPattern.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+            let body = ns.substring(with: m.range(at: 1))
+            var decoded: String?
+            if body.hasPrefix("#") {
+                let hex = body.dropFirst().first.map { $0 == "x" || $0 == "X" } ?? false
+                let digits = body.dropFirst(hex ? 2 : 1)
+                if let v = UInt32(digits, radix: hex ? 16 : 10), let u = Unicode.Scalar(v) { decoded = String(Character(u)) }
+            } else if let t = namedText[body] {
+                decoded = t
+            } else if let code = XMLRepair.namedCode(body), let v = UInt32(code), let u = Unicode.Scalar(v) {
+                decoded = String(Character(u))
+            }
+            out += decoded ?? ns.substring(with: m.range)
+            last = m.range.location + m.range.length
+        }
+        out += ns.substring(from: last)
+        return out
+    }
+
     /// Show notes are HTML: keep the text, one paragraph per line, and cap the length.
     static func plainText(_ html: String) -> String {
         var s = html.replacingOccurrences(of: "<br\\s*/?>|</p>|</li>", with: "\n", options: [.regularExpression, .caseInsensitive])
         s = s.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-        for (e, c) in ["&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": "\"", "&#39;": "'", "&apos;": "'", "&nbsp;": " ", "&#8217;": "’", "&#8220;": "“", "&#8221;": "”"] {
-            s = s.replacingOccurrences(of: e, with: c)
-        }
+        s = decodeEntities(s)
         s = s.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\n\\s*\\n+", with: "\n", options: .regularExpression)
         s = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -587,7 +627,7 @@ final class PodcastLibrary {
         if let c = feeds[show.feedURL], Date().timeIntervalSince1970 - c.fetched < maxAge { return c.episodes }
         // Opening the window refreshes subscriptions while the show you click loads too: one download per feed.
         if let running = fetching[show.feedURL] { return try await running.value }
-        let task = Task { @MainActor in try await self.fetch(show) }
+        let task = Task { @MainActor in try await self.fetch(show, fresh: maxAge <= 0) }
         fetching[show.feedURL] = task
         defer { fetching[show.feedURL] = nil }
         return try await task.value
@@ -598,9 +638,10 @@ final class PodcastLibrary {
     static let writes = DispatchQueue(label: "omniamp.podcast.writes", qos: .utility)
 
     @MainActor
-    private func fetch(_ show: PodcastShow) async throws -> [PodcastEpisode] {
+    private func fetch(_ show: PodcastShow, fresh: Bool) async throws -> [PodcastEpisode] {
         guard let url = URL(string: show.feedURL) else { return [] }
         var req = URLRequest(url: url)
+        if fresh { req.cachePolicy = .reloadIgnoringLocalCacheData }   // Refresh Episodes: really ask the server
         req.setValue("OmniAmp/1.0", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 20
         let (data, status) = try await transport.send(req)
@@ -618,6 +659,7 @@ final class PodcastLibrary {
         if failed, saved.count > eps.count {
             throw PodcastFeedError.unreadable("the feed is damaged part-way through")
         }
+        migrateMovedEpisodes(from: saved, to: eps)
         let c = FeedCache(fetched: Date().timeIntervalSince1970, episodes: eps)
         feeds[show.feedURL] = c
         let file = feedFile(show.feedURL)
@@ -678,6 +720,39 @@ final class PodcastLibrary {
             feeds.removeValue(forKey: f)
             recentFeeds.removeAll { $0 == f }
         }
+    }
+
+    /// Posted with `userInfo["moved"]: [old URL: new URL]` when episodes' audio addresses changed.
+    static let episodesMoved = Notification.Name("OmniAmp.podcastEpisodesMoved")
+
+    /// Feeds sometimes change an episode's audio address (a tracking prefix added, a new CDN) while its guid
+    /// stays: carry played, listened and downloaded state (and, via the notification, resume positions and
+    /// playlist entries) over to the new address.
+    private func migrateMovedEpisodes(from old: [PodcastEpisode], to new: [PodcastEpisode]) {
+        // Only guids that name one episode on both sides (some feeds give every item the same one), and only
+        // addresses that really left the feed.
+        func unique(_ list: [PodcastEpisode]) -> [String: String] {
+            var map: [String: String] = [:], dup = Set<String>()
+            for e in list { if let g = e.guid, !g.isEmpty { if map.updateValue(e.url, forKey: g) != nil { dup.insert(g) } } }
+            dup.forEach { map.removeValue(forKey: $0) }
+            return map
+        }
+        let before = unique(old), after = unique(new)
+        let stillThere = Set(new.map(\.url))
+        var moved: [String: String] = [:]
+        for (g, now) in after { if let was = before[g], was != now, !stillThere.contains(was) { moved[was] = now } }
+        guard !moved.isEmpty else { return }
+        for (was, now) in moved {
+            if let d = played.removeValue(forKey: was) { played[now] = d }
+            if let d = listened.removeValue(forKey: was) { listened[now] = d }
+            if var s = started.removeValue(forKey: was) { s.episode.url = now; started[now] = s }
+        }
+        save(played, "played.json")
+        save(listened, "listened.json")
+        save(started, "started.json")
+        PodcastDownloads.shared.rekey(moved)
+        NSLog("OmniAmp: %d episode address(es) changed in a feed; their state moved along", moved.count)
+        NotificationCenter.default.post(name: Self.episodesMoved, object: nil, userInfo: ["moved": moved])
     }
 
     /// Mark (or unmark) many at once: one save and one refresh, not one per episode.

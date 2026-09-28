@@ -20,6 +20,9 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
     /// Track shown in INFO when the user picked one in the playlist (stable ID); nil = follow playback.
     private var pinnedInfoID: Int?
+    private var infoWork: DispatchWorkItem?
+    /// Notification tokens, removed when the look is taken down (switching looks builds a new controller).
+    private var observers: [NSObjectProtocol] = []
     private let table = PlaylistTableView()
     private let scroll = NSScrollView()
     private let filterField = NSSearchField()
@@ -108,12 +111,12 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         table.headerView = nil
         table.backgroundColor = .black
         table.rowHeight = PlaylistStyle.rowHeight
-        NotificationCenter.default.addObserver(forName: PlaylistStyle.changed, object: nil, queue: .main) { [weak self] _ in
+        observers.append(NotificationCenter.default.addObserver(forName: PlaylistStyle.changed, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             self.table.rowHeight = PlaylistStyle.rowHeight
             self.table.reloadData()
             self.fitColumns()
-        }
+        })
         table.intercellSpacing = NSSize(width: 6, height: 0)
         table.allowsMultipleSelection = true
         table.style = .plain
@@ -137,9 +140,9 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         [cNum, cTitle, cTime].forEach(table.addTableColumn)
         table.columnAutoresizingStyle = .noColumnAutoresizing
         cTitle.minWidth = 60
-        NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { [weak self] _ in
+        observers.append(NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { [weak self] _ in
             self?.fitColumns()
-        }
+        })
         scroll.postsFrameChangedNotifications = true
 
         scroll.documentView = table
@@ -310,6 +313,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
 
     func currentTrackDidChange(old: Int?, new: Int?) {
+        panel.dismissHoverCard()   // it described the previous track
         panel.refreshTrackInfo()
         pinnedInfoID = nil
         refreshInfo()
@@ -325,7 +329,13 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     func toggleEQ() { toggle(.eq) }
 
     func showCurrentTrack() {
-        guard let i = controller.currentIndex, let r = controller.row(forTrackIndex: i) else { NSSound.beep(); return }
+        guard let i = controller.currentIndex else { NSSound.beep(); return }
+        if controller.row(forTrackIndex: i) == nil, !controller.filterQuery.isEmpty {
+            filterField.stringValue = ""   // the filter hides it: show the whole playlist
+            controller.setFilter("")
+            hideSearchIfIdle()
+        }
+        guard let r = controller.row(forTrackIndex: i) else { NSSound.beep(); return }
         table.jump(to: r)
         window?.makeFirstResponder(table)
     }
@@ -388,7 +398,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
     func optionsDidChange() {
         fitColumns()
-        eqView.refresh()
+        if drawer == .eq { eqView.refresh() }   // hidden: refreshed when it opens
         panel.refreshOptions()
         updateStatus()
     }
@@ -471,6 +481,12 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
 
     /// Select these tracks by identity (row numbers change when the filter does); nothing if they're gone.
+    /// After a rebuild (theme change): the same tracks selected, keys going to the list.
+    func restoreSelection(_ tracks: IndexSet) {
+        reselect(tracks)
+        window?.makeFirstResponder(table)
+    }
+
     private func reselect(_ tracks: IndexSet) {
         let rows = IndexSet(tracks.compactMap { controller.row(forTrackIndex: $0) })
         if rows.isEmpty { table.deselectAll(nil) } else {
@@ -500,6 +516,9 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     func dismantle() {
         clock.stop()
         panel.dismissHoverCard()
+        infoWork?.cancel()
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
         window?.delegate = nil
         window?.close()
     }
@@ -528,7 +547,15 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
         } else {
             pinnedInfoID = nil
         }
-        refreshInfo()
+        // Arrowing through the list: show the row you stop on, not every one passed (each reads tags and art).
+        infoWork?.cancel()
+        if type == .keyDown {
+            let w = DispatchWorkItem { [weak self] in self?.refreshInfo() }
+            infoWork = w
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: w)
+        } else {
+            refreshInfo()
+        }
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {

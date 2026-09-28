@@ -67,12 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
 
         // Files passed on the command line (useful for testing: OmniAmp /path/to/folder).
+        // Handled like files opened from Finder (skins, OPML subscriptions, media).
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
-        let urls = args.map { URL(fileURLWithPath: $0) }
-        let skins = urls.filter { $0.pathExtension.lowercased() == "wsz" }
-        let media = urls.filter { $0.pathExtension.lowercased() != "wsz" }
-        if let s = skins.first { loadSkin(s) }
-        if !media.isEmpty { controller.add(media) }
+        if !args.isEmpty { application(NSApp, open: args.map { URL(fileURLWithPath: $0) }) }
         if !openedBeforeLaunch.isEmpty {
             let pending = openedBeforeLaunch
             openedBeforeLaunch = []
@@ -196,6 +193,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         shortcuts?.window?.makeKeyAndOrderFront(nil)
     }
 
+    /// ⌘M: the classic look's docked playlist/EQ go down with their main window (they're its children).
+    @objc private func minimizeWindow(_ sender: Any?) {
+        guard let w = NSApp.keyWindow ?? NSApp.mainWindow else { NSSound.beep(); return }
+        (w.parent ?? w).miniaturize(nil)
+    }
+
     /// ⌘1: the main window of whichever look is on.
     @objc private func showPlayer(_ sender: Any?) {
         look?.show()
@@ -296,7 +299,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func pickTheme(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, id != Theme.palette.id else { return }
         Theme.select(id)
-        if mode == .modern, look is ModernWindowController { showLook(.modern) }
+        guard mode == .modern, let old = look as? ModernWindowController else { return }
+        // The rebuilt window picks up where you were: the same rows selected, the list focused.
+        let picked = old.selectedTrackIndices
+        showLook(.modern)
+        (look as? ModernWindowController)?.restoreSelection(picked)
     }
 
     @objc private func setScale(_ sender: NSMenuItem) {
@@ -455,11 +462,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             if w.firstResponder is NSText { return ev } // typing in the filter
             // Holding a transport key shouldn't fire it again and again (holding B skipped many tracks); list
             // navigation (arrows, page keys) and seeking must repeat, so only these keys are held back.
-            if ev.isARepeat, let k = ev.charactersIgnoringModifiers?.lowercased(),
-               ["z", "x", "c", "v", "b", "q", "j", " ", "s", "r", "i", "e", "l"].contains(k) { return nil }
+            let key = Self.winampKey(ev)
+            if ev.isARepeat, let k = key, ["z", "x", "c", "v", "b", "q", "j", " ", "s", "r", "i", "e", "l"].contains(k) { return nil }
             let mods = ev.modifierFlags.intersection([.command, .control, .option])
             guard mods.isEmpty else { return ev }
-            switch ev.charactersIgnoringModifiers?.lowercased() {
+            switch key {
             case "z": c.previous()
             case "x": c.playOrResume()
             case "c": c.pause()
@@ -488,6 +495,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             return nil
         }
+    }
+
+    /// The typed letter; on a non-Latin layout (Cyrillic, Greek…) the letter at that key's US position, so
+    /// Z X C V B and the rest still work where Winamp users expect them.
+    private static func winampKey(_ ev: NSEvent) -> String? {
+        let typed = ev.charactersIgnoringModifiers?.lowercased()
+        if let t = typed, t.unicodeScalars.allSatisfy({ $0.isASCII }) { return t }
+        let us: [UInt16: String] = [6: "z", 7: "x", 8: "c", 9: "v", 11: "b", 12: "q", 38: "j", 1: "s", 15: "r", 37: "l", 34: "i", 14: "e"]
+        return us[ev.keyCode] ?? typed
     }
 
     // MARK: Playlists
@@ -922,10 +938,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switchView.keyEquivalentModifierMask = [.control]
         switchView.target = self
         winMenu.addItem(.separator())
-        winMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        // Our own action: the classic look's borderless windows can't performMiniaturize.
+        winMenu.addItem(withTitle: "Minimize", action: #selector(minimizeWindow(_:)), keyEquivalent: "m").target = self
         winItem.submenu = winMenu
         bar.addItem(winItem)
-        NSApp.windowsMenu = winMenu
+        // (Not NSApp.windowsMenu: AppKit would add every window again below the entries above.)
 
         let helpItem = NSMenuItem()
         let helpMenu = NSMenu(title: "Help")
