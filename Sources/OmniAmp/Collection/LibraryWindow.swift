@@ -72,8 +72,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let search = NSSearchField()
     private let status = NSTextField(labelWithString: "")
     private let empty = NSTextField(wrappingLabelWithString: "")
-    private var scopeButtons: [ModernButton] = []
-    private var losslessButton: ModernButton!
+    private var scopeButtons: [Pill] = []
+    private var losslessButton: Pill!
     private var observers: [NSObjectProtocol] = []
     private var refreshPending = false
     private let statsPage = StatsPage()
@@ -150,46 +150,40 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     // MARK: Layout
 
     private func build() {
-        window?.backgroundColor = Theme.background
-        let title = NSTextField(labelWithString: "MUSIC LIBRARY")
-        title.font = Fonts.hack(10, bold: true)
-        title.textColor = NSColor(calibratedWhite: 0.6, alpha: 1)
+        window?.backgroundColor = Dash.page
+        let title = Dash.label("Music Library", Dash.font(12, .semibold), Dash.text2)
 
         search.placeholderString = "Search artists, albums, songs, venues…"
-        search.font = Fonts.hack(11)
+        search.font = Dash.font(13)
         search.target = self
         search.action = #selector(searchChanged)
         search.delegate = self
         search.sendsSearchStringImmediately = false
         search.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        scopeButtons = [("ALL", LibraryFilter.Scope.all), ("OFFICIAL", .official), ("UNOFFICIAL", .unofficial)].map { label, scope in
-            let b = ModernButton(glyph: "", label: label, target: self, action: #selector(scopeClicked(_:)))
+        scopeButtons = [("All", LibraryFilter.Scope.all), ("Official", .official), ("Unofficial", .unofficial)].map { label, scope in
+            let b = Pill(label, target: self, action: #selector(scopeClicked(_:)))
             b.tag = scope.rawValue
             return b
         }
         scopeButtons[1].toolTip = "Albums, EPs, compilations and live albums"
         scopeButtons[2].toolTip = "Shows, bootlegs, demos, outtakes and other unreleased recordings"
-        losslessButton = ModernButton(glyph: "", label: "LOSSLESS", target: self, action: #selector(losslessClicked))
+        losslessButton = Pill("Lossless", target: self, action: #selector(losslessClicked))
         losslessButton.toolTip = "Only lossless releases (FLAC, ALAC, WAV, AIFF)"
-        let folders = ModernButton(glyph: Fonts.Icon.folder, label: "FOLDERS", target: self, action: #selector(showFolders(_:)))
+        let folders = Pill("Folders", glyph: Fonts.Icon.folder, target: self, action: #selector(showFolders(_:)))
         folders.toolTip = "Add or remove library folders, rescan"
-        for b in scopeButtons + [losslessButton!, folders] {
-            b.glyphSize = 10
-            b.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        }
         updateFilterButtons()
         let top = NSStackView(views: [search] + scopeButtons + [losslessButton, folders])
         top.spacing = 6
         top.setCustomSpacing(14, after: search)
         top.setCustomSpacing(14, after: scopeButtons[2])
 
-        configure(sidebar, scrolls[0], columns: [ListLook.column("section", 150, flexible: true)], rowHeight: 26)
-        configure(middle, scrolls[1], columns: [ListLook.column("entry", 220, flexible: true)], rowHeight: 22)
-        configure(albumTable, scrolls[2], columns: [ListLook.column("album", 400, flexible: true)], rowHeight: 46)
-        configure(trackTable, scrolls[3], columns: [ListLook.column("no", 34), ListLook.column("title", 260, flexible: true),
+        configure(sidebar, scrolls[0], columns: [ListLook.column("section", 150, flexible: true)], rowHeight: 32)
+        configure(middle, scrolls[1], columns: [ListLook.column("entry", 220, flexible: true)], rowHeight: 26)
+        configure(albumTable, scrolls[2], columns: [ListLook.column("album", 400, flexible: true)], rowHeight: 54)
+        configure(trackTable, scrolls[3], columns: [ListLook.column("no", 38), ListLook.column("title", 260, flexible: true),
                                                     ListLook.column("artist", 150), ListLook.column("time", 56),
-                                                    ListLook.column("format", 86)], rowHeight: 20)
+                                                    ListLook.column("format", 86)], rowHeight: 24)
         albumTable.allowsMultipleSelection = true
         trackTable.allowsMultipleSelection = true
         for t in [albumTable, trackTable] {
@@ -206,25 +200,22 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         letters.translatesAutoresizingMaskIntoConstraints = false
         timeline.translatesAutoresizingMaskIntoConstraints = false
         timeline.onSelect = { [weak self] a in self?.selectAlbum(a.key) }
-        timeline.wantsLayer = true
-        timeline.layer?.cornerRadius = 4
-        timeline.layer?.borderWidth = 1
-        timeline.layer?.borderColor = NSColor.black.cgColor
+        Dash.styleCard(timeline)
 
-        empty.font = Fonts.hack(12)
+        empty.font = Dash.font(13)
         empty.textColor = LibraryStyle.dim
         empty.alignment = .center
         empty.isHidden = true
 
-        status.font = Fonts.hack(10)
-        status.textColor = LibraryStyle.dim
+        status.font = Dash.font(11)
+        status.textColor = Dash.text2
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let add = ModernButton(glyph: Fonts.Icon.plus, label: "ADD", target: self, action: #selector(addSelection))
-        let play = ModernButton(glyph: Fonts.Icon.play, label: "PLAY", target: self, action: #selector(playSelection))
+        let add = Pill("Add", glyph: Fonts.Icon.plus, target: self, action: #selector(addSelection))
+        let play = Pill("Play", glyph: Fonts.Icon.play, target: self, action: #selector(playSelection))
+        play.prominent = true
         add.toolTip = "Add to the playlist (⌥Return)"
         play.toolTip = "Add to the playlist and play (Return, double-click)"
-        for b in [add, play] { b.glyphSize = 10; b.heightAnchor.constraint(equalToConstant: 22).isActive = true }
         let bottom = NSStackView(views: [status, NSView(), add, play])
         bottom.spacing = 6
 
@@ -260,7 +251,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         NSLayoutConstraint.activate([
             title.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
             title.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            top.topAnchor.constraint(equalTo: root.topAnchor, constant: 34),
+            top.topAnchor.constraint(equalTo: root.topAnchor, constant: 32),
             top.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             top.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
 
@@ -327,14 +318,14 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         t.target = self
         t.doubleAction = #selector(doubleClicked(_:))
         t.onKey = { [weak self, weak t] e in t.map { self?.tableKey(e, in: $0) ?? false } ?? false }
-        ListLook.apply(t, in: scroll, rowHeight: rowHeight)
+        Dash.applyList(t, in: scroll, rowHeight: rowHeight)
         // Only the title column stretches.
         if columns.count > 1 { t.columnAutoresizingStyle = .uniformColumnAutoresizingStyle; columns.dropFirst(2).forEach { $0.resizingMask = [] } }
     }
 
     private func applyTheme() {
-        window?.backgroundColor = Theme.background
-        for (t, s) in zip([sidebar, middle, albumTable, trackTable], scrolls) { ListLook.apply(t, in: s, rowHeight: t.rowHeight) }
+        window?.backgroundColor = Dash.page
+        for (t, s) in zip([sidebar, middle, albumTable, trackTable], scrolls) { Dash.applyList(t, in: s, rowHeight: t.rowHeight) }
         [sidebar, middle, albumTable, trackTable].forEach { $0.reloadData() }
         status.textColor = LibraryStyle.dim
         empty.textColor = LibraryStyle.dim
@@ -946,7 +937,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         if tableView === albumTable, row < items.count, case .header = items[row] { return HeaderRowView() }
-        return PlaylistRowView()
+        return CardRowView()
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
@@ -964,6 +955,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard let t = n.object as? NSTableView else { return }
         switch t {
         case sidebar:
+            sidebar.reloadData(forRowIndexes: IndexSet(0..<Section.allCases.count), columnIndexes: [0])   // the selected one's look
             guard !searching, let s = Section(rawValue: sidebar.selectedRow) else { return }
             if !pages.isEmpty {   // leaving the pages
                 pages = []
@@ -991,10 +983,12 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             let s = Section(rawValue: row)!
             let f = libraryLabel(tableView, "section")
             let on = !searching || s == .artists
-            f.attributedStringValue = NSAttributedString(string: s.glyph + "  " + s.title.uppercased(), attributes: [
-                .font: Fonts.hack(11, bold: true),
-                .foregroundColor: on ? Theme.playlistText : Theme.phosphorDim,
-            ])
+            let selected = sidebar.selectedRow == row
+            let text = NSMutableAttributedString(string: "  " + s.glyph + "   ", attributes: [
+                .font: Fonts.hack(12), .foregroundColor: on ? (selected ? Dash.accent : Dash.text2) : Dash.text3])
+            text.append(NSAttributedString(string: s.title, attributes: [
+                .font: Dash.font(13, selected ? .semibold : .regular), .foregroundColor: on ? Dash.text : Dash.text3]))
+            f.attributedStringValue = text
             return f
         case middle:
             let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("bucket"), owner: nil) as? BucketCell) ?? BucketCell()
@@ -1019,24 +1013,29 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             guard row < tracks.count, let id = tableColumn?.identifier.rawValue else { return nil }
             let t = tracks[row]
             let f = libraryLabel(tableView, id)
-            f.font = Fonts.hack(11)
-            f.textColor = LibraryStyle.dim
+            f.font = Dash.font(12.5)
+            f.textColor = Dash.text2
             f.alignment = .left
             switch id {
             case "no":
                 f.stringValue = t.number.map { n in t.disc.map { "\($0)-" + String(format: "%02d", n) } ?? String(format: "%02d", n) } ?? ""
+                f.font = Dash.mono(10.5)
+                f.textColor = Dash.text3
                 f.alignment = .right
             case "title":
                 f.stringValue = t.title
-                f.textColor = t.playable ? Theme.playlistText : LibraryStyle.dim
+                f.font = Dash.font(13)
+                f.textColor = t.playable ? Dash.text : Dash.text3
             case "artist":
                 f.stringValue = t.artist
             case "time":
                 f.stringValue = t.duration.map(AlbumCell.length) ?? ""
+                f.font = Dash.mono(11)
                 f.alignment = .right
             default:
                 f.stringValue = t.format
-                f.font = Fonts.hack(9.5)
+                f.font = Dash.mono(9.5)
+                f.textColor = Dash.text3
                 if !t.playable { f.textColor = Theme.warning }
             }
             f.toolTip = t.playable ? nil : "OmniAmp can't play this format. Convert it to FLAC to play it."

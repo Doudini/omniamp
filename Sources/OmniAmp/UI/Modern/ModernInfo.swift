@@ -17,6 +17,9 @@ final class ArtView: NSView {
     var onHover: ((Bool) -> Void)?
     var onClick: (() -> Void)?
     var cornerRadius: CGFloat = 3
+    /// The placeholder's colors (the library's cards); nil: the LCD look.
+    var surface: NSColor? { didSet { needsDisplay = true } }
+    var iconColor: NSColor? { didSet { needsDisplay = true } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -52,9 +55,9 @@ final class ArtView: NSView {
             NSGradient(starting: NSColor.white.withAlphaComponent(0.10), ending: .clear)?
                 .draw(in: NSRect(x: 0, y: bounds.height * 0.5, width: bounds.width, height: bounds.height * 0.5), angle: -90)
         } else {
-            Theme.lcd.setFill(); bounds.fill()
+            (surface ?? Theme.lcd).setFill(); bounds.fill()
             // Centered on the glyph's drawn shape (its text box has uneven spacing around icon glyphs).
-            let attrs: [NSAttributedString.Key: Any] = [.font: Theme.icon(bounds.height * 0.4), .foregroundColor: Theme.phosphorDim.withAlphaComponent(0.6)]
+            let attrs: [NSAttributedString.Key: Any] = [.font: Theme.icon(bounds.height * 0.4), .foregroundColor: iconColor ?? Theme.phosphorDim.withAlphaComponent(0.6)]
             let line = CTLineCreateWithAttributedString(NSAttributedString(string: placeholder, attributes: attrs))
             if let ctx = NSGraphicsContext.current?.cgContext {
                 let ink = CTLineGetImageBounds(line, ctx)
@@ -63,6 +66,11 @@ final class ArtView: NSView {
             }
         }
         NSGraphicsContext.restoreGraphicsState()
+        if surface != nil {
+            // On a card: a hairline, no bezel.
+            Dash.border.setStroke(); path.lineWidth = 1; path.stroke()
+            return
+        }
         NSColor.black.setStroke(); path.lineWidth = 1; path.stroke()
         Theme.panelEdge.withAlphaComponent(0.35).setStroke()
         NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 1), xRadius: max(0, cornerRadius - 1), yRadius: max(0, cornerRadius - 1)).stroke()

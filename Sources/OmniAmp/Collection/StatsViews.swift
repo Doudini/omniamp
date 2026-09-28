@@ -1,7 +1,8 @@
 import AppKit
 
-// The Stats page's charts, drawn in the modern look: one phosphor hue, brighter for more; labels and values
-// in text colors; every mark has a tooltip, and most open the library at what they show.
+// The library's charts (see Dash for the tokens). Names and labels in text colors, numbers in Hack, data in the
+// theme's accent (amounts) or a kind's color (identity); recessive grid and axes. Every mark has a tooltip, and
+// most open the library at what they show.
 
 /// A chart with hover tooltips and clickable marks. Subclasses fill `regions` in `layoutRegions()` and draw.
 class StatsChart: NSView, NSViewToolTipOwner {
@@ -53,36 +54,84 @@ class StatsChart: NSView, NSViewToolTipOwner {
     }
 
     // Shared drawing.
+
+    /// Numbers and labels: Hack.
     static func text(_ s: String, _ size: CGFloat, _ color: NSColor, bold: Bool = false) -> NSAttributedString {
         NSAttributedString(string: s, attributes: [.font: Fonts.hack(size, bold: bold), .foregroundColor: color])
     }
 
-    /// A bar with rounded ends, in the phosphor color unless given one (brighter when hovered).
-    static func bar(_ r: NSRect, color: NSColor? = nil, strength: CGFloat = 0.85, hot: Bool) {
+    /// Names: the system font.
+    static func sans(_ s: String, _ size: CGFloat, _ color: NSColor, _ weight: NSFont.Weight = .regular) -> NSAttributedString {
+        NSAttributedString(string: s, attributes: [.font: Dash.font(size, weight), .foregroundColor: color])
+    }
+
+    /// A bar with rounded ends, in the accent unless given a color (full strength when hovered).
+    static func bar(_ r: NSRect, color: NSColor? = nil, strength: CGFloat = 0.85, hot: Bool, radius: CGFloat = 3) {
         guard r.width > 0.5, r.height > 0.5 else { return }
-        (color ?? Theme.phosphor).withAlphaComponent(hot ? 1 : strength).setFill()
-        let radius = min(2, r.width / 2, r.height / 2)
-        NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius).fill()
+        (color ?? Dash.accent).withAlphaComponent(hot ? 1 : strength).setFill()
+        let rad = min(radius, r.width / 2, r.height / 2)
+        NSBezierPath(roundedRect: r, xRadius: rad, yRadius: rad).fill()
+    }
+
+    /// A round number at or above `v` for an axis top (1, 2, 2.5, 5 × 10ⁿ).
+    static func niceMax(_ v: Double) -> Double {
+        guard v > 0 else { return 1 }
+        let p = pow(10, floor(log10(v))), f = v / p
+        let n: Double = f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10
+        return n * p
+    }
+
+    /// "1.2k", "35", "3.4M".
+    static func short(_ v: Double) -> String {
+        let a = abs(v)
+        func trim(_ x: Double, _ unit: String) -> String {
+            x == x.rounded() || x >= 10 ? String(format: "%.0f", x) + unit : String(format: "%.1f", x) + unit
+        }
+        if a >= 1_000_000 { return trim(v / 1_000_000, "M") }
+        if a >= 1000 { return trim(v / 1000, "k") }
+        return a == a.rounded() ? String(Int(v)) : String(format: "%.1f", v)
+    }
+
+    /// How many grid lines make round steps up to `top` (a niceMax): 50 → 5 (10s), 20 → 4 (5s), 2.5k → 5 (500s).
+    static func gridLines(_ top: Double) -> Int {
+        guard top > 0 else { return 4 }
+        let m = top / pow(10, floor(log10(top)))
+        return m == 2 ? 4 : 5
+    }
+
+    /// Horizontal grid lines with their values on the left; returns the plot area right of them.
+    static func grid(in r: NSRect, top: Double, lines: Int? = nil, labelWidth: CGFloat = 34) -> NSRect {
+        let lines = lines ?? gridLines(top)
+        let plot = NSRect(x: r.minX + labelWidth, y: r.minY, width: r.width - labelWidth, height: r.height)
+        for i in 0...lines {
+            let v = top * Double(i) / Double(lines)
+            let y = plot.maxY - plot.height * CGFloat(i) / CGFloat(lines)
+            (i == 0 ? Dash.border : Dash.grid).setFill()
+            NSRect(x: plot.minX, y: y, width: plot.width, height: 1).fill()
+            let s = text(short(v), 8.5, Dash.text3)
+            s.draw(at: NSPoint(x: plot.minX - s.size().width - 6, y: y - 6))
+        }
+        return plot
     }
 }
 
-/// Label, bar, value per row ("Indie Rock ▇▇▇▇▇ 4,210 · 312 releases").
+/// Label, bar, value per row: names in white, the value in Hack, details grey.
 final class BarListChart: StatsChart {
     var bars: [LibraryStats.Bar] = [] { didSet { invalidateIntrinsicContentSize(); needsLayout = true; needsDisplay = true } }
     var format: (Double) -> String = { Int($0).formatted() }
     var tip: (LibraryStats.Bar) -> String = { "\($0.label): \(Int($0.value).formatted())" }
     var onClick: ((LibraryStats.Bar) -> Void)?
-    /// A color per bar (what kind of recording it is); nil: the phosphor.
+    /// A color per bar (what kind of recording it is); nil: the accent.
     var color: ((LibraryStats.Bar) -> NSColor?)?
     var footnote: String? { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
-    static let rowHeight: CGFloat = 20
+    static let rowHeight: CGFloat = 26
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: CGFloat(bars.count) * Self.rowHeight + (footnote == nil ? 0 : 18))
+        NSSize(width: NSView.noIntrinsicMetric, height: CGFloat(bars.count) * Self.rowHeight + (footnote == nil ? 0 : 20))
     }
 
-    private var labelWidth: CGFloat { min(bounds.width * 0.42, 190) }
-    private let valueWidth: CGFloat = 130
+    private var labelWidth: CGFloat { min(bounds.width * 0.4, 200) }
+    private let valueWidth: CGFloat = 120
 
     override func layoutRegions() {
         regions = bars.enumerated().map { i, b in
@@ -93,144 +142,336 @@ final class BarListChart: StatsChart {
 
     override func draw(_ dirtyRect: NSRect) {
         let most = max(bars.map(\.value).max() ?? 1, 0.0001)
-        let barX = labelWidth + 8, barW = max(10, bounds.width - barX - valueWidth - 8)
+        let barX = labelWidth + 10, barW = max(10, bounds.width - barX - valueWidth - 10)
         for (i, b) in bars.enumerated() {
             let y = CGFloat(i) * Self.rowHeight
             let hot = hovered == i
             if hot {
-                Theme.phosphor.withAlphaComponent(0.06).setFill()
-                NSRect(x: 0, y: y, width: bounds.width, height: Self.rowHeight).fill()
+                Dash.cardRaised.setFill()
+                NSBezierPath(roundedRect: NSRect(x: 0, y: y + 1, width: bounds.width, height: Self.rowHeight - 2), xRadius: 5, yRadius: 5).fill()
             }
-            let label = Self.text(b.label, 10.5, hot ? Theme.current : Theme.playlistText)
-            label.draw(with: NSRect(x: 4, y: y + 3, width: labelWidth - 4, height: 15), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
-            Self.bar(NSRect(x: barX, y: y + 6, width: barW * CGFloat(b.value / most), height: 8), color: color?(b), hot: hot)
-            let value = NSMutableAttributedString(attributedString: Self.text(format(b.value), 10, Theme.playlistText))
-            if !b.detail.isEmpty { value.append(Self.text("  " + b.detail, 9, LibraryStyle.dim)) }
-            value.draw(with: NSRect(x: bounds.width - valueWidth, y: y + 3, width: valueWidth - 2, height: 15),
+            Self.sans(b.label, 12.5, Dash.text, hot ? .medium : .regular)
+                .draw(with: NSRect(x: 6, y: y + 5, width: labelWidth - 6, height: 17), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            // A faint track, then the bar.
+            Dash.grid.setFill()
+            NSBezierPath(roundedRect: NSRect(x: barX, y: y + 9, width: barW, height: 8), xRadius: 4, yRadius: 4).fill()
+            Self.bar(NSRect(x: barX, y: y + 9, width: max(3, barW * CGFloat(b.value / most)), height: 8), color: color?(b), hot: hot, radius: 4)
+            let value = NSMutableAttributedString(attributedString: Self.text(format(b.value), 11, Dash.text, bold: true))
+            if !b.detail.isEmpty { value.append(Self.sans("  " + b.detail, 10.5, Dash.text3)) }
+            value.draw(with: NSRect(x: bounds.width - valueWidth, y: y + 5, width: valueWidth - 4, height: 17),
                        options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }
         if let footnote {
-            Self.text(footnote, 9, LibraryStyle.dim).draw(at: NSPoint(x: 4, y: CGFloat(bars.count) * Self.rowHeight + 3))
+            Self.sans(footnote, 11, Dash.text3).draw(at: NSPoint(x: 6, y: CGFloat(bars.count) * Self.rowHeight + 3))
         }
     }
 }
 
-/// Releases per year as thin columns, with decade labels underneath.
+/// Values per year as rounded columns on a light grid, decades underneath; optionally a smoothed trend line
+/// of the same values (same unit, same axis) in the second accent.
 final class YearsChart: StatsChart {
     var years: [(year: Int, releases: Int)] = [] { didSet { needsLayout = true; needsDisplay = true } }
     var onClick: ((Int) -> Void)?
     /// What the columns count ("release", "play").
     var unit = "release"
-    /// The columns' color when they're all one kind of thing (shows); nil: the phosphor.
+    /// The columns' color when they're all one kind of thing (shows); nil: the accent.
     var color: NSColor?
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 150) }
+    /// A 3-year moving average over the columns.
+    var trend = false
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 170) }
 
     private var span: ClosedRange<Int> {
         guard let lo = years.first?.year, let hi = years.last?.year else { return 2000...2001 }
-        return (lo / 10 * 10)...max(hi, lo / 10 * 10 + 9)
+        return lo...max(hi, lo + 1)
     }
-    private var plot: NSRect { NSRect(x: 4, y: 6, width: bounds.width - 8, height: bounds.height - 26) }
-    private var step: CGFloat { plot.width / CGFloat(span.count) }
+    private var top: Double { Self.niceMax(Double(years.map(\.releases).max() ?? 1)) }
+    private var plot: NSRect { NSRect(x: 0, y: 14, width: bounds.width, height: bounds.height - 34) }
+    private func area() -> NSRect {
+        let full = plot, labelWidth: CGFloat = 34
+        return NSRect(x: full.minX + labelWidth, y: full.minY, width: full.width - labelWidth, height: full.height)
+    }
+    private var step: CGFloat { area().width / CGFloat(span.count) }
 
     override func layoutRegions() {
-        let p = plot, s = step
+        let p = area(), s = step
         regions = years.map { y in
             let x = p.minX + CGFloat(y.year - span.lowerBound) * s
-            return Region(rect: NSRect(x: x, y: p.minY, width: max(s, 3), height: p.height),
+            return Region(rect: NSRect(x: x, y: p.minY - 14, width: max(s, 3), height: p.height + 14),
                           tip: "\(y.year): \(y.releases.formatted()) \(unit)\(y.releases == 1 ? "" : "s")",
                           action: onClick.map { f in { f(y.year) } })
         }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let p = plot, s = step
-        let most = CGFloat(max(years.map(\.releases).max() ?? 1, 1))
-        Theme.phosphorDim.withAlphaComponent(0.4).setFill()
-        NSRect(x: p.minX, y: p.maxY, width: p.width, height: 1).fill()
+        let p = Self.grid(in: plot, top: top), s = step
+        let gap: CGFloat = s > 6 ? max(1, s * 0.2) : 0.5
+        var centres: [NSPoint] = []
         for (i, y) in years.enumerated() {
-            let h = max(2, p.height * CGFloat(y.releases) / most)
+            let h = max(2, p.height * CGFloat(Double(y.releases) / top))
             let x = p.minX + CGFloat(y.year - span.lowerBound) * s
-            Self.bar(NSRect(x: x + (s > 4 ? 1 : 0), y: p.maxY - h, width: max(1.5, s - (s > 4 ? 2 : 0.5)), height: h), color: color,
-                     hot: hovered == i)
+            let hot = hovered == i
+            // Rounded at the top only: a column standing on the axis.
+            let r = NSRect(x: x + gap / 2, y: p.maxY - h, width: max(1.5, s - gap), height: h)
+            (color ?? Dash.accent).withAlphaComponent(hot ? 1 : 0.8).setFill()
+            let rad = min(3, r.width / 2)
+            let path = NSBezierPath(roundedRect: r, xRadius: rad, yRadius: rad)
+            path.append(NSBezierPath(rect: NSRect(x: r.minX, y: r.maxY - rad, width: r.width, height: rad)))
+            path.fill()
+            if hot {
+                let v = Self.text(y.releases.formatted(), 10, Dash.text, bold: true)
+                v.draw(at: NSPoint(x: min(max(p.minX, r.midX - v.size().width / 2), bounds.width - v.size().width), y: r.minY - 15))
+            }
+            centres.append(NSPoint(x: r.midX, y: 0))
         }
-        var decade = span.lowerBound
-        while decade <= span.upperBound {
-            let x = p.minX + CGFloat(decade - span.lowerBound) * s
-            Theme.phosphorDim.withAlphaComponent(0.4).setFill()
-            NSRect(x: x, y: p.maxY, width: 1, height: 4).fill()
-            Self.text("\(decade)s", 8.5, LibraryStyle.dim).draw(at: NSPoint(x: x + 2, y: p.maxY + 5))
-            decade += 10
+        if trend, years.count >= 3 {
+            var pts: [NSPoint] = []
+            for i in years.indices {
+                let win = years[max(0, i - 1)...min(years.count - 1, i + 1)]
+                let avg = Double(win.reduce(0) { $0 + $1.releases }) / Double(win.count)
+                pts.append(NSPoint(x: centres[i].x, y: p.maxY - p.height * CGFloat(avg / top)))
+            }
+            let line = AreaChart.smoothPath(pts, floor: p.maxY)
+            Dash.accent2.setStroke()
+            line.lineWidth = 2
+            line.stroke()
+        }
+        // Decades (or every year when there are few).
+        let every = span.count <= 12 ? 1 : span.count <= 30 ? 5 : 10
+        var y0 = (span.lowerBound + every - 1) / every * every
+        while y0 <= span.upperBound {
+            let x = p.minX + CGFloat(y0 - span.lowerBound) * s
+            Self.text(every == 10 ? "\(y0)s" : "\(y0)", 8.5, Dash.text3).draw(at: NSPoint(x: x, y: p.maxY + 5))
+            y0 += every
         }
     }
 }
 
-/// The collection's size over time (running total of tracks, by the date of the files).
-final class GrowthChart: StatsChart {
-    var points: [(month: String, total: Int)] = [] { didSet { needsLayout = true; needsDisplay = true } }
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 150) }
-    private var plot: NSRect { NSRect(x: 4, y: 16, width: bounds.width - 8, height: bounds.height - 36) }
+/// A line over time with a soft gradient under it: smooth, dots when there are few points, the peak labelled,
+/// a guide under the mouse.
+class AreaChart: StatsChart {
+    struct Point {
+        let x: Double
+        let y: Double
+        /// For the tooltip: "March 2008".
+        let label: String
+    }
+    var points: [Point] = [] { didSet { needsLayout = true; needsDisplay = true } }
+    var unit = "plays"
+    var height: CGFloat = 170 { didSet { invalidateIntrinsicContentSize() } }
+    var color: NSColor?
+    /// Axis labels along x: value → text (years by default).
+    var xTicks: ((ClosedRange<Double>) -> [(Double, String)])?
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: height) }
 
-    private func month(_ m: String) -> Int {
-        let parts = m.split(separator: "-").compactMap { Int($0) }
-        return parts.count == 2 ? parts[0] * 12 + parts[1] - 1 : 0
+    private var top: Double { Self.niceMax(points.map(\.y).max() ?? 1) }
+    private var xSpan: ClosedRange<Double> {
+        guard let lo = points.first?.x, let hi = points.last?.x, hi > lo else { return 0...1 }
+        return lo...hi
+    }
+    private var frameRect: NSRect { NSRect(x: 0, y: 16, width: bounds.width - 8, height: bounds.height - 36) }
+    private var plotRect: NSRect {
+        let f = frameRect
+        return NSRect(x: f.minX + 34, y: f.minY, width: f.width - 34, height: f.height)
     }
 
-    private func point(_ i: Int) -> NSPoint {
-        let p = plot
-        guard let first = points.first.map({ month($0.month) }), let last = points.last.map({ month($0.month) }) else { return .zero }
-        let total = CGFloat(max(points.last?.total ?? 1, 1))
-        let x = p.minX + p.width * CGFloat(month(points[i].month) - first) / CGFloat(max(last - first, 1))
-        return NSPoint(x: x, y: p.maxY - p.height * CGFloat(points[i].total) / total)
+    private func pos(_ p: Point, in r: NSRect) -> NSPoint {
+        NSPoint(x: r.minX + r.width * CGFloat((p.x - xSpan.lowerBound) / (xSpan.upperBound - xSpan.lowerBound)),
+                y: r.maxY - r.height * CGFloat(p.y / top))
+    }
+
+    /// Catmull-Rom through the points as Béziers, never dipping below `floor` (counts don't go negative).
+    static func smoothPath(_ pts: [NSPoint], floor: CGFloat) -> NSBezierPath {
+        let path = NSBezierPath()
+        guard let first = pts.first else { return path }
+        path.move(to: first)
+        guard pts.count > 2 else { pts.dropFirst().forEach { path.line(to: $0) }; return path }
+        for i in 0..<(pts.count - 1) {
+            let p0 = pts[max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[min(pts.count - 1, i + 2)]
+            let c1 = NSPoint(x: p1.x + (p2.x - p0.x) / 6, y: min(floor, p1.y + (p2.y - p0.y) / 6))
+            let c2 = NSPoint(x: p2.x - (p3.x - p1.x) / 6, y: min(floor, p2.y - (p3.y - p1.y) / 6))
+            path.curve(to: p2, controlPoint1: c1, controlPoint2: c2)
+        }
+        return path
     }
 
     override func layoutRegions() {
-        // One hover region per point, as wide as the gap to its neighbours.
+        let r = plotRect
+        let xs = points.map { pos($0, in: r).x }
         regions = points.indices.map { i in
-            let x = point(i).x
-            let prev = i > 0 ? point(i - 1).x : x - 4, next = i + 1 < points.count ? point(i + 1).x : x + 4
-            return Region(rect: NSRect(x: (prev + x) / 2, y: 0, width: max(2, (next - prev) / 2), height: bounds.height),
-                          tip: "\(points[i].month): \(points[i].total.formatted()) tracks", action: nil)
+            let lo = i > 0 ? (xs[i - 1] + xs[i]) / 2 : xs[i] - 4, hi = i + 1 < xs.count ? (xs[i] + xs[i + 1]) / 2 : xs[i] + 4
+            return Region(rect: NSRect(x: lo, y: 0, width: max(1, hi - lo), height: bounds.height),
+                          tip: "\(points[i].label): \(Int(points[i].y).formatted()) \(unit)", action: nil)
         }
     }
 
     override func draw(_ dirtyRect: NSRect) {
         guard points.count > 1 else {
-            Self.text("Not enough history yet.", 10, LibraryStyle.dim).draw(at: NSPoint(x: 4, y: 20))
+            Self.sans(points.isEmpty ? "Nothing yet." : "Not enough history yet.", 12, Dash.text3).draw(at: NSPoint(x: 4, y: 20))
             return
         }
-        let p = plot
-        let line = NSBezierPath()
-        line.move(to: point(0))
-        for i in 1..<points.count { line.line(to: point(i)) }
+        let r = Self.grid(in: frameRect, top: top)
+        let c = color ?? Dash.accent
+        let pts = points.map { pos($0, in: r) }
+        let line = Self.smoothPath(pts, floor: r.maxY)
         let area = line.copy() as! NSBezierPath
-        area.line(to: NSPoint(x: point(points.count - 1).x, y: p.maxY))
-        area.line(to: NSPoint(x: point(0).x, y: p.maxY))
+        area.line(to: NSPoint(x: pts.last!.x, y: r.maxY))
+        area.line(to: NSPoint(x: pts[0].x, y: r.maxY))
         area.close()
-        Theme.phosphor.withAlphaComponent(0.12).setFill()
-        area.fill()
-        Theme.phosphor.setStroke()
+        NSGradient(starting: c.withAlphaComponent(0.34), ending: c.withAlphaComponent(0.02))?.draw(in: area, angle: 90)
+        c.setStroke()
         line.lineWidth = 2
         line.lineJoinStyle = .round
         line.stroke()
-        Theme.phosphorDim.withAlphaComponent(0.4).setFill()
-        NSRect(x: p.minX, y: p.maxY, width: p.width, height: 1).fill()
-        if let h = hovered, h < points.count {
-            let pt = point(h)
-            Theme.phosphorDim.setFill()
-            NSRect(x: pt.x, y: p.minY, width: 1, height: p.height).fill()
-            Theme.current.setFill()
-            NSBezierPath(ovalIn: NSRect(x: pt.x - 4, y: pt.y - 4, width: 8, height: 8)).fill()
+        // Dots when they can be told apart; the peak labelled.
+        let dots = points.count <= 40
+        let peak = points.indices.max { points[$0].y < points[$1].y } ?? 0
+        for (i, p) in pts.enumerated() where dots || i == peak || i == hovered {
+            let rad: CGFloat = i == hovered ? 5 : 3.5
+            let dot = NSBezierPath(ovalIn: NSRect(x: p.x - rad, y: p.y - rad, width: rad * 2, height: rad * 2))
+            c.setFill()
+            dot.fill()
+            Dash.card.setStroke()
+            dot.lineWidth = 1.5
+            dot.stroke()
         }
-        // First and last month, and the total now.
-        Self.text(points[0].month, 8.5, LibraryStyle.dim).draw(at: NSPoint(x: p.minX, y: p.maxY + 3))
-        let end = Self.text(points[points.count - 1].month, 8.5, LibraryStyle.dim)
-        end.draw(at: NSPoint(x: p.maxX - end.size().width, y: p.maxY + 3))
-        let now = Self.text("\(points[points.count - 1].total.formatted()) tracks", 10, Theme.playlistText, bold: true)
-        now.draw(at: NSPoint(x: p.maxX - now.size().width, y: 0))
+        let peakLabel = Self.text(Self.short(points[peak].y), 10, Dash.text, bold: true)
+        let pp = pts[peak]
+        peakLabel.draw(at: NSPoint(x: min(max(r.minX, pp.x - peakLabel.size().width / 2), bounds.width - peakLabel.size().width - 2),
+                                   y: max(0, pp.y - 18)))
+        if let h = hovered, h < pts.count {
+            Dash.text3.withAlphaComponent(0.6).setFill()
+            NSRect(x: pts[h].x, y: r.minY, width: 1, height: r.height).fill()
+        }
+        // X axis: years unless told otherwise.
+        let ticks = xTicks?(xSpan) ?? Self.yearTicks(xSpan)
+        var lastX = -CGFloat.infinity
+        for (v, label) in ticks {
+            let x = r.minX + r.width * CGFloat((v - xSpan.lowerBound) / (xSpan.upperBound - xSpan.lowerBound))
+            let s = Self.text(label, 8.5, Dash.text3)
+            let lx = min(max(r.minX, x - s.size().width / 2), bounds.width - s.size().width - 2)
+            guard lx - lastX > s.size().width + 8 else { continue }
+            s.draw(at: NSPoint(x: lx, y: r.maxY + 5))
+            lastX = lx
+        }
+    }
+
+    static func yearTicks(_ span: ClosedRange<Double>) -> [(Double, String)] {
+        let years = span.upperBound - span.lowerBound
+        let step = years <= 8 ? 1.0 : years <= 20 ? 2 : years <= 50 ? 5 : 10
+        var y = (span.lowerBound / step).rounded(.up) * step, out: [(Double, String)] = []
+        while y <= span.upperBound { out.append((y, String(Int(y)))); y += step }
+        return out
     }
 }
 
-/// Shows owned by month of the concert: a column per year, a row per month; brighter for more shows.
+/// The collection's size over time (running total of tracks, by the date of the files).
+final class GrowthChart: AreaChart {
+    var growth: [(month: String, total: Int)] = [] {
+        didSet {
+            let f = DateFormatter(), out = DateFormatter()
+            f.dateFormat = "yyyy-MM"
+            out.dateFormat = "MMMM yyyy"
+            points = growth.compactMap { g in
+                let p = g.month.split(separator: "-").compactMap { Int($0) }
+                guard p.count == 2 else { return nil }
+                return Point(x: Double(p[0]) + Double(p[1] - 1) / 12, y: Double(g.total), label: f.date(from: g.month).map(out.string) ?? g.month)
+            }
+        }
+    }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        unit = "tracks"
+    }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Parts of a whole as a ring: a gap between slices, the total (or a share) in the middle, a legend with
+/// percentages beside it. Slices carry their own colors (kinds) or take the accent's family.
+final class DonutChart: StatsChart {
+    struct Slice {
+        let label: String
+        let value: Double
+        let color: NSColor
+        var id: String? = nil
+    }
+    var slices: [Slice] = [] { didSet { needsLayout = true; needsDisplay = true } }
+    var center: (value: String, caption: String)?
+    var unit = ""
+    var onClick: ((Slice) -> Void)?
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: max(150, CGFloat(slices.count) * 22 + 10))
+    }
+
+    /// Two shades of the accent and a neutral: for a two- or three-part split that isn't about kinds.
+    static var pair: [NSColor] { [Dash.accent, Dash.accent2, Dash.text3] }
+
+    private var ring: (c: NSPoint, r: CGFloat) {
+        let r = min(bounds.height, bounds.width * 0.36) / 2 - 6
+        return (NSPoint(x: r + 8, y: bounds.height / 2), r)
+    }
+    private var total: Double { max(slices.reduce(0) { $0 + $1.value }, 0.000_001) }
+
+    private func angles() -> [(start: CGFloat, end: CGFloat)] {
+        var a: CGFloat = -90, out: [(CGFloat, CGFloat)] = []
+        for s in slices {
+            let sweep = 360 * CGFloat(s.value / total)
+            out.append((a, a + sweep))
+            a += sweep
+        }
+        return out
+    }
+
+    override func layoutRegions() {
+        let (c, r) = ring
+        let legendX = c.x + r + 22
+        regions = slices.enumerated().map { i, s in
+            let pct = s.value / total * 100
+            return Region(rect: NSRect(x: legendX - 4, y: legendRowY(i) - 3, width: bounds.width - legendX, height: 20),
+                          tip: "\(s.label): \(Int(s.value).formatted()) \(unit) · \(String(format: "%.1f", pct))%",
+                          action: onClick.map { f in { f(s) } })
+        }
+        // The ring itself hovers too (its square, per slice by angle in mouseMoved would be finer; the legend is enough).
+    }
+
+    private func legendRowY(_ i: Int) -> CGFloat {
+        let h = CGFloat(slices.count) * 22
+        return (bounds.height - h) / 2 + CGFloat(i) * 22 + 2
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let (c, r) = ring
+        let width: CGFloat = max(10, r * 0.28)
+        let gapDeg: CGFloat = slices.filter { $0.value > 0 }.count > 1 ? 1.5 : 0
+        for (i, (s, a)) in zip(slices, angles()).enumerated() where s.value > 0 {
+            let hot = hovered == i
+            let path = NSBezierPath()
+            // Flipped view: angles run clockwise.
+            path.appendArc(withCenter: c, radius: r + (hot ? 2 : 0), startAngle: a.start + gapDeg / 2, endAngle: max(a.start + gapDeg / 2, a.end - gapDeg / 2))
+            path.lineWidth = hot ? width + 3 : width
+            s.color.withAlphaComponent(hovered == nil || hot ? 1 : 0.55).setStroke()
+            path.stroke()
+        }
+        if let center {
+            let v = Self.text(center.value, 17, Dash.text, bold: true), cap = Self.sans(center.caption, 10.5, Dash.text2)
+            v.draw(at: NSPoint(x: c.x - v.size().width / 2, y: c.y - v.size().height + 2))
+            cap.draw(at: NSPoint(x: c.x - cap.size().width / 2, y: c.y + 2))
+        }
+        let legendX = c.x + r + 22
+        for (i, s) in slices.enumerated() {
+            let y = legendRowY(i)
+            s.color.setFill()
+            NSBezierPath(roundedRect: NSRect(x: legendX, y: y + 3, width: 10, height: 10), xRadius: 3, yRadius: 3).fill()
+            let share = s.value / total * 100
+            let pct = Self.text(share > 0 && share < 1 ? "<1%" : String(format: "%.0f%%", share), 11, Dash.text, bold: true)
+            pct.draw(at: NSPoint(x: legendX + 16, y: y))
+            Self.sans(s.label, 12, hovered == i ? Dash.text : Dash.text2)
+                .draw(with: NSRect(x: legendX + 48, y: y, width: max(10, bounds.width - legendX - 48), height: 17),
+                      options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        }
+    }
+}
+
+/// Shows owned by month of the concert: a column per year, a row per month; stronger red for more shows.
 final class ShowCalendar: StatsChart {
     var months: [String: Int] = [:] { didSet { needsLayout = true; needsDisplay = true } }
     var onClick: ((Int) -> Void)?
@@ -285,110 +526,133 @@ final class ShowCalendar: StatsChart {
 
     override func draw(_ dirtyRect: NSRect) {
         guard !years.isEmpty else {
-            Self.text("No dated shows yet.", 10, LibraryStyle.dim).draw(at: NSPoint(x: 4, y: 4))
+            Self.sans("No dated shows yet.", 12, Dash.text3).draw(at: NSPoint(x: 4, y: 4))
             return
         }
         for m in stride(from: 0, to: 12, by: 3) {
-            Self.text(Self.monthNames[m], 8, LibraryStyle.dim).draw(at: NSPoint(x: 0, y: rect(col: 0, month: m).minY + cell / 2 - 6))
+            Self.text(Self.monthNames[m], 8, Dash.text3).draw(at: NSPoint(x: 0, y: rect(col: 0, month: m).minY + cell / 2 - 6))
         }
         let most = CGFloat(max(months.values.max() ?? 1, 1))
         let hotRect = hovered.flatMap { $0 < regions.count ? regions[$0].rect : nil }
         let bottom = rect(col: 0, month: 11).maxY
+        let red = Theme.kind(.show)
         var lastLabel = -CGFloat.infinity
         for (col, y) in years.enumerated() {
             let x = rect(col: col, month: 0).minX
-            // Year labels where there's room: every 5th year, and the first and last.
             if (y % 5 == 0 || col == 0 || col == years.count - 1), x - lastLabel > 30 {
-                Self.text(String(y), 8, LibraryStyle.dim).draw(at: NSPoint(x: x, y: bottom + 3))
+                Self.text(String(y), 8, Dash.text3).draw(at: NSPoint(x: x, y: bottom + 3))
                 lastLabel = x
             }
             for m in 0..<12 {
                 let r = rect(col: col, month: m)
                 let n = CGFloat(months[String(format: "%04d-%02d", y, m + 1)] ?? 0)
                 if n == 0 {
-                    Theme.phosphorDim.withAlphaComponent(0.12).setFill()
+                    Dash.cardRaised.setFill()
                 } else {
                     // Four steps of one hue: a single show is still clearly lit.
                     let step = min(3, Int((n / most * 4).rounded(.up)) - 1)
-                    Theme.phosphor.withAlphaComponent([0.35, 0.55, 0.78, 1][max(0, step)]).setFill()
+                    red.withAlphaComponent([0.4, 0.6, 0.8, 1][max(0, step)]).setFill()
                 }
-                NSBezierPath(roundedRect: r, xRadius: 2, yRadius: 2).fill()
+                NSBezierPath(roundedRect: r, xRadius: 2.5, yRadius: 2.5).fill()
                 if r == hotRect {
-                    Theme.current.setStroke()
-                    NSBezierPath(roundedRect: r.insetBy(dx: -1, dy: -1), xRadius: 2.5, yRadius: 2.5).stroke()
+                    Dash.text.setStroke()
+                    NSBezierPath(roundedRect: r.insetBy(dx: -1, dy: -1), xRadius: 3, yRadius: 3).stroke()
                 }
             }
         }
-        // Legend: fewer … more.
         let ly = bottom + 18
         var x = Self.labelW
-        Self.text("fewer", 8, LibraryStyle.dim).draw(at: NSPoint(x: x, y: ly - 1))
-        x += 34
-        for a in [0.35, 0.55, 0.78, 1.0] {
-            Theme.phosphor.withAlphaComponent(a).setFill()
-            NSBezierPath(roundedRect: NSRect(x: x, y: ly, width: 10, height: 10), xRadius: 2, yRadius: 2).fill()
+        Self.sans("fewer", 10, Dash.text3).draw(at: NSPoint(x: x, y: ly - 2))
+        x += 36
+        for a in [0.4, 0.6, 0.8, 1.0] {
+            red.withAlphaComponent(a).setFill()
+            NSBezierPath(roundedRect: NSRect(x: x, y: ly, width: 10, height: 10), xRadius: 2.5, yRadius: 2.5).fill()
             x += 13
         }
-        Self.text("more", 8, LibraryStyle.dim).draw(at: NSPoint(x: x + 3, y: ly - 1))
+        Self.sans("more", 10, Dash.text3).draw(at: NSPoint(x: x + 3, y: ly - 2))
     }
 }
 
-/// A big number with a caption.
+/// A small line of the recent trend inside a tile.
+final class Sparkline: NSView {
+    var values: [Double] = [] { didSet { needsDisplay = true } }
+    override var isFlipped: Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        guard values.count > 1, let hi = values.max(), hi > 0 else { return }
+        let pts = values.enumerated().map { i, v in
+            NSPoint(x: bounds.width * CGFloat(i) / CGFloat(values.count - 1), y: bounds.height - 2 - (bounds.height - 4) * CGFloat(v / hi))
+        }
+        let line = AreaChart.smoothPath(pts, floor: bounds.height)
+        let area = line.copy() as! NSBezierPath
+        area.line(to: NSPoint(x: bounds.width, y: bounds.height))
+        area.line(to: NSPoint(x: 0, y: bounds.height))
+        area.close()
+        NSGradient(starting: Dash.accent.withAlphaComponent(0.25), ending: Dash.accent.withAlphaComponent(0))?.draw(in: area, angle: 90)
+        Dash.accent.withAlphaComponent(0.9).setStroke()
+        line.lineWidth = 1.5
+        line.stroke()
+    }
+}
+
+/// A key figure: the number big and white, what it counts in grey; optionally the change against before
+/// ("▲ 12% vs 2025") and a sparkline of the trend.
 final class StatTile: NSView {
-    init(_ value: String, _ caption: String, tip: String? = nil) {
+    init(_ value: String, _ caption: String, tip: String? = nil, delta: (text: String, up: Bool)? = nil, spark: [Double]? = nil) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        let v = NSTextField(labelWithString: value)
-        v.font = Fonts.hack(20, bold: true)
-        v.textColor = Theme.phosphor
-        let c = NSTextField(labelWithString: caption.uppercased())
-        c.font = Fonts.hack(8.5, bold: true)
-        c.textColor = LibraryStyle.header
-        let s = NSStackView(views: [v, c])
+        let v = Dash.label(value, Dash.mono(22, bold: true), Dash.text)
+        let c = Dash.label(caption, Dash.font(12), Dash.text2)
+        var rows: [NSView] = [v, c]
+        if let delta {
+            rows.append(Dash.label((delta.up ? "▲ " : "▼ ") + delta.text, Dash.mono(10.5, bold: true), delta.up ? Dash.up : Dash.down))
+        }
+        let s = NSStackView(views: rows)
         s.orientation = .vertical
         s.alignment = .leading
         s.spacing = 2
         s.translatesAutoresizingMaskIntoConstraints = false
         addSubview(s)
         NSLayoutConstraint.activate([
-            s.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12), s.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            s.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10), s.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            s.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14), s.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            s.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -12),
+            s.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: delta == nil ? 72 : 88),
         ])
+        if let spark, spark.count > 1 {
+            let line = Sparkline()
+            line.values = spark
+            line.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(line, positioned: .below, relativeTo: s)
+            // The trend on the right, clear of the figures.
+            NSLayoutConstraint.activate([
+                line.leadingAnchor.constraint(equalTo: centerXAnchor, constant: 10), line.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+                line.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12), line.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.42),
+            ])
+        }
         toolTip = tip
-        wantsLayer = true
-        layer?.backgroundColor = Theme.lcd.cgColor
-        layer?.cornerRadius = 4
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.black.cgColor
+        Dash.styleCard(self)
     }
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// A titled LCD panel around a chart.
+/// A card around a chart: an accent title, an optional grey note, the chart.
 final class StatsPanel: NSView {
     init(_ title: String, _ content: NSView, note: String? = nil) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.backgroundColor = Theme.lcd.cgColor
-        layer?.cornerRadius = 4
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.black.cgColor
-        let t = NSTextField(labelWithString: title.uppercased())
-        t.font = Fonts.hack(9.5, bold: true)
-        t.textColor = LibraryStyle.header
-        let n = NSTextField(labelWithString: note ?? "")
-        n.font = Fonts.hack(8.5)
-        n.textColor = Theme.phosphorDim
+        Dash.styleCard(self)
+        let t = NSTextField(labelWithAttributedString: Dash.title(title))
+        let n = Dash.label(note ?? "", Dash.font(11), Dash.text3)
+        n.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         for v in [t, n, content] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         NSLayoutConstraint.activate([
-            t.topAnchor.constraint(equalTo: topAnchor, constant: 10), t.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            n.firstBaselineAnchor.constraint(equalTo: t.firstBaselineAnchor), n.leadingAnchor.constraint(equalTo: t.trailingAnchor, constant: 8),
-            n.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
-            content.topAnchor.constraint(equalTo: t.bottomAnchor, constant: 10),
-            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            t.topAnchor.constraint(equalTo: topAnchor, constant: 14), t.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            n.firstBaselineAnchor.constraint(equalTo: t.firstBaselineAnchor), n.leadingAnchor.constraint(equalTo: t.trailingAnchor, constant: 10),
+            n.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+            content.topAnchor.constraint(equalTo: t.bottomAnchor, constant: 12),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
         ])
         // Charts are exactly as tall as their content (the page is rebuilt when the figures change).
         let h = content.intrinsicContentSize.height
@@ -403,7 +667,38 @@ final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// The Stats page: tiles, then charts in two columns. Clicks go back to the library through the callbacks.
+/// A row of cards; `weights` share the width (default equal).
+func dashRow(_ views: [NSView], weights: [CGFloat]? = nil, spacing: CGFloat = 12) -> NSView {
+    let r = NSStackView(views: views)
+    r.alignment = .top
+    r.spacing = spacing
+    for v in views { v.setContentHuggingPriority(.required, for: .vertical) }
+    if let w = weights, w.count == views.count, views.count > 1 {
+        r.distribution = .fill
+        let total = w.reduce(0, +)
+        for (v, x) in zip(views.dropFirst(), w.dropFirst()) {
+            v.widthAnchor.constraint(equalTo: views[0].widthAnchor, multiplier: x / w[0]).isActive = true
+        }
+        _ = total
+    } else {
+        r.distribution = .fillEqually
+    }
+    return r
+}
+
+/// A page heading: big white title, grey line under it.
+func dashHeading(_ title: String, _ subtitle: String?) -> NSView {
+    let t = Dash.label(title, Dash.font(22, .semibold), Dash.text)
+    var views: [NSView] = [t]
+    if let subtitle { views.append(Dash.label(subtitle, Dash.font(12.5), Dash.text2)) }
+    let s = NSStackView(views: views)
+    s.orientation = .vertical
+    s.alignment = .leading
+    s.spacing = 3
+    return s
+}
+
+/// The Stats page: key figures, then charts in cards. Clicks go back to the library through the callbacks.
 final class StatsPage: NSScrollView {
     var onGenre: ((String) -> Void)?
     var onYear: ((Int) -> Void)?
@@ -424,7 +719,7 @@ final class StatsPage: NSScrollView {
         doc.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         doc.addSubview(stack)
         documentView = doc
@@ -442,28 +737,7 @@ final class StatsPage: NSScrollView {
 
     func showLoading() {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let l = NSTextField(labelWithString: "Counting…")
-        l.font = Fonts.hack(11)
-        l.textColor = LibraryStyle.dim
-        stack.addArrangedSubview(l)
-    }
-
-    private func row(_ views: [NSView]) -> NSStackView {
-        let r = NSStackView(views: views)
-        r.distribution = .fillEqually
-        r.alignment = .top
-        for v in views { v.setContentHuggingPriority(.required, for: .vertical) }
-        r.spacing = 10
-        return r
-    }
-
-    private func column(_ views: [NSView]) -> NSStackView {
-        let c = NSStackView(views: views)
-        c.orientation = .vertical
-        c.spacing = 10
-        c.alignment = .leading
-        for v in views { v.widthAnchor.constraint(equalTo: c.widthAnchor).isActive = true }
-        return c
+        stack.addArrangedSubview(Dash.label("Counting…", Dash.font(13), Dash.text2))
     }
 
     private static func size(_ bytes: Int64) -> String {
@@ -476,51 +750,75 @@ final class StatsPage: NSScrollView {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let days = s.seconds / 86400
         let lossless = s.tracks > 0 ? Double(s.losslessTracks) / Double(s.tracks) : 0
-        let tiles: [NSView] = [
-            StatTile(s.tracks.formatted(), "tracks", tip: s.unplayable > 0 ? "\(s.unplayable.formatted()) of them in formats OmniAmp can't play" : nil),
+        var rows: [NSView] = [dashHeading("Your collection", "\(s.artists.formatted()) artists, \(s.releases.formatted()) releases, "
+                                          + "\(s.tracks.formatted()) tracks · \(Self.size(s.bytes)) on disk")]
+
+        // Added per year (by file date), for "this year vs last year".
+        var perYear: [Int: Int] = [:]
+        var previous = 0
+        for g in s.growth {
+            if let y = Int(g.month.prefix(4)) { perYear[y, default: 0] += g.total - previous }
+            previous = g.total
+        }
+        let thisYear = Calendar.current.component(.year, from: Date())
+        let added = perYear[thisYear] ?? 0, before = perYear[thisYear - 1] ?? 0
+        let delta: (String, Bool)? = before > 0 ? (String(format: "%.0f%% vs %d", abs(Double(added - before) / Double(before) * 100), thisYear - 1),
+                                                   added >= before) : nil
+        let spark = (thisYear - 9...thisYear).map { Double(perYear[$0] ?? 0) }
+        rows.append(dashRow([
+            StatTile(s.tracks.formatted(), "tracks",
+                     tip: s.unplayable > 0 ? "\(s.unplayable.formatted()) of them in formats OmniAmp can't play" : nil),
             StatTile(s.releases.formatted(), "releases"),
             StatTile(s.artists.formatted(), "artists"),
-            StatTile(days >= 1 ? String(format: "%.1f days", days) : Self.hours(s.seconds / 3600), "of music",
+            StatTile(days >= 1 ? String(format: "%.1f d", days) : Self.hours(s.seconds / 3600), "of music",
                      tip: "\(Int(s.seconds / 3600).formatted()) hours: that long to play everything once"),
-            StatTile(Self.size(s.bytes), "on disk"),
-            StatTile(String(format: "%.0f%%", lossless * 100), "lossless", tip: "\(s.losslessTracks.formatted()) lossless tracks"),
-            StatTile(s.shows.formatted(), "shows"),
-        ]
-        var rows: [NSView] = [row(tiles)]
+            StatTile(added.formatted(), "tracks added in \(thisYear)", tip: "by the date of the files", delta: delta, spark: spark),
+        ]))
 
-        // A few releases dated a century early (bad tags) would squash the rest: the axis starts where 1% have come.
+        // Release years, and what kind of recordings.
         let totalYears = s.years.reduce(0) { $0 + $1.releases }
-        var cut = 0, before = 0
-        while cut < s.years.count, Double(before + s.years[cut].releases) < Double(totalYears) * 0.01 { before += s.years[cut].releases; cut += 1 }
+        var cut = 0, early = 0
+        while cut < s.years.count, Double(early + s.years[cut].releases) < Double(totalYears) * 0.01 { early += s.years[cut].releases; cut += 1 }
         let years = YearsChart()
         years.years = Array(s.years.dropFirst(cut))
+        years.trend = true
         years.onClick = { [weak self] in self?.onYear?($0) }
         let decade = Dictionary(grouping: s.years, by: { $0.year / 10 * 10 }).mapValues { $0.reduce(0) { $0 + $1.releases } }
             .max { $0.value < $1.value }
-        let early = before > 0 ? " · \(before) earlier not shown" : ""
-        rows.append(StatsPanel("Release years", years, note: decade.map { "most from the \($0.key)s\(early) · click a year to open it" }))
-        if let y = ProcessInfo.processInfo.environment["OMNIAMP_STATS_SCROLL"].flatMap(Double.init) {   // test hook: lower charts
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.documentView?.scroll(NSPoint(x: 0, y: y)) }
+        let kinds = DonutChart()
+        kinds.slices = s.kinds.compactMap { b in
+            Int(b.id).flatMap(ReleaseKind.init(rawValue:)).map { DonutChart.Slice(label: $0.title, value: b.value, color: Theme.kind($0)) }
         }
+        kinds.center = (s.releases.formatted(), "releases")
+        kinds.unit = "releases"
+        let official = s.kinds.filter { Int($0.id).flatMap(ReleaseKind.init(rawValue:))?.isOfficial ?? false }.reduce(0) { $0 + $1.value }
+        rows.append(dashRow([
+            StatsPanel("Release years", years, note: (decade.map { "most from the \($0.key)s" } ?? "") + (early > 0 ? " · \(early) earlier not shown" : "")
+                       + " · line: 3-year average · click a year"),
+            StatsPanel("Kinds of recordings", kinds, note: s.releases > 0 ? String(format: "%.0f%% official", official / Double(s.releases) * 100) : nil),
+        ], weights: [1.6, 1]))
+
+        // Growth, and how it's stored.
+        let growth = GrowthChart()
+        growth.growth = s.growth
+        let formats = DonutChart()
+        let lossy = s.tracks - s.losslessTracks - s.unplayable
+        formats.slices = [DonutChart.Slice(label: "Lossless", value: Double(s.losslessTracks), color: Dash.accent),
+                          DonutChart.Slice(label: "Lossy", value: Double(max(0, lossy)), color: Dash.accent2)]
+            + (s.unplayable > 0 ? [DonutChart.Slice(label: "Can't play", value: Double(s.unplayable), color: Dash.text3)] : [])
+        formats.center = (String(format: "%.0f%%", lossless * 100), "lossless")
+        formats.unit = "tracks"
+        let formatList = s.formats.prefix(4).map { "\($0.label) \(Int($0.value).formatted())" }.joined(separator: " · ")
+        rows.append(dashRow([
+            StatsPanel("Collection over time", growth, note: "tracks, by file date"),
+            StatsPanel("Lossless or lossy", formats, note: formatList),
+        ], weights: [1.6, 1]))
 
         let genres = BarListChart()
-        genres.bars = s.genres
-        genres.tip = { "\($0.label): \(Int($0.value).formatted()) tracks, \($0.detail)" }
+        genres.bars = Array(s.genres.prefix(12))
+        genres.tip = { "\($0.label): \(Int($0.value).formatted()) tracks, \($0.detail) · click to open" }
         genres.onClick = { [weak self] in self?.onGenre?($0.id) }
         if s.otherGenres > 0 { genres.footnote = "+ \(s.otherGenres) more genres" }
-        let genrePanel = StatsPanel("Genres", genres, note: s.genres.isEmpty ? "no genre tags yet" : "tracks")
-
-        let kinds = BarListChart()
-        kinds.bars = s.kinds
-        kinds.tip = { "\($0.label): \(Int($0.value).formatted()) releases, \($0.detail)" }
-        kinds.color = { Int($0.id).flatMap(ReleaseKind.init(rawValue:)).map(Theme.kind) }
-        let kindPanel = StatsPanel("What kind of recordings", kinds, note: "releases")
-        let formats = BarListChart()
-        formats.bars = Array(s.formats.prefix(8))
-        formats.tip = { "\($0.label): \(Int($0.value).formatted()) tracks" }
-        let formatPanel = StatsPanel("Formats", formats, note: "tracks")
-        rows.append(row([genrePanel, column([kindPanel, formatPanel])]))
-
         let songs = BarListChart()
         songs.bars = s.songs.map { .init(id: $0.artistKey + "\u{1}" + $0.titleKey, label: "\($0.title) — \($0.artist)", value: Double($0.versions),
                                          detail: $0.unofficial > 0 ? "\($0.unofficial) unofficial" : "") }
@@ -530,30 +828,33 @@ final class StatsPage: NSScrollView {
             let parts = b.id.components(separatedBy: "\u{1}")
             if parts.count == 2 { self?.onSong?(parts[0], parts[1]) }
         }
-        let songPanel = StatsPanel("Songs you have most versions of", songs, note: s.songs.isEmpty ? "none on 3+ releases yet" : "releases")
+        rows.append(dashRow([StatsPanel("Genres", genres, note: s.genres.isEmpty ? "no genre tags yet" : "tracks"),
+                             StatsPanel("Songs with the most versions", songs, note: s.songs.isEmpty ? "none on 3+ releases yet" : "releases")]))
 
         let artists = BarListChart()
         artists.bars = s.topArtists
         artists.format = { Self.hours($0) }
-        artists.tip = { "\($0.label): \(Self.hours($0.value)) · \($0.detail)" }
+        artists.tip = { "\($0.label): \(Self.hours($0.value)) · \($0.detail) · click for the artist page" }
         artists.onClick = { [weak self] in self?.onArtist?($0.id) }
-        rows.append(row([songPanel, StatsPanel("Most hours of music", artists)]))
-
         let calendar = ShowCalendar()
         calendar.months = s.showMonths
         calendar.onClick = { [weak self] in self?.onYear?($0) }
-        let growth = GrowthChart()
-        growth.points = s.growth
-        rows.append(row([StatsPanel("Shows by date of the concert", calendar), StatsPanel("Collection over time", growth, note: "by file date")]))
+        rows.append(dashRow([StatsPanel("Most hours of music", artists, note: "by artist"),
+                             StatsPanel("Shows by date of the concert", calendar, note: "\(s.shows.formatted()) shows")]))
 
         for r in rows {
             stack.addArrangedSubview(r)
             r.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
             r.setContentHuggingPriority(.required, for: .vertical)
         }
-        // Spare height (a page shorter than the window) goes here, not into the last row's panels.
+        stack.setCustomSpacing(16, after: rows[0])
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .vertical)
         stack.addArrangedSubview(spacer)
+        // From the top (or, test hook OMNIAMP_STATS_SCROLL, further down for screenshots).
+        layoutSubtreeIfNeeded()
+        let y = ProcessInfo.processInfo.environment["OMNIAMP_STATS_SCROLL"].flatMap(Double.init) ?? 0
+        contentView.scroll(to: NSPoint(x: 0, y: y))
+        reflectScrolledClipView(contentView)
     }
 }

@@ -96,9 +96,9 @@ final class CareerChart: StatsChart {
         yr = (yr + step - 1) / step * step
         while Double(yr) <= span.upperBound {
             let px = x(Double(yr))
-            Theme.phosphorDim.withAlphaComponent(0.25).setFill()
+            Dash.grid.setFill()
             NSRect(x: px, y: 0, width: 1, height: bottom).fill()
-            Self.text(String(yr), 8.5, LibraryStyle.dim).draw(at: NSPoint(x: px - 12, y: bottom + 3))
+            Self.text(String(yr), 8.5, Dash.text3).draw(at: NSPoint(x: px - 12, y: bottom + 3))
             yr += step
         }
         // Lanes: the label is the legend.
@@ -107,7 +107,7 @@ final class CareerChart: StatsChart {
             Theme.kind(lane.kind).setFill()
             NSBezierPath(roundedRect: NSRect(x: 2, y: y + Self.laneH / 2 - 4, width: 8, height: 8), xRadius: 2, yRadius: 2).fill()
             let n = releases.filter { VersionLane($0.kind) == lane }.count
-            Self.text("\(lane.title) \(n)", 8.5, LibraryStyle.header, bold: true).draw(at: NSPoint(x: 15, y: y + Self.laneH / 2 - 7))
+            Self.text("\(lane.title) \(n)", 8.5, Dash.text2, bold: true).draw(at: NSPoint(x: 15, y: y + Self.laneH / 2 - 7))
         }
         let marks = self.marks()
         for (i, (a, c)) in marks.enumerated() {
@@ -116,23 +116,38 @@ final class CareerChart: StatsChart {
             let p = NSBezierPath(roundedRect: NSRect(x: c.x - rad, y: c.y - rad, width: rad * 2, height: rad * 2), xRadius: 1.5, yRadius: 1.5)
             Theme.kind(a.kind).setFill()
             p.fill()
-            (hot ? Theme.current : Theme.lcd).setStroke()
+            (hot ? Dash.text : Dash.card).setStroke()
             p.lineWidth = hot ? 2 : 1
             p.stroke()
         }
         // Your plays per month.
-        Self.text("YOUR PLAYS", 8.5, LibraryStyle.header, bold: true).draw(at: NSPoint(x: 15, y: playsTop + 2))
+        Self.text("YOUR PLAYS", 8.5, Dash.text2, bold: true).draw(at: NSPoint(x: 15, y: playsTop + 2))
         let most = months.map(\.plays).max() ?? 0
         if most == 0 {
-            Self.text("no last.fm plays", 8.5, LibraryStyle.dim).draw(at: NSPoint(x: 15, y: playsTop + 16))
+            Self.sans("no last.fm plays", 11, Dash.text3).draw(at: NSPoint(x: 15, y: playsTop + 18))
         } else {
-            Self.text("peak \(most.formatted())/month", 8, LibraryStyle.dim).draw(at: NSPoint(x: 15, y: playsTop + 16))
+            Self.sans("peak \(most.formatted())/month", 11, Dash.text3).draw(at: NSPoint(x: 15, y: playsTop + 18))
+            // Plays per month as a smooth area (the months' centres), a dot under the mouse.
+            let pts: [NSPoint] = months.indices.compactMap { i in monthRect(i, most: most).map { NSPoint(x: $0.midX, y: $0.minY) } }
+            if pts.count > 1 {
+                let line = AreaChart.smoothPath(pts, floor: bottom)
+                let area = line.copy() as! NSBezierPath
+                area.line(to: NSPoint(x: pts.last!.x, y: bottom))
+                area.line(to: NSPoint(x: pts[0].x, y: bottom))
+                area.close()
+                NSGradient(starting: Dash.accent.withAlphaComponent(0.38), ending: Dash.accent.withAlphaComponent(0.03))?.draw(in: area, angle: 90)
+                Dash.accent.setStroke()
+                line.lineWidth = 1.6
+                line.stroke()
+            }
+            if let h = hovered, h >= marks.count, h - marks.count < months.count, let r = monthRect(h - marks.count, most: most) {
+                Dash.text3.withAlphaComponent(0.6).setFill()
+                NSRect(x: r.midX, y: playsTop, width: 1, height: Self.playsH).fill()
+                Dash.accent.setFill()
+                NSBezierPath(ovalIn: NSRect(x: r.midX - 4, y: r.minY - 4, width: 8, height: 8)).fill()
+            }
         }
-        for i in months.indices {
-            guard let r = monthRect(i, most: most) else { continue }
-            Self.bar(r, hot: hovered == marks.count + i)
-        }
-        Theme.phosphorDim.withAlphaComponent(0.4).setFill()
+        Dash.border.setFill()
         NSRect(x: Self.labelW, y: bottom, width: bounds.width - Self.labelW - 6, height: 1).fill()
     }
 }
@@ -159,7 +174,7 @@ final class ArtistPage: NSScrollView {
         doc.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         doc.addSubview(stack)
         documentView = doc
@@ -189,11 +204,10 @@ final class ArtistPage: NSScrollView {
         }
     }
 
-    private func button(_ glyph: String, _ label: String, _ action: Selector, tip: String) -> ModernButton {
-        let b = ModernButton(glyph: glyph, label: label, target: self, action: action)
-        b.glyphSize = 10
+    private func button(_ glyph: String, _ label: String, _ action: Selector, tip: String, prominent: Bool = false) -> Pill {
+        let b = Pill(label, glyph: glyph.isEmpty ? nil : glyph, target: self, action: action)
+        b.prominent = prominent
         b.toolTip = tip
-        b.heightAnchor.constraint(equalToConstant: 22).isActive = true
         return b
     }
 
@@ -221,14 +235,14 @@ final class ArtistPage: NSScrollView {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let d = dash
         let title = NSTextField(labelWithString: d.name.isEmpty ? "Unknown artist" : d.name)
-        title.font = Fonts.hack(20, bold: true)
-        title.textColor = Theme.phosphor
+        title.font = Dash.font(24, .semibold)
+        title.textColor = Dash.text
         title.lineBreakMode = .byTruncatingTail
-        var headerViews: [NSView] = [button("", "‹ BACK", #selector(back), tip: "Back"), title]
+        var headerViews: [NSView] = [button("", "‹  Back", #selector(back), tip: "Back"), title]
         if let c = d.country {
             let place = NSTextField(labelWithString: "\(Self.flag(c)) \(Locale.current.localizedString(forRegionCode: c) ?? c)")
-            place.font = Fonts.hack(11)
-            place.textColor = Theme.playlistText
+            place.font = Dash.font(13)
+            place.textColor = Dash.text2
             headerViews.append(place)
         }
         let top = NSStackView(views: headerViews)
@@ -241,22 +255,22 @@ final class ArtistPage: NSScrollView {
                d.ownedSeconds >= 3600 ? String(format: "%.1f h", d.ownedSeconds / 3600) : AlbumCell.length(d.ownedSeconds)]
         if d.plays > 0 { summary.append("\(d.plays.formatted()) plays") }
         let line1 = NSTextField(labelWithString: summary.joined(separator: " · "))
-        line1.font = Fonts.hack(10.5)
-        line1.textColor = LibraryStyle.dim
+        line1.font = Dash.font(12.5)
+        line1.textColor = Dash.text2
         var lines: [NSView] = [line1]
         if let first = d.firstPlay {
             let years = d.lastPlay.map { Calendar.current.dateComponents([.year], from: first.date, to: $0).year ?? 0 } ?? 0
             let l = NSTextField(labelWithString: "First played \(f.string(from: first.date)): “\(first.title)”"
                                 + (d.lastPlay.map { " · last \(f.string(from: $0))" } ?? "") + (years > 0 ? " · \(years) years of listening" : ""))
-            l.font = Fonts.hack(10.5)
-            l.textColor = LibraryStyle.dim
+            l.font = Dash.font(12.5)
+            l.textColor = Dash.text3
             lines.append(l)
         }
         var actions: [NSView] = d.releases.isEmpty ? []
-            : [button(Fonts.Icon.folder, "BROWSE RELEASES", #selector(browse), tip: "This artist's releases and tracks")]
+            : [button(Fonts.Icon.folder, "Browse releases", #selector(browse), tip: "This artist's releases and tracks")]
         if d.topSongs.contains(where: { $0.versions > 0 }) {
-            actions.insert(button(Fonts.Icon.play, "PLAY YOUR FAVORITES", #selector(playFavorites),
-                                  tip: "Your most played songs by them, one recording each"), at: 0)
+            actions.insert(button(Fonts.Icon.play, "Play your favorites", #selector(playFavorites),
+                                  tip: "Your most played songs by them, one recording each", prominent: true), at: 0)
         }
         let actionRow = NSStackView(views: actions)
         actionRow.spacing = 6
@@ -292,9 +306,20 @@ final class ArtistPage: NSScrollView {
         let albums = BarListChart()
         albums.bars = d.playedAlbums
         // Owned: its kind's color; not in the library: neutral (never a kind's color).
-        albums.color = { [kinds = d.playedAlbumKinds] in kinds[$0.id].map(Theme.kind) ?? Theme.phosphorDim }
+        albums.color = { [kinds = d.playedAlbumKinds] in kinds[$0.id].map(Theme.kind) ?? Dash.text3 }
         albums.tip = { "\($0.label): \(Int($0.value).formatted()) plays\($0.detail.isEmpty ? "" : " · \($0.detail)")" }
         var right: [NSView] = []
+        if !d.releases.isEmpty {
+            // What of theirs you own, by kind of recording.
+            let kinds = DonutChart()
+            let byKind = Dictionary(grouping: d.releases, by: \.kind)
+            kinds.slices = ReleaseKind.allCases.compactMap { k in
+                byKind[k].map { DonutChart.Slice(label: k.title, value: Double($0.count), color: Theme.kind(k)) }
+            }
+            kinds.center = (d.releases.count.formatted(), d.releases.count == 1 ? "release" : "releases")
+            kinds.unit = "releases"
+            right.append(StatsPanel("What you own of them", kinds, note: "by kind"))
+        }
         if !d.showsPerYear.isEmpty {
             let shows = YearsChart()
             shows.unit = "show"
@@ -302,8 +327,12 @@ final class ArtistPage: NSScrollView {
             shows.years = d.showsPerYear
             right.append(StatsPanel("Shows you own", shows, note: "by year of the concert"))
         }
+        let rightColumn = NSStackView(views: right)
+        rightColumn.orientation = .vertical
+        rightColumn.spacing = 12
+        for v in right { v.widthAnchor.constraint(equalTo: rightColumn.widthAnchor).isActive = true }
         add(row([StatsPanel("Albums you play most", albums, note: d.playedAlbums.isEmpty ? "no last.fm plays yet" : "plays, by the release last.fm saw")]
-                + (right.isEmpty ? [NSView()] : right)))
+                + (right.isEmpty ? [NSView()] : [rightColumn])))
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .vertical)
@@ -314,7 +343,7 @@ final class ArtistPage: NSScrollView {
         let r = NSStackView(views: views)
         r.distribution = .fillEqually
         r.alignment = .top
-        r.spacing = 10
+        r.spacing = 12
         for v in views { v.setContentHuggingPriority(.required, for: .vertical) }
         return r
     }

@@ -46,27 +46,23 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
 
     private func label(_ s: String, size: CGFloat = 10, bold: Bool = true) -> NSTextField {
         let l = NSTextField(labelWithString: s)
-        l.font = Fonts.hack(size, bold: bold)
-        l.textColor = LibraryStyle.header
+        l.font = Dash.mono(size, bold: bold)
+        l.textColor = Dash.text2
         return l
     }
 
     private func build() {
-        window?.backgroundColor = Theme.background
-        let title = label("FIND MISSING INFO", size: 11)
-        title.textColor = NSColor(calibratedWhite: 0.7, alpha: 1)
-        let what = label(album.kind == .show ? "\(album.artist) · \(album.title)" : "\(album.artist) — \(album.title)", size: 11, bold: false)
-        what.textColor = Theme.playlistText
+        window?.backgroundColor = Dash.page
+        let title = NSTextField(labelWithAttributedString: Dash.title("Find missing info"))
+        let what = Dash.label(album.kind == .show ? "\(album.artist) · \(album.title)" : "\(album.artist) — \(album.title)", Dash.font(13, .medium), Dash.text)
         what.lineBreakMode = .byTruncatingTail
 
         for (f, v, ph) in [(queryArtist, album.artist, "Artist"), (queryAlbum, album.kind == .show ? "" : album.title, "Album")] {
             f.stringValue = v
             f.placeholderString = ph
-            f.font = Fonts.hack(11)
+            f.font = Dash.font(13)
         }
-        let searchButton = ModernButton(glyph: Fonts.Icon.search, label: "SEARCH", target: self, action: #selector(searchClicked))
-        searchButton.glyphSize = 10
-        searchButton.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        let searchButton = Pill("Search", glyph: Fonts.Icon.search, target: self, action: #selector(searchClicked))
         let queryRow = NSStackView(views: [queryArtist, queryAlbum, searchButton])
         queryRow.spacing = 6
         queryArtist.widthAnchor.constraint(equalTo: queryAlbum.widthAnchor, multiplier: 0.7).isActive = true
@@ -76,7 +72,7 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         table.delegate = self
         table.target = self
         table.doubleAction = #selector(apply)
-        ListLook.apply(table, in: scroll, rowHeight: 50)
+        Dash.applyList(table, in: scroll, rowHeight: 56)
 
         cover.cornerRadius = 3
         cover.widthAnchor.constraint(equalToConstant: 150).isActive = true
@@ -88,13 +84,13 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         for (name, field, now) in [("ARTIST", artist, album.artist), ("ALBUM", albumField, album.title),
                                    ("YEAR", year, album.year.map(String.init) ?? ""), ("GENRE", genre, currentGenre ?? "")] {
             field.stringValue = now
-            field.font = Fonts.hack(11)
+            field.font = Dash.font(13)
             field.placeholderString = "(leave as it is)"
             field.widthAnchor.constraint(greaterThanOrEqualToConstant: 230).isActive = true
             form.addRow(with: [label(name, size: 9), field])
             let was = NSTextField(labelWithString: now.isEmpty ? "now: nothing" : "now: \(now)")
-            was.font = Fonts.hack(8.5)
-            was.textColor = Theme.phosphorDim
+            was.font = Dash.font(10.5)
+            was.textColor = Dash.text3
             was.lineBreakMode = .byTruncatingTail
             form.addRow(with: [NSGridCell.emptyContentView, was])
         }
@@ -108,12 +104,11 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         saveCover.title = existingCover.map { "Replace \($0) with this cover" } ?? "Save the cover as cover.jpg in the folder"
         saveCover.state = existingCover == nil ? .on : .off
         for b in [writeTags, saveCover] {
-            b.font = Fonts.hack(10)
-            b.contentTintColor = Theme.phosphor
+            b.font = Dash.font(12)
         }
 
-        status.font = Fonts.hack(10)
-        status.textColor = LibraryStyle.dim
+        status.font = Dash.font(11.5)
+        status.textColor = Dash.text2
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
@@ -214,7 +209,7 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { candidates.count }
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { PlaylistRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CardRowView() }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let c = candidates[row]
@@ -299,7 +294,9 @@ final class CandidateCell: NSTableCellView {
     init() {
         super.init(frame: .zero)
         identifier = NSUserInterfaceItemIdentifier("cand")
-        art.cornerRadius = 2
+        art.cornerRadius = 4
+        art.surface = Dash.cardRaised
+        art.iconColor = Dash.text3
         for f in [title, sub] {
             f.translatesAutoresizingMaskIntoConstraints = false
             f.lineBreakMode = .byTruncatingTail
@@ -324,11 +321,11 @@ final class CandidateCell: NSTableCellView {
         art.placeholder = c.source == .archive ? LibraryWindowController.Section.shows.glyph : Fonts.Icon.music
         art.image = thumb
         title.stringValue = "\(c.album) — \(c.artist)"
-        title.font = Fonts.hack(11.5, bold: true)
-        title.textColor = Theme.playlistText
+        title.font = Dash.font(13, .semibold)
+        title.textColor = Dash.text
         sub.stringValue = ([c.source.rawValue.uppercased()] + [c.year.map(String.init), c.genre, c.detail].compactMap { $0 }.filter { !$0.isEmpty })
             .joined(separator: " · ")
-        sub.font = Fonts.hack(9.5)
-        sub.textColor = LibraryStyle.dim
+        sub.font = Dash.font(11)
+        sub.textColor = Dash.text2
     }
 }

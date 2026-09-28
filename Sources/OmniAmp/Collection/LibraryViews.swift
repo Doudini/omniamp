@@ -104,19 +104,33 @@ final class LibraryArt {
 
 // MARK: Cells
 
-/// A text cell for the library lists, reused by identifier.
-func libraryLabel(_ table: NSTableView, _ id: String) -> NSTextField {
-    if let f = table.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? NSTextField { return f }
-    let f = NSTextField(labelWithString: "")
-    f.identifier = NSUserInterfaceItemIdentifier(id)
-    f.lineBreakMode = .byTruncatingTail
-    f.cell?.usesSingleLineMode = true
-    return f
+/// A text cell for the library lists: one label, centred vertically, reused by identifier.
+final class TextCell: NSTableCellView {
+    let field = NSTextField(labelWithString: "")
+    init(_ id: String) {
+        super.init(frame: .zero)
+        identifier = NSUserInterfaceItemIdentifier(id)
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.usesSingleLineMode = true
+        addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
 }
 
+func libraryLabel(_ table: NSTableView, _ id: String) -> NSTextField {
+    ((table.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? TextCell) ?? TextCell(id)).field
+}
+
+/// Text colors in the library (see Dash): details grey, labels muted.
 enum LibraryStyle {
-    static var dim: NSColor { Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)! }
-    static var header: NSColor { Theme.phosphorDim.blended(withFraction: 0.6, of: Theme.phosphor)! }
+    static var dim: NSColor { Dash.text2 }
+    static var header: NSColor { Dash.text3 }
 }
 
 /// A name with a count on the right; for years, a bar behind it showing how many.
@@ -137,10 +151,10 @@ final class BucketCell: NSTableCellView {
         count.setContentCompressionResistancePriority(.required, for: .horizontal)
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
-            name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             name.centerYAnchor.constraint(equalTo: centerYAnchor),
             count.leadingAnchor.constraint(greaterThanOrEqualTo: name.trailingAnchor, constant: 6),
-            count.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            count.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             count.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
@@ -148,18 +162,18 @@ final class BucketCell: NSTableCellView {
 
     func show(_ title: String, _ n: Int?, bold: Bool = false) {
         name.stringValue = title
-        name.font = Fonts.hack(11.5, bold: bold)
-        name.textColor = Theme.playlistText
+        name.font = Dash.font(13, bold ? .semibold : .regular)
+        name.textColor = Dash.text
         count.stringValue = n.map { $0.formatted() } ?? ""
-        count.font = Fonts.hack(10)
-        count.textColor = LibraryStyle.dim
+        count.font = Dash.mono(10.5)
+        count.textColor = Dash.text3
     }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let f = fraction, f > 0 else { return }
-        let w = max(2, (bounds.width - 8) * min(1, f))
-        Theme.phosphor.withAlphaComponent(0.16).setFill()
-        NSBezierPath(roundedRect: NSRect(x: 2, y: 3, width: w, height: bounds.height - 6), xRadius: 2, yRadius: 2).fill()
+        let w = max(2, (bounds.width - 12) * min(1, f))
+        Dash.accent.withAlphaComponent(0.14).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 4, y: 4, width: w, height: bounds.height - 8), xRadius: 4, yRadius: 4).fill()
     }
 }
 
@@ -177,8 +191,10 @@ final class AlbumCell: NSTableCellView {
     init() {
         super.init(frame: .zero)
         identifier = NSUserInterfaceItemIdentifier("album")
-        art.cornerRadius = 2
+        art.cornerRadius = 4
         art.placeholder = Fonts.Icon.music
+        art.surface = Dash.cardRaised
+        art.iconColor = Dash.text3
         for f in [title, sub, badge] {
             f.translatesAutoresizingMaskIntoConstraints = false
             f.lineBreakMode = .byTruncatingTail
@@ -194,17 +210,17 @@ final class AlbumCell: NSTableCellView {
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         sub.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
-            stripe.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 1),
+            stripe.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             stripe.centerYAnchor.constraint(equalTo: centerYAnchor),
-            stripe.widthAnchor.constraint(equalToConstant: 3), stripe.heightAnchor.constraint(equalToConstant: 36),
+            stripe.widthAnchor.constraint(equalToConstant: 3), stripe.heightAnchor.constraint(equalToConstant: 40),
             art.leadingAnchor.constraint(equalTo: stripe.trailingAnchor, constant: 5),
             art.centerYAnchor.constraint(equalTo: centerYAnchor),
-            art.widthAnchor.constraint(equalToConstant: 36), art.heightAnchor.constraint(equalToConstant: 36),
+            art.widthAnchor.constraint(equalToConstant: 40), art.heightAnchor.constraint(equalToConstant: 40),
             title.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 8),
-            title.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            title.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             title.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -6),
             sub.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            sub.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+            sub.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
             sub.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -4),
             badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             badge.centerYAnchor.constraint(equalTo: title.centerYAnchor),
@@ -219,22 +235,22 @@ final class AlbumCell: NSTableCellView {
         stripe.toolTip = a.kind.title
         let isShow = a.kind == .show && a.showDate != nil
         title.stringValue = isShow ? [a.showDate, a.venue].compactMap { $0 }.joined(separator: "  ") : a.title
-        title.font = Fonts.hack(12, bold: true)
+        title.font = Dash.font(13, .semibold)
         let none = a.unplayable >= a.tracks
-        title.textColor = none ? LibraryStyle.dim : Theme.playlistText
+        title.textColor = none ? Dash.text3 : Dash.text
         var parts: [String] = []
         if withArtist { parts.append(a.artist) }
         if !isShow, let y = a.year { parts.append(String(y)) }
         parts.append(a.tracks == 1 ? "1 track" : "\(a.tracks) tracks")
         if a.duration > 0 { parts.append(Self.length(a.duration)) }
         sub.stringValue = parts.joined(separator: " · ")
-        sub.font = Fonts.hack(10)
-        sub.textColor = LibraryStyle.dim
+        sub.font = Dash.font(11.5)
+        sub.textColor = Dash.text2
         // Formats OmniAmp can't play: say which, so the release can be converted.
         let fmt = a.unplayableFormat ?? "FORMAT"
         badge.stringValue = none ? "\(fmt) · CAN'T PLAY" : a.unplayable > 0 ? "\(a.unplayable) \(fmt) CAN'T PLAY" : (a.lossless ? "LOSSLESS" : "")
-        badge.font = Fonts.hack(8.5, bold: true)
-        badge.textColor = a.unplayable > 0 ? Theme.warning : Theme.phosphorDim
+        badge.font = Dash.mono(8.5, bold: true)
+        badge.textColor = a.unplayable > 0 ? Theme.warning : Dash.text3
         badge.toolTip = a.unplayable > 0 ? "macOS has no decoder for \(fmt) files (or they're copy-protected). Convert them to FLAC to play them." : nil
         art.image = nil
         if case let .some(img) = LibraryArt.shared.cached(a) { art.image = img; token = -1; return }
@@ -261,9 +277,9 @@ final class HeaderCell: NSTableCellView {
         for v in [label, swatch] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         swatch.wantsLayer = true
         swatch.layer?.cornerRadius = 2
-        labelLeading = label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4)
+        labelLeading = label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8)
         NSLayoutConstraint.activate([
-            swatch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            swatch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             swatch.centerYAnchor.constraint(equalTo: label.centerYAnchor),
             swatch.widthAnchor.constraint(equalToConstant: 8), swatch.heightAnchor.constraint(equalToConstant: 8),
             labelLeading,
@@ -275,11 +291,11 @@ final class HeaderCell: NSTableCellView {
     /// `kind`: the group's kind of recording, shown as its color.
     func show(_ text: String, kind: ReleaseKind? = nil) {
         label.stringValue = text.uppercased()
-        label.font = Fonts.hack(9.5, bold: true)
-        label.textColor = LibraryStyle.header
+        label.font = Dash.mono(9.5, bold: true)
+        label.textColor = Dash.text2
         swatch.isHidden = kind == nil
         swatch.layer?.backgroundColor = kind.map { Theme.kind($0).cgColor }
-        labelLeading.constant = kind == nil ? 4 : 17
+        labelLeading.constant = kind == nil ? 8 : 21
     }
 }
 
@@ -287,8 +303,8 @@ final class HeaderCell: NSTableCellView {
 final class HeaderRowView: NSTableRowView {
     override var isGroupRowStyle: Bool { get { false } set {} }
     override func drawBackground(in dirtyRect: NSRect) {
-        Theme.phosphorDim.withAlphaComponent(0.35).setFill()
-        NSRect(x: 4, y: 0.5, width: bounds.width - 8, height: 1).fill()
+        Dash.border.setFill()
+        NSRect(x: 8, y: 0.5, width: bounds.width - 16, height: 1).fill()
     }
 }
 
@@ -304,13 +320,13 @@ final class LetterStrip: NSView {
     override var isFlipped: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        Theme.lcd.setFill()
-        bounds.fill()
+        Dash.card.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         let h = bounds.height / CGFloat(Self.letters.count)
         let size = min(10, max(7, h * 0.8))
         for (i, l) in Self.letters.enumerated() {
             let on = present.contains(l)
-            let color = l == current ? Theme.current : (on ? Theme.phosphor : Theme.phosphorDim.withAlphaComponent(0.5))
+            let color = l == current ? Dash.accent : (on ? Dash.text2 : Dash.text3.withAlphaComponent(0.5))
             let attrs: [NSAttributedString.Key: Any] = [.font: Fonts.hack(size, bold: l == current), .foregroundColor: color]
             let s = NSAttributedString(string: l, attributes: attrs)
             let sz = s.size()
@@ -390,19 +406,17 @@ final class LibraryTimeline: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        Theme.lcd.setFill()
-        bounds.fill()
         guard !lanes.isEmpty else { return }
         let p = plot
         let yearW = min(12, max(2, p.width / CGFloat(max(1, span.upperBound - span.lowerBound)) - 1))
         let most = cells.values.flatMap { $0.values.map(\.count) }.max() ?? 1
-        let label: [NSAttributedString.Key: Any] = [.font: Fonts.hack(8, bold: true), .foregroundColor: LibraryStyle.header]
+        let label: [NSAttributedString.Key: Any] = [.font: Fonts.hack(8, bold: true), .foregroundColor: Dash.text2]
         for (i, kind) in lanes.enumerated() {
             let y = p.minY + CGFloat(i) * Self.laneHeight
             Theme.kind(kind).setFill()
             NSBezierPath(roundedRect: NSRect(x: 3, y: y + 3, width: 6, height: 6), xRadius: 1.5, yRadius: 1.5).fill()
             NSAttributedString(string: Self.short(kind), attributes: label).draw(at: NSPoint(x: 12, y: y + 1))
-            Theme.phosphorDim.withAlphaComponent(0.15).setFill()
+            Dash.grid.setFill()
             NSRect(x: p.minX, y: y + Self.laneHeight / 2, width: p.width, height: 1).fill()
             for (year, list) in cells[kind] ?? [:] {
                 let strength = 0.35 + 0.65 * CGFloat(list.count) / CGFloat(most)
@@ -418,7 +432,7 @@ final class LibraryTimeline: NSView {
             }
         }
         // Axis: a label every 5 or 10 years, as fits.
-        let axis: [NSAttributedString.Key: Any] = [.font: Fonts.hack(8), .foregroundColor: Theme.phosphorDim]
+        let axis: [NSAttributedString.Key: Any] = [.font: Fonts.hack(8), .foregroundColor: Dash.text3]
         let years = span.upperBound - span.lowerBound
         let step = years <= 12 ? 1 : years <= 30 ? 5 : 10
         var yr = (span.lowerBound + step - 1) / step * step

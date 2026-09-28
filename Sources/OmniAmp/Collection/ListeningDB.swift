@@ -18,6 +18,8 @@ struct ListeningStats: Sendable {
     /// Plays by weekday (0 = Sunday) and hour, local time.
     var clock: [[Int]] = Array(repeating: Array(repeating: 0, count: 24), count: 7)
     var notOwned: [LibraryStats.Bar] = []
+    /// Plays of artists who are in the library.
+    var ownedPlays = 0
     var neverPlayed: [LibraryStats.Bar] = []
 }
 
@@ -149,6 +151,7 @@ extension CollectionDB {
             s.ownedByCountry[r.text(0)] = Double(r.int(1)); s.ownedArtistsByCountry[r.text(0)] = r.int(2); s.mappedOwnedTracks += r.int(1)
         }
         s.ownedTracks = Int(try db.scalar("SELECT count(*) FROM files") ?? 0)
+        s.ownedPlays = Int(try db.scalar("SELECT count(*) FROM scrobbles WHERE artist_key IN (SELECT key FROM artists)") ?? 0)
         s.pendingArtists = (try? pendingArtistCount()) ?? 0
 
         // Owned tracks per artist, to mark played artists that are (or aren't) in the library.

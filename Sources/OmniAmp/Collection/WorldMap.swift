@@ -110,13 +110,13 @@ final class WorldMapView: NSView {
             let p = c.path.copy() as! NSBezierPath
             p.transform(using: t)
             let s = Self.step(values[c.iso] ?? 0, max: most)
-            (s < 0 ? Theme.phosphorDim.withAlphaComponent(0.14) : Theme.phosphor.withAlphaComponent(Self.steps[s])).setFill()
+            (s < 0 ? Dash.cardRaised : Dash.accent.withAlphaComponent(Self.steps[s])).setFill()
             p.fill()
-            Theme.lcd.setStroke()
+            Dash.card.setStroke()
             p.lineWidth = 0.6
             p.stroke()
             if i == hovered || c.iso == selected {
-                (c.iso == selected ? Theme.current : Theme.current.withAlphaComponent(0.7)).setStroke()
+                (c.iso == selected ? Dash.text : Dash.text.withAlphaComponent(0.6)).setStroke()
                 p.lineWidth = 1.5
                 p.stroke()
             }

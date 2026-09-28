@@ -100,8 +100,8 @@ final class VersionTimeline: StatsChart {
             Theme.kind(lane.kind).setFill()
             NSBezierPath(roundedRect: NSRect(x: 2, y: y + Self.laneH / 2 - 4, width: 8, height: 8), xRadius: 2, yRadius: 2).fill()
             let n = versions.filter { VersionLane($0.kind) == lane }.count
-            Self.text("\(lane.title) \(n)", 9, LibraryStyle.header, bold: true).draw(at: NSPoint(x: 15, y: y + Self.laneH / 2 - 7))
-            Theme.phosphorDim.withAlphaComponent(0.2).setFill()
+            Self.text("\(lane.title) \(n)", 9, Dash.text2, bold: true).draw(at: NSPoint(x: 15, y: y + Self.laneH / 2 - 7))
+            Dash.grid.setFill()
             NSRect(x: Self.labelW, y: y + Self.laneH / 2, width: bounds.width - Self.labelW - 4, height: 1).fill()
         }
         // Axis: years, every 1, 2, 5 or 10 as fits.
@@ -112,13 +112,13 @@ final class VersionTimeline: StatsChart {
         yr = (yr + step - 1) / step * step
         while Double(yr) <= span.upperBound {
             let px = x(Double(yr))
-            Theme.phosphorDim.withAlphaComponent(0.35).setFill()
+            Dash.grid.setFill()
             NSRect(x: px, y: 0, width: 1, height: baseY).fill()
-            Self.text(String(yr), 8.5, LibraryStyle.dim).draw(at: NSPoint(x: px - 12, y: baseY + 4))
+            Self.text(String(yr), 8.5, Dash.text3).draw(at: NSPoint(x: px - 12, y: baseY + 4))
             yr += step
         }
         let undated = versions.count - dated.count
-        if undated > 0 { Self.text("+\(undated) undated", 8.5, LibraryStyle.dim).draw(at: NSPoint(x: 15, y: baseY + 4)) }
+        if undated > 0 { Self.text("+\(undated) undated", 8.5, Dash.text3).draw(at: NSPoint(x: 15, y: baseY + 4)) }
         for (i, (v, c)) in centres().enumerated() {
             let hot = hovered == i
             let rad = hot ? Self.r + 2 : Self.r
@@ -126,7 +126,7 @@ final class VersionTimeline: StatsChart {
             Theme.kind(v.kind).withAlphaComponent(v.track.playable ? 1 : 0.35).setFill()
             dot.fill()
             // A ring in the background color keeps overlapping dots apart; white when hovered.
-            (hot ? Theme.current : Theme.lcd).setStroke()
+            (hot ? Dash.text : Dash.card).setStroke()
             dot.lineWidth = hot ? 2 : 1.5
             dot.stroke()
         }
@@ -156,7 +156,7 @@ final class SongPage: NSScrollView {
         doc.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         doc.addSubview(stack)
         documentView = doc
@@ -196,11 +196,10 @@ final class SongPage: NSScrollView {
         plays.byAlbum[Keys.fold(v.release)] ?? plays.byAlbum[Keys.fold(v.track.album)] ?? 0
     }
 
-    private func button(_ glyph: String, _ label: String, _ action: Selector, tip: String) -> ModernButton {
-        let b = ModernButton(glyph: glyph, label: label, target: self, action: action)
-        b.glyphSize = 10
+    private func button(_ glyph: String, _ label: String, _ action: Selector, tip: String, prominent: Bool = false) -> Pill {
+        let b = Pill(label, glyph: glyph.isEmpty ? nil : glyph, target: self, action: action)
+        b.prominent = prominent
         b.toolTip = tip
-        b.heightAnchor.constraint(equalToConstant: 22).isActive = true
         return b
     }
 
@@ -214,22 +213,22 @@ final class SongPage: NSScrollView {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         guard let first = versions.first else {
             let l = NSTextField(labelWithString: "No recordings of this song in the library.")
-            l.font = Fonts.hack(11)
-            l.textColor = LibraryStyle.dim
-            stack.addArrangedSubview(button("", "‹ BACK", #selector(back), tip: "Back to the library"))
+            l.font = Dash.font(13)
+            l.textColor = Dash.text2
+            stack.addArrangedSubview(button("", "‹  Back", #selector(back), tip: "Back to the library"))
             stack.addArrangedSubview(l)
             return
         }
 
         // Title, artist, the counts; then the actions.
         let title = NSTextField(labelWithString: Self.bestTitle(versions))
-        title.font = Fonts.hack(20, bold: true)
-        title.textColor = Theme.phosphor
+        title.font = Dash.font(24, .semibold)
+        title.textColor = Dash.text
         title.lineBreakMode = .byTruncatingTail
         let artist = NSButton(title: first.track.artist, target: self, action: #selector(openArtist))
         artist.isBordered = false
-        artist.attributedTitle = NSAttributedString(string: first.track.artist, attributes: [.font: Fonts.hack(12, bold: true),
-                                                                                             .foregroundColor: Theme.playlistText])
+        artist.attributedTitle = NSAttributedString(string: first.track.artist, attributes: [.font: Dash.font(14, .semibold),
+                                                                                             .foregroundColor: Dash.accent])
         artist.toolTip = "Open the artist"
         let official = versions.filter { $0.kind.isOfficial }.count
         let years = versions.compactMap { $0.when.map { Int($0) } }
@@ -237,16 +236,16 @@ final class SongPage: NSScrollView {
         if let lo = years.min(), let hi = years.max() { summary += lo == hi ? " · \(lo)" : " · \(lo)–\(hi)" }
         if plays.total > 0 { summary += " · \(plays.total.formatted()) plays" }
         let sub = NSTextField(labelWithString: summary)
-        sub.font = Fonts.hack(10)
-        sub.textColor = LibraryStyle.dim
+        sub.font = Dash.font(12.5)
+        sub.textColor = Dash.text2
         let names = NSStackView(views: [artist, sub])
         names.spacing = 10
-        let top = NSStackView(views: [button("", "‹ BACK", #selector(back), tip: "Back to the library"), title])
+        let top = NSStackView(views: [button("", "‹  Back", #selector(back), tip: "Back to the library"), title])
         top.spacing = 12
         let live = versions.contains { [.live, .show].contains($0.kind) }
-        var actions: [NSView] = [button(Fonts.Icon.play, "PLAY ALL IN ORDER", #selector(playAll), tip: "Oldest to newest: the song's whole story")]
-        if live { actions.append(button(Fonts.Icon.play, "LIVE ONLY", #selector(playLive), tip: "Live albums and shows, oldest first")) }
-        actions.append(button(Fonts.Icon.plus, "ADD ALL", #selector(addAll), tip: "Add every version to the playlist"))
+        var actions: [NSView] = [button(Fonts.Icon.play, "Play all in order", #selector(playAll), tip: "Oldest to newest: the song's whole story", prominent: true)]
+        if live { actions.append(button(Fonts.Icon.play, "Live only", #selector(playLive), tip: "Live albums and shows, oldest first")) }
+        actions.append(button(Fonts.Icon.plus, "Add all", #selector(addAll), tip: "Add every version to the playlist"))
         let actionRow = NSStackView(views: actions)
         actionRow.spacing = 6
         let header = NSStackView(views: [top, names, actionRow])
@@ -291,7 +290,7 @@ final class SongPage: NSScrollView {
             bars.sort { $0.value > $1.value }
             if other > 0 { bars.append(.init(id: "", label: "other releases", value: Double(other), detail: "not in library")) }
             perVersion.bars = Array(bars.prefix(12))
-            perVersion.color = { byKey[$0.id].map { Theme.kind($0.kind) } ?? Theme.phosphorDim }
+            perVersion.color = { byKey[$0.id].map { Theme.kind($0.kind) } ?? Dash.text3 }
             perVersion.tip = { "\($0.label): \(Int($0.value).formatted()) plays" }
             let years = YearsChart()
             years.unit = "play"
@@ -304,8 +303,8 @@ final class SongPage: NSScrollView {
                      StatsPanel("Plays per year", years, note: note)]
         } else {
             let l = NSTextField(wrappingLabelWithString: "No last.fm plays of this song yet (LISTENING imports your history).")
-            l.font = Fonts.hack(10)
-            l.textColor = LibraryStyle.dim
+            l.font = Dash.font(12)
+            l.textColor = Dash.text2
             right = [StatsPanel("Your plays of this song", l)]
         }
         let rightColumn = NSStackView(views: right)
