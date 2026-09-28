@@ -44,7 +44,7 @@ final class PodcastTests: XCTestCase {
         XCTAssertEqual(e2.url, "https://example.com/ep2.mp3")
         XCTAssertEqual(e2.duration, 3723)
         XCTAssertEqual(e2.published, 1_772_532_000)
-        XCTAssertEqual(e2.summary, "All about skins & more.\nSecond paragraph.")
+        XCTAssertEqual(e2.summary, "All about skins & more.\n\nSecond paragraph.", "paragraphs stay apart")
         XCTAssertEqual(p.episodes[1].duration, 754)
         XCTAssertNotNil(p.episodes[1].published, "single-digit day and GMT zone")
     }

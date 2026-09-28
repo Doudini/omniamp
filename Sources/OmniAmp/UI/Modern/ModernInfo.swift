@@ -185,7 +185,9 @@ final class ModernInfoView: NSView {
     private let format = NSTextField(labelWithString: "")
     private let file = NSTextField(labelWithString: "")
     private let albumLine = NSTextField(labelWithString: "")
-    private let comment = NSTextField(labelWithString: "")
+    /// Notes (podcasts) or the comment tag (music): laid out for reading, links clickable.
+    private let comment = NotesTextView()
+    private var commentColor: NSColor { Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)! }
     private let rule = NSBox()
     private var revealButton: ModernButton!
     private var shownPath: String?
@@ -235,7 +237,7 @@ final class ModernInfoView: NSView {
         l.setContentHuggingPriority(.defaultLow, for: .horizontal)
     }
 
-    private var labels: [NSTextField] { [title, byline, albumTitle, numbers, credits, format, file, albumLine, comment] }
+    private var labels: [NSTextField] { [title, byline, albumTitle, numbers, credits, format, file, albumLine] }
 
     private func build() {
         let dim = Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor)!
@@ -247,7 +249,6 @@ final class ModernInfoView: NSView {
         style(format, 10.5, color: Theme.phosphor)
         style(file, 10, color: dim, lines: 1)
         style(albumLine, 10, color: dim)
-        style(comment, 10, color: dim, lines: 12)   // the drawer scrolls: notes can be long
         modeLabel.font = Fonts.hack(8.5, bold: true)
         modeLabel.textColor = Theme.phosphorDim
         modeLabel.alignment = .right
@@ -311,6 +312,7 @@ final class ModernInfoView: NSView {
             modeLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
         ])
         for l in labels where l !== file && l !== title { l.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        comment.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         // The title wraps before it reaches the NOW PLAYING / ON AIR tag.
         let titleWidth = title.widthAnchor.constraint(equalTo: stack.widthAnchor)
         titleWidth.priority = .defaultHigh
@@ -434,10 +436,11 @@ final class ModernInfoView: NSView {
         file.stringValue = t.path
         file.toolTip = t.path
         albumLine.isHidden = true
-        comment.maximumNumberOfLines = 6
-        comment.stringValue = t.summary ?? ""
-        comment.toolTip = t.summary
-        comment.isHidden = comment.stringValue.isEmpty
+        // The whole notes (the drawer scrolls), with the feed's links on their text when the feed is known.
+        let notes = t.summary ?? ""
+        comment.show(NotesText.attributed(notes, links: PodcastLibrary.shared.knownEpisode(t.path)?.links,
+                                          font: Fonts.hack(10), color: commentColor))
+        comment.isHidden = notes.isEmpty
     }
 
     private func apply(index i: Int, details d: TrackDetails?, thumb: CGImage?, artPixels: CGSize?) {
@@ -487,11 +490,9 @@ final class ModernInfoView: NSView {
         albumLine.stringValue = albumBits.joined(separator: " · ")
         albumLine.isHidden = albumBits.isEmpty
 
-        comment.maximumNumberOfLines = 3
-        let cm = d?.comment?.replacingOccurrences(of: "\n", with: " ")
-        comment.stringValue = cm.map { "“\($0)”" } ?? ""
-        comment.toolTip = d?.comment
-        comment.isHidden = cm?.isEmpty ?? true
+        let cm = d?.comment?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        comment.show(NotesText.attributed(cm.isEmpty ? "" : "“\(cm)”", font: Fonts.hack(10), color: commentColor))
+        comment.isHidden = cm.isEmpty
     }
 
     @objc private func reveal() {

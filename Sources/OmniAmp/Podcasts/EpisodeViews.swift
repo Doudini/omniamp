@@ -190,30 +190,10 @@ final class EpisodeNotesView: NSView {
     private var shownURL: String?
     private var shownSummary: String?
 
-    /// Show notes with the feed's links put back on their text, plus any bare web addresses.
+    /// Show notes laid out for reading (paragraphs, hyphenation), with the feed's links put back on their
+    /// text plus any bare web addresses.
     static func notes(_ e: PodcastEpisode, font: NSFont, color: NSColor) -> NSAttributedString {
-        let body = e.summary ?? "This episode has no show notes."
-        let out = NSMutableAttributedString(string: body, attributes: [.font: font, .foregroundColor: color])
-        let ns = body as NSString
-        var linked: [NSRange] = []
-        func isFree(_ r: NSRange) -> Bool { !linked.contains { NSIntersectionRange($0, r).length > 0 } }
-        for pair in e.links ?? [] where pair.count == 2 {
-            guard let url = URL(string: pair[1]) else { continue }
-            // The first occurrence of the link's text that isn't linked yet.
-            var from = 0
-            while from < ns.length {
-                let r = ns.range(of: pair[0], range: NSRange(location: from, length: ns.length - from))
-                guard r.location != NSNotFound else { break }
-                if isFree(r) { out.addAttribute(.link, value: url, range: r); linked.append(r); break }
-                from = r.location + r.length
-            }
-        }
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
-            for m in detector.matches(in: body, range: NSRange(location: 0, length: ns.length)) where isFree(m.range) {
-                if let url = m.url { out.addAttribute(.link, value: url, range: m.range); linked.append(m.range) }
-            }
-        }
-        return out
+        NotesText.attributed(e.summary ?? "This episode has no show notes.", links: e.links, font: font, color: color)
     }
 }
 

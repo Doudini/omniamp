@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import XCTest
 @testable import OmniAmp
@@ -75,5 +76,33 @@ final class LongFileSegmentTests: XCTestCase {
         XCTAssertEqual(parts.reduce(0) { $0 + AVAudioFramePosition($1.frames) }, frames)
         XCTAssertEqual(AudioPlayer.segments(from: 0, count: 500).map(\.frames), [500], "normal tracks: one segment")
         XCTAssertEqual(AudioPlayer.segments(from: 0, count: 10, limit: 4).map(\.frames), [4, 4, 2])
+    }
+}
+
+final class NotesLayoutTests: XCTestCase {
+    func testFeedHTMLKeepsParagraphsAndLineBreaksApart() {
+        let html = "<p>First  paragraph,<br/>same one. </p><p>Werbung: </p><ul><li>One</li><li>Two</li></ul>\r\n\r\n\r\n<p>End</p>"
+        XCTAssertEqual(PodcastFeedParser.plainText(html), "First paragraph,\nsame one.\n\nWerbung:\n\nOne\nTwo\n\nEnd")
+    }
+
+    func testParagraphsAreSpacedAndLineBreaksStayInside() {
+        XCTAssertEqual(NotesText.paragraphs("A\nB\n\nC"), "A\u{2028}B\nC", "blank line: new paragraph; single break: same paragraph")
+        XCTAssertEqual(NotesText.paragraphs("Intro.\nWerbung: \nOffer.\nhttps://x.example"), "Intro.\nWerbung:\nOffer.\nhttps://x.example",
+                       "older notes (no blank lines): every line is its own paragraph; no trailing spaces")
+    }
+
+    func testLinksAreClickableInTheTextsOwnFont() {
+        let font = NSFont.systemFont(ofSize: 10)
+        let s = NotesText.attributed("See the show page.\nhttps://linktr.ee/x", links: [["show page", "https://example.com/show"]],
+                                     font: font, color: .green)
+        let str = s.string as NSString
+        XCTAssertEqual(s.attribute(.link, at: str.range(of: "show page").location, effectiveRange: nil) as? URL,
+                       URL(string: "https://example.com/show"))
+        XCTAssertNotNil(s.attribute(.link, at: str.range(of: "linktr.ee").location, effectiveRange: nil), "bare addresses too")
+        XCTAssertEqual(s.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, font)
+        XCTAssertEqual((s.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.hyphenationFactor, 0,
+                       "a paragraph with a link isn't hyphenated (the link would break)")
+        let t = NotesText.attributed("Just words here.", font: font, color: .green)
+        XCTAssertGreaterThan((t.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.hyphenationFactor ?? 0, 0)
     }
 }

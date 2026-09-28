@@ -444,12 +444,17 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
     }
 
     /// Show notes are HTML: keep the text, one paragraph per line, and cap the length.
+    /// Paragraphs (`</p>`, `</div>`, headings) are kept apart by a blank line, line breaks (`<br>`, list
+    /// items) are single newlines: the notes are laid out with space between paragraphs only.
     static func plainText(_ html: String) -> String {
-        var s = html.replacingOccurrences(of: "<br\\s*/?>|</p>|</li>", with: "\n", options: [.regularExpression, .caseInsensitive])
+        var s = html.replacingOccurrences(of: "</p>|</div>|</h[1-6]>|</ul>|</ol>|</blockquote>", with: "\n\n", options: [.regularExpression, .caseInsensitive])
+        s = s.replacingOccurrences(of: "<br\\s*/?>|</li>", with: "\n", options: [.regularExpression, .caseInsensitive])
         s = s.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
         s = decodeEntities(s)
-        s = s.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
-        s = s.replacingOccurrences(of: "\\n\\s*\\n+", with: "\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\r\n?", with: "\n", options: .regularExpression)
+        s = s.replacingOccurrences(of: "[ \\t\u{00A0}]+", with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: " *\n *", with: "\n", options: .regularExpression)   // no spaces at line ends
+        s = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         s = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return s.count > 2000 ? String(s.prefix(2000)) + "…" : s
     }
