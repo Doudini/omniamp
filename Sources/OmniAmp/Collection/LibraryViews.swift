@@ -127,6 +127,41 @@ func libraryLabel(_ table: NSTableView, _ id: String) -> NSTextField {
     ((table.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? TextCell) ?? TextCell(id)).field
 }
 
+/// A sidebar entry: icon and name, each centred on the row (one label with both fonts sat high: the icon
+/// font's taller line box moved the baseline).
+final class SidebarCell: NSTableCellView {
+    private let icon = NSTextField(labelWithString: "")
+    private let name = NSTextField(labelWithString: "")
+    init() {
+        super.init(frame: .zero)
+        identifier = NSUserInterfaceItemIdentifier("sidebar")
+        for f in [icon, name] {
+            f.translatesAutoresizingMaskIntoConstraints = false
+            f.lineBreakMode = .byTruncatingTail
+            addSubview(f)
+        }
+        icon.alignment = .center
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
+            name.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
+            name.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func show(glyph: String, title: String, selected: Bool, enabled: Bool) {
+        icon.stringValue = glyph
+        icon.font = Fonts.hack(13)
+        icon.textColor = enabled ? (selected ? Dash.accent : Dash.text2) : Dash.text3
+        name.stringValue = title
+        name.font = Dash.font(13, selected ? .semibold : .regular)
+        name.textColor = enabled ? Dash.text : Dash.text3
+    }
+}
+
 /// Text colors in the library (see Dash): details grey, labels muted.
 enum LibraryStyle {
     static var dim: NSColor { Dash.text2 }

@@ -57,7 +57,7 @@ enum Dash {
     static func applyList(_ table: NSTableView, in scroll: NSScrollView, rowHeight: CGFloat) {
         table.headerView = nil
         table.rowHeight = rowHeight
-        table.intercellSpacing = NSSize(width: 8, height: 0)
+        table.intercellSpacing = NSSize(width: table.numberOfColumns > 1 ? 8 : 0, height: 0)
         table.style = .plain
         table.gridStyleMask = []
         table.backgroundColor = card

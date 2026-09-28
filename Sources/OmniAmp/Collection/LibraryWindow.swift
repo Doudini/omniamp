@@ -319,6 +319,12 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         t.doubleAction = #selector(doubleClicked(_:))
         t.onKey = { [weak self, weak t] e in t.map { self?.tableKey(e, in: $0) ?? false } ?? false }
         Dash.applyList(t, in: scroll, rowHeight: rowHeight)
+        // A single-column list is exactly as wide as its card (wider, the selection's right side was cut off).
+        if columns.count == 1 {
+            t.intercellSpacing = NSSize(width: 0, height: 0)
+            columns[0].resizingMask = .autoresizingMask
+            t.sizeLastColumnToFit()
+        }
         // Only the title column stretches.
         if columns.count > 1 { t.columnAutoresizingStyle = .uniformColumnAutoresizingStyle; columns.dropFirst(2).forEach { $0.resizingMask = [] } }
     }
@@ -981,15 +987,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         switch tableView {
         case sidebar:
             let s = Section(rawValue: row)!
-            let f = libraryLabel(tableView, "section")
-            let on = !searching || s == .artists
-            let selected = sidebar.selectedRow == row
-            let text = NSMutableAttributedString(string: "  " + s.glyph + "   ", attributes: [
-                .font: Fonts.hack(12), .foregroundColor: on ? (selected ? Dash.accent : Dash.text2) : Dash.text3])
-            text.append(NSAttributedString(string: s.title, attributes: [
-                .font: Dash.font(13, selected ? .semibold : .regular), .foregroundColor: on ? Dash.text : Dash.text3]))
-            f.attributedStringValue = text
-            return f
+            let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("sidebar"), owner: nil) as? SidebarCell) ?? SidebarCell()
+            cell.show(glyph: s.glyph, title: s.title, selected: sidebar.selectedRow == row, enabled: !searching || s == .artists)
+            return cell
         case middle:
             let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("bucket"), owner: nil) as? BucketCell) ?? BucketCell()
             guard row < entries.count else { return cell }
