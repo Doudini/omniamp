@@ -204,6 +204,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             menu.delegate = self
             t.menu = menu
         }
+        sidebar.action = #selector(sidebarClicked)
         let artistMenu = NSMenu()
         artistMenu.delegate = self
         middle.menu = artistMenu
@@ -453,6 +454,21 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         let t = tracks[r]
         let artist = t.albumKey.components(separatedBy: "\u{1}").first ?? Keys.artist(t.artist)
         showSong(artist: artist, titleKey: Keys.title(t.title))
+    }
+
+    /// A click on the section already highlighted (Artists while searching, or the one under an open page):
+    /// no selection change, so it's handled here. It ends the search or closes the pages.
+    @objc private func sidebarClicked() {
+        let row = sidebar.clickedRow
+        guard row >= 0, row == sidebar.selectedRow, let s = Section(rawValue: row), searching || !pages.isEmpty else { return }
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(searchChanged), object: nil)
+        search.stringValue = ""
+        query = ""
+        pages = []
+        songPage.isHidden = true
+        artistPage.isHidden = true
+        section = s
+        reloadAll(keepEntry: nil)
     }
 
     /// From a chart: the library at that genre, year or artist.
@@ -969,7 +985,6 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
         if tableView === albumTable, row < items.count, case .header = items[row] { return false }
-        if tableView === sidebar, searching { return false }
         return true
     }
 
@@ -978,7 +993,20 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         switch t {
         case sidebar:
             sidebar.reloadData(forRowIndexes: IndexSet(0..<Section.allCases.count), columnIndexes: [0])   // the selected one's look
-            guard !searching, let s = Section(rawValue: sidebar.selectedRow) else { return }
+            guard let s = Section(rawValue: sidebar.selectedRow) else { return }
+            // Searching highlights Artists itself (not a choice); a click on it ends the search in sidebarClicked.
+            if searching, s != .artists {
+                // A section chosen while searching: the search ends, the section opens.
+                NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(searchChanged), object: nil)
+                search.stringValue = ""
+                query = ""
+                pages = []
+                songPage.isHidden = true
+                artistPage.isHidden = true
+                section = s
+                reloadAll(keepEntry: nil)
+                return
+            }
             if !pages.isEmpty {   // leaving the pages
                 pages = []
                 songPage.isHidden = true
@@ -1004,7 +1032,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         case sidebar:
             let s = Section(rawValue: row)!
             let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("sidebar"), owner: nil) as? SidebarCell) ?? SidebarCell()
-            cell.show(glyph: s.glyph, title: s.title, selected: sidebar.selectedRow == row, enabled: !searching || s == .artists)
+            cell.show(glyph: s.glyph, title: s.title, selected: sidebar.selectedRow == row, enabled: true)
             return cell
         case middle:
             let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("bucket"), owner: nil) as? BucketCell) ?? BucketCell()
