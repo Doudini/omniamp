@@ -9,7 +9,7 @@ import AppKit
 final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
                                      NSMenuDelegate, NSSearchFieldDelegate {
     enum Section: Int, CaseIterable {
-        case artists, shows, years, genres, added
+        case artists, shows, years, genres, added, stats
 
         var title: String {
             switch self {
@@ -18,6 +18,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             case .years: "Years"
             case .genres: "Genres"
             case .added: "Recently Added"
+            case .stats: "Stats"
             }
         }
         var glyph: String {
@@ -27,6 +28,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             case .years: "\u{F00ED}"     // nf-md-calendar_blank
             case .genres: "\u{F0770}"    // nf-md-tag_multiple
             case .added: "\u{F0150}"     // nf-md-clock_outline
+            case .stats: "\u{F0128}"     // nf-md-chart_bar
             }
         }
     }
@@ -72,6 +74,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var losslessButton: ModernButton!
     private var observers: [NSObjectProtocol] = []
     private var refreshPending = false
+    private let statsPage = StatsPage()
+    private var statsGeneration = 0
 
     init(controller: PlayerController) {
         self.controller = controller
@@ -207,7 +211,15 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         bottom.spacing = 6
 
         let root = NSView()
-        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom] as [NSView] {
+        statsPage.onGenre = { [weak self] g in self?.open(.genres, g) }
+        statsPage.onYear = { [weak self] y in self?.open(.years, String(y)) }
+        statsPage.onArtist = { [weak self] a in self?.open(.artists, a) }
+        statsPage.onSearch = { [weak self] q in
+            guard let self else { return }
+            self.search.stringValue = q
+            self.searchChanged()
+        }
+        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -253,6 +265,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             empty.centerYAnchor.constraint(equalTo: alb.centerYAnchor),
             empty.widthAnchor.constraint(lessThanOrEqualTo: alb.widthAnchor, constant: -40),
 
+            statsPage.topAnchor.constraint(equalTo: side.topAnchor),
+            statsPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
+            statsPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
+            statsPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+
             bottom.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             bottom.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             bottom.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -12),
@@ -296,7 +313,38 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         updateStatus()
     }
 
+    /// Stats replaces the lists; everything else shows them.
+    private var showingStats: Bool { section == .stats && !searching }
+
+    private func showStatsPage() {
+        for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty] as [NSView] { v.isHidden = true }
+        statsPage.isHidden = false
+        if statsPage.documentView?.subviews.first.map({ ($0 as? NSStackView)?.arrangedSubviews.isEmpty ?? true }) ?? true {
+            statsPage.showLoading()
+        }
+        // Counted on a connection of its own, off the main thread (a 100k-track library takes a moment).
+        statsGeneration += 1
+        let gen = statsGeneration, filter = self.filter
+        DispatchQueue.global(qos: .userInitiated).async {
+            let stats = try? CollectionDB().stats(filter)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, gen == self.statsGeneration, self.showingStats, let stats else { return }
+                self.statsPage.show(stats)
+            }
+        }
+    }
+
+    /// From a chart: the library at that genre, year or artist.
+    private func open(_ s: Section, _ entry: String) {
+        section = s
+        reloadAll(keepEntry: entry)
+        window?.makeFirstResponder(middle)
+    }
+
     private func loadEntries(keep: String?, keepAlbum: String? = nil) {
+        statsPage.isHidden = !showingStats
+        for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingStats }
+        if showingStats { showStatsPage(); return }
         guard let db else { entries = []; middle.reloadData(); showEmpty(); return }
         do {
             switch searching ? .artists : section {
@@ -311,6 +359,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 entries = try db.genres(filter).map { Entry(id: $0.id, title: $0.title, count: $0.count) }
             case .added:
                 entries = try db.addedMonths(filter).map { Entry(id: $0.id, title: $0.title, count: $0.count) }
+            case .stats:
+                entries = []
             }
         } catch {
             NSLog("OmniAmp: library query failed: %@", "\(error)")
@@ -364,6 +414,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 case .added:
                     list = try db.albums(addedIn: e.id, filter)
                     grouping = { _ in "" }
+                case .stats:
+                    break
                 }
             } catch {
                 NSLog("OmniAmp: library query failed: %@", "\(error)")
@@ -427,6 +479,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private func showEmpty() {
+        if showingStats { empty.isHidden = true; return }
         if let err = library.openError {
             empty.stringValue = "The library database couldn't be opened:\n\(err)"
         } else if library.roots.isEmpty {

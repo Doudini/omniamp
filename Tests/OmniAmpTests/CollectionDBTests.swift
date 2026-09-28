@@ -193,6 +193,57 @@ final class CollectionDBTests: XCTestCase {
         XCTAssertEqual(CollectionDB.genres("Rock; rock/Pop ,  "), ["Rock", "Pop"])
     }
 
+    func testStats() throws {
+        let d = try db()
+        var rows: [LibraryFile] = []
+        // Two albums and three shows of one band; "Dark Star" on all five; one placeholder title everywhere.
+        for (n, (album, kind, year)) in [("Aoxomoxoa", ReleaseKind.album, 1969), ("Live/Dead", .live, 1969),
+                                         ("1972-05-04 Paris", .show, 1972), ("1977-05-08 Ithaca", .show, 1977),
+                                         ("1977-05-09 Buffalo", .show, 1977)].enumerated() {
+            rows.append(row(n * 10, artist: "Grateful Dead", album: album, title: n % 2 == 0 ? "Dark Star" : "Dark Star (Live)",
+                            kind: kind, genre: "Rock", year: year))
+            rows.append(row(n * 10 + 1, artist: "Grateful Dead", album: album, title: "Track 01", kind: kind, genre: "Rock", year: year))
+        }
+        rows.append(row(99, artist: "Björk", album: "Homogenic", title: "Jóga", genre: "Electronic", year: 1997))
+        for i in rows.indices where rows[i].result.kind == .show {
+            rows[i].result.showDate = String(rows[i].result.album.prefix(10))
+        }
+        try d.upsert(rows)
+        let s = try d.stats(LibraryFilter())
+        XCTAssertEqual(s.tracks, 11)
+        XCTAssertEqual(s.releases, 6)
+        XCTAssertEqual(s.artists, 2)
+        XCTAssertEqual(s.shows, 3)
+        XCTAssertEqual(s.losslessTracks, 11)
+        XCTAssertEqual(s.kinds.map(\.label), ["Albums", "Live Albums", "Shows & Bootlegs"])
+        XCTAssertEqual(s.kinds.map(\.value), [2, 1, 3])
+        XCTAssertEqual(s.genres.map(\.label), ["Rock", "Electronic"])
+        XCTAssertEqual(s.years.map(\.year), [1969, 1972, 1977, 1997])
+        XCTAssertEqual(s.showMonths, ["1972-05": 1, "1977-05": 2])
+        XCTAssertEqual(s.formats.map(\.label), ["FLAC"])
+        XCTAssertEqual(s.songs.map(\.title), ["Dark Star"], "versions folded; placeholder titles left out")
+        XCTAssertEqual(s.songs.first?.versions, 5)
+        XCTAssertEqual(s.songs.first?.unofficial, 3)
+        XCTAssertEqual(s.topArtists.first?.label, "Grateful Dead")
+        XCTAssertEqual(s.growth.last?.total, 11)
+        // Filters apply.
+        XCTAssertEqual(try d.stats(LibraryFilter(scope: .official)).tracks, 5)
+        XCTAssertEqual(try d.stats(LibraryFilter(scope: .unofficial)).songs.first?.versions, 3)
+    }
+
+    func testFormatGroups() {
+        XCTAssertEqual(CollectionDB.formatGroup(ext: "flac", bits: 24, rate: 96000, kbps: nil), "FLAC 24-bit")
+        XCTAssertEqual(CollectionDB.formatGroup(ext: "flac", bits: 16, rate: 44100, kbps: nil), "FLAC 16-bit")
+        XCTAssertEqual(CollectionDB.formatGroup(ext: "mp3", bits: nil, rate: nil, kbps: 320), "MP3 256–320")
+        XCTAssertEqual(CollectionDB.formatGroup(ext: "mp3", bits: nil, rate: nil, kbps: 128), "MP3 under 160")
+        XCTAssertEqual(CollectionDB.formatGroup(ext: "m4a", bits: nil, rate: nil, kbps: 256), "AAC")
+        XCTAssertEqual(CollectionDB.formatGroup(ext: "wma", bits: nil, rate: nil, kbps: 128), "WMA")
+        XCTAssertTrue(CollectionDB.isPlaceholderTitle("Track 03"))
+        XCTAssertTrue(CollectionDB.isPlaceholderTitle("07"))
+        XCTAssertFalse(CollectionDB.isPlaceholderTitle("Set Me Free"))
+        XCTAssertFalse(CollectionDB.isPlaceholderTitle("Dark Star"))
+    }
+
     /// A 100,000-track library: browsing queries stay interactive.
     func testQueriesAt100kTracks() throws {
         let d = try db()
@@ -227,6 +278,10 @@ final class CollectionDBTests: XCTestCase {
         _ = try timed("search artists") { try d.artists(matching: "song 777", LibraryFilter()) }
         _ = try timed("months") { try d.addedMonths(LibraryFilter()) }
         _ = try timed("summary") { try d.summary() }
+        let st = Date()
+        let stats = try d.stats(LibraryFilter())
+        NSLog("library: stats page %.1f ms", Date().timeIntervalSince(st) * 1000)
+        XCTAssertEqual(stats.tracks, 100_000)
         // Genres join every file: the slowest; allowed a little more.
         let t = Date()
         XCTAssertEqual(try d.genres(LibraryFilter()).count, 6)
