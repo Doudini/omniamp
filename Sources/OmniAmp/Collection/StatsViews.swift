@@ -614,85 +614,6 @@ final class ShowCalendar: StatsChart {
     }
 }
 
-/// A small line of the recent trend inside a tile.
-final class Sparkline: NSView {
-    var values: [Double] = [] { didSet { needsDisplay = true } }
-    override var isFlipped: Bool { true }
-    override func draw(_ dirtyRect: NSRect) {
-        guard values.count > 1, let hi = values.max(), hi > 0 else { return }
-        let pts = values.enumerated().map { i, v in
-            NSPoint(x: bounds.width * CGFloat(i) / CGFloat(values.count - 1), y: bounds.height - 2 - (bounds.height - 4) * CGFloat(v / hi))
-        }
-        let line = AreaChart.smoothPath(pts, floor: bounds.height)
-        let area = line.copy() as! NSBezierPath
-        area.line(to: NSPoint(x: bounds.width, y: bounds.height))
-        area.line(to: NSPoint(x: 0, y: bounds.height))
-        area.close()
-        NSGradient(starting: Dash.accent.withAlphaComponent(0.25), ending: Dash.accent.withAlphaComponent(0))?.draw(in: area, angle: 90)
-        Dash.accent.withAlphaComponent(0.9).setStroke()
-        line.lineWidth = 1.5
-        line.stroke()
-    }
-}
-
-/// A key figure: the number big and white, what it counts in grey; optionally the change against before
-/// ("▲ 12% vs 2025") and a sparkline of the trend.
-final class StatTile: NSView {
-    private var valueLabel: NSTextField!
-    private var sparkline: Sparkline?
-
-    /// The figure as large as fits (22 pt down to 13): a narrow window shrinks it rather than cutting it off.
-    override func layout() {
-        super.layout()
-        guard let v = valueLabel, bounds.width > 0 else { return }
-        sparkline?.isHidden = bounds.width < 180   // no room beside the caption
-        let room = bounds.width - 28
-        var size: CGFloat = 22
-        while size > 13, (v.stringValue as NSString).size(withAttributes: [.font: Dash.mono(size, bold: true)]).width > room { size -= 1 }
-        if v.font?.pointSize != size { v.font = Dash.mono(size, bold: true) }
-    }
-
-    init(_ value: String, _ caption: String, tip: String? = nil, delta: (text: String, up: Bool)? = nil, spark: [Double]? = nil) {
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        let v = Dash.label(value, Dash.mono(22, bold: true), Dash.text)
-        valueLabel = v
-        let c = Dash.label(caption, Dash.font(12), Dash.text2)
-        var rows: [NSView] = [v, c]
-        if let delta {
-            rows.append(Dash.label((delta.up ? "▲ " : "▼ ") + delta.text, Dash.mono(10.5, bold: true), delta.up ? Dash.up : Dash.down))
-        }
-        let s = NSStackView(views: rows)
-        s.orientation = .vertical
-        s.alignment = .leading
-        s.spacing = 2
-        s.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(s)
-        NSLayoutConstraint.activate([
-            s.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14), s.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            s.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -12),
-            // Exactly the tile's width (with widths relaxed, "at most" let it collapse and cut the figure off).
-            s.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: delta == nil ? 72 : 88),
-        ])
-        if let spark, spark.count > 1 {
-            let line = Sparkline()
-            sparkline = line
-            line.values = spark
-            line.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(line, positioned: .below, relativeTo: s)
-            // The trend on the right, clear of the figures.
-            NSLayoutConstraint.activate([
-                line.leadingAnchor.constraint(equalTo: centerXAnchor, constant: 10), line.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-                line.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12), line.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.42),
-            ])
-        }
-        toolTip = tip
-        Dash.styleCard(self)
-    }
-    required init?(coder: NSCoder) { fatalError() }
-}
-
 /// A card around a chart: an accent title, an optional grey note, the chart.
 final class StatsPanel: NSView {
     init(_ title: String, _ content: NSView, note: String? = nil) {
@@ -859,16 +780,20 @@ final class StatsPage: NSScrollView {
         let delta: (String, Bool)? = before > 0 ? (String(format: "%.0f%% vs %d", abs(Double(added - before) / Double(before) * 100), thisYear - 1),
                                                    added >= before) : nil
         let spark = (thisYear - 9...thisYear).map { Double(perYear[$0] ?? 0) }
-        rows.append(dashGrid([
-            (StatTile(s.tracks.formatted(), "tracks",
-                      tip: s.unplayable > 0 ? "\(s.unplayable.formatted()) of them in formats OmniAmp can't play" : nil), 1),
-            (StatTile(s.releases.formatted(), "releases"), 1),
-            (StatTile(s.artists.formatted(), "artists"), 1),
-            (StatTile(days >= 1 ? String(format: "%.1f d", days) : Self.hours(s.seconds / 3600), "of music",
-                      tip: "\(Int(s.seconds / 3600).formatted()) hours: that long to play everything once"), 1),
-            (StatTile(Self.size(s.bytes), "on disk"), 1),
-            (StatTile(added.formatted(), "added in \(thisYear)", tip: "tracks, by the date of the files", delta: delta, spark: spark), 1),
-        ], columns: 6))
+        let display = HiFiDisplay()
+        let gb = Double(s.bytes) / 1_000_000_000
+        display.items = [
+            .init(value: s.tracks.formatted(), label: "tracks",
+                  tip: s.unplayable > 0 ? "\(s.tracks.formatted()) tracks, \(s.unplayable.formatted()) of them in formats OmniAmp can't play" : nil),
+            .init(value: s.releases.formatted(), label: "releases"),
+            .init(value: s.artists.formatted(), label: "artists"),
+            .init(value: days >= 1 ? String(format: "%.1f", days) : String(format: "%.1f", s.seconds / 3600), label: days >= 1 ? "days of music" : "hours of music",
+                  tip: "\(Int(s.seconds / 3600).formatted()) hours: that long to play everything once"),
+            .init(value: gb >= 1000 ? String(format: "%.2f", gb / 1000) : String(format: "%.1f", gb), label: gb >= 1000 ? "TB on disk" : "GB on disk"),
+            .init(value: added.formatted(), label: "added \(thisYear)", tip: "\(added.formatted()) tracks added in \(thisYear), by the date of the files",
+                  meter: spark, delta: delta),
+        ]
+        rows.append(dashGrid([(display, 1)], columns: 1))
 
         // Release years, and what kind of recordings.
         let totalYears = s.years.reduce(0) { $0 + $1.releases }
@@ -953,5 +878,118 @@ final class StatsPage: NSScrollView {
         let y = ProcessInfo.processInfo.environment["OMNIAMP_STATS_SCROLL"].flatMap(Double.init) ?? 0
         contentView.scroll(to: NSPoint(x: 0, y: y))
         reflectScrolledClipView(contentView)
+    }
+}
+
+/// The key figures as the front panel of hi-fi gear: one dark glass display, glowing digits over their unlit
+/// segments, tiny caps labels, thin separators; a trend as a small level meter. Hover a figure for details.
+final class HiFiDisplay: StatsChart {
+    struct Item {
+        let value: String
+        let label: String
+        var tip: String? = nil
+        /// Recent values for a level meter beside the figure (oldest first).
+        var meter: [Double]? = nil
+        /// A change against before ("25% vs 2025").
+        var delta: (text: String, up: Bool)? = nil
+    }
+    var items: [Item] = [] { didSet { needsLayout = true; needsDisplay = true } }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 96) }
+
+    private func cell(_ i: Int) -> NSRect {
+        let w = bounds.width / CGFloat(max(items.count, 1))
+        return NSRect(x: CGFloat(i) * w, y: 0, width: w, height: bounds.height)
+    }
+
+    override func layoutRegions() {
+        regions = items.indices.map { i in Region(rect: cell(i), tip: items[i].tip ?? "\(items[i].value) \(items[i].label.lowercased())", action: nil) }
+    }
+
+    private static func isNumeric(_ s: String) -> Bool { s.allSatisfy { $0.isNumber || ".,'’ –-".contains($0) } }
+
+    /// The figures' size: as large as the widest number fits its cell (30 pt down to 14), the same for all numbers.
+    /// A name (not a number) doesn't count: it's cut to its column instead.
+    private func digitSize() -> CGFloat {
+        let room = bounds.width / CGFloat(max(items.count, 1)) - 28
+        var size: CGFloat = 30
+        while size > 14, items.contains(where: { Self.isNumeric($0.value)
+                && ($0.value as NSString).size(withAttributes: [.font: Dash.mono(size, bold: true)]).width + ($0.meter == nil ? 0 : 30) > room }) {
+            size -= 1
+        }
+        return size
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let glass = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+        // Dark glass, a faint sheen at the top, scanlines.
+        Theme.lcd.setFill()
+        glass.fill()
+        NSGraphicsContext.saveGraphicsState()
+        glass.addClip()
+        NSGradient(starting: NSColor.white.withAlphaComponent(0.05), ending: .clear)?
+            .draw(in: NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height * 0.45), angle: 90)
+        NSColor.black.withAlphaComponent(0.18).setFill()
+        var y: CGFloat = 1
+        while y < bounds.height { NSRect(x: 0, y: y, width: bounds.width, height: 1).fill(); y += 3 }
+        NSGraphicsContext.restoreGraphicsState()
+        Dash.border.setStroke()
+        glass.lineWidth = 1
+        glass.stroke()
+
+        let size = digitSize()
+        // The block (figure, then label) centred in the panel.
+        let top = ((bounds.height - (size * 1.25 + 6 + 12)) / 2).rounded()
+        let glow = NSShadow()
+        glow.shadowColor = Theme.phosphor.withAlphaComponent(0.55)
+        glow.shadowBlurRadius = 8
+        glow.shadowOffset = .zero
+        for (i, item) in items.enumerated() {
+            let r = cell(i)
+            if i > 0 {
+                Theme.phosphorDim.withAlphaComponent(0.25).setFill()
+                NSRect(x: r.minX, y: 16, width: 1, height: bounds.height - 32).fill()
+            }
+            let text = item.value
+            let x = r.minX + 16, room = r.width - 26
+            let numeric = Self.isNumeric(text)
+            // A name: a size between the numbers' and 15 pt, and cut to its column (never into the next).
+            var font = Dash.mono(size, bold: true)
+            if !numeric {
+                var ns = size
+                while ns > 15, (text as NSString).size(withAttributes: [.font: Dash.mono(ns, bold: true)]).width > room { ns -= 1 }
+                font = Dash.mono(ns, bold: true)
+            }
+            let textTop = top + (size - font.pointSize) * 0.8
+            // Unlit segments behind the digits (a real LCD shows its 8s faintly).
+            if numeric {
+                let ghost = String(text.map { $0.isNumber ? "8" : $0 })
+                NSAttributedString(string: ghost, attributes: [.font: font, .foregroundColor: Theme.phosphor.withAlphaComponent(0.07)])
+                    .draw(at: NSPoint(x: x, y: textTop))
+            }
+            NSGraphicsContext.saveGraphicsState()
+            glow.set()
+            let lit = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: hovered == i ? Theme.current : Theme.phosphor])
+            lit.draw(with: NSRect(x: x, y: textTop, width: room, height: font.pointSize * 1.4),
+                     options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            NSGraphicsContext.restoreGraphicsState()
+            // The level meter: bars of the recent values, the last one brightest.
+            if let m = item.meter, let hi = m.max(), hi > 0 {
+                let w = lit.size().width, bars = m.suffix(6)
+                let mx = x + w + 10, mh = size * 0.8
+                for (j, v) in bars.enumerated() {
+                    let h = max(2, mh * CGFloat(v / hi))
+                    Theme.phosphor.withAlphaComponent(j == bars.count - 1 ? 0.95 : 0.4).setFill()
+                    NSRect(x: mx + CGFloat(j) * 4, y: top + size * 1.1 - h, width: 3, height: h).fill()
+                }
+            }
+            var label = item.label.uppercased()
+            if item.delta != nil { label += "  " }
+            let l = NSMutableAttributedString(string: label, attributes: [.font: Dash.mono(9, bold: true), .foregroundColor: Theme.phosphorDim, .kern: 0.8])
+            if let d = item.delta {
+                l.append(NSAttributedString(string: (d.up ? "▲ " : "▼ ") + d.text, attributes: [.font: Dash.mono(9, bold: true),
+                                                                                              .foregroundColor: d.up ? Dash.up : Dash.down]))
+            }
+            l.draw(with: NSRect(x: x, y: top + size * 1.25 + 6, width: r.width - 22, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        }
     }
 }

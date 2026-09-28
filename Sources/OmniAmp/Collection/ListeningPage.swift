@@ -318,16 +318,18 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         let placed = s.plays > 0 ? Double(s.mappedPlays) / Double(s.plays) : 0
         let since = s.firstPlay.map { Calendar.current.component(.year, from: $0) }
         let topArtist = s.topArtists.first
-        rows.append(dashGrid([
-            (StatTile(s.plays.formatted(), "plays"), 1),
-            (StatTile(now.formatted(), "plays in \(year)", delta: delta, spark: (year - 9...year).map { Double(perYear[$0] ?? 0) }), 1),
-            (StatTile(s.artists.formatted(), "artists played"), 1),
-            (StatTile((showOwned ? s.ownedByCountry : s.playsByCountry).count.formatted(), "countries",
-                      tip: String(format: "%.0f%% of plays placed on the map", placed * 100)), 1),
-            (StatTile(topArtist.map { Self.short($0.label) } ?? "–", "most played artist",
-                      tip: topArtist.map { "\($0.label): \(Int($0.value).formatted()) plays" }), 1),
-            (StatTile(since.map(String.init) ?? "–", "listening since"), 1),
-        ], columns: 6))
+        let display = HiFiDisplay()
+        display.items = [
+            .init(value: s.plays.formatted(), label: "plays"),
+            .init(value: now.formatted(), label: "plays \(year)", meter: (year - 9...year).map { Double(perYear[$0] ?? 0) }, delta: delta),
+            .init(value: s.artists.formatted(), label: "artists"),
+            .init(value: (showOwned ? s.ownedByCountry : s.playsByCountry).count.formatted(), label: "countries",
+                  tip: String(format: "%.0f%% of plays placed on the map", placed * 100)),
+            .init(value: topArtist.map { $0.label } ?? "–", label: "most played",
+                  tip: topArtist.map { "\($0.label): \(Int($0.value).formatted()) plays" }),
+            .init(value: since.map(String.init) ?? "–", label: "since"),
+        ]
+        rows.append(dashGrid([(display, 1)], columns: 1))
 
         // 2. The story: plays per year, and how much of it you own.
         let area = AreaChart()
