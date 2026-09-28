@@ -38,6 +38,8 @@ final class PlayerController {
 
     // Gapless: the track preloaded behind the current one, and whether we already tried for this track.
     private var preloaded: (index: Int, path: String)?   // path = Track.key
+    /// A preload taken back after it may already have started: if it did, it's what plays now.
+    private var droppedPreload: (index: Int, path: String)?
     private var preloadAttempted = false
     /// One-shot timer that fires ~8 s before the end of the track to preload the next one.
     private var preloadTimer: Timer?
@@ -421,6 +423,7 @@ final class PlayerController {
         currentIndex = index
         dequeue(index)
         preloaded = nil
+        droppedPreload = nil
         preloadAttempted = false
         applyReplayGain()
         if !store.tracks[index].isEpisode { player.rate = 1 }
@@ -573,18 +576,29 @@ final class PlayerController {
         preloadAttempted = true
         guard let t = nextTarget(), t != currentIndex, !store.tracks[t].isRemote else { return }
         let track = store.tracks[t]
-        if player.queueNext(url: track.url, range: track.cueRange) { preloaded = (t, track.key) }
+        // Its own level from its first sample (tags are usually loaded by now; if not, it plays at 1.0 until they are).
+        if player.queueNext(url: track.url, range: track.cueRange, gain: replayGainFactor(for: track), tag: track.key) {
+            preloaded = (t, track.key)
+        }
     }
 
     private func gaplessAdvanced() {
         let old = currentIndex
-        var new: Int?
-        if let q = preloaded {
-            if q.index < store.tracks.count, store.tracks[q.index].key == q.path { new = q.index }
-            else { new = store.tracks.firstIndex { $0.key == q.path } }
+        let key = player.currentTag
+        func find(_ q: (index: Int, path: String)) -> Int? {
+            q.index < store.tracks.count && store.tracks[q.index].key == q.path ? q.index : store.tracks.firstIndex { $0.key == q.path }
         }
-        preloaded = nil
-        preloadAttempted = false
+        var new: Int?
+        if let q = droppedPreload, q.path == key, preloaded?.path != key {
+            // The one taken back had started already; what was queued since stays queued behind it.
+            new = find(q)
+            droppedPreload = nil
+        } else {
+            if let q = preloaded { new = find(q) } else if let k = key { new = store.tracks.firstIndex { $0.key == k } }
+            preloaded = nil
+            droppedPreload = nil
+            preloadAttempted = false
+        }
         if let o = old, o != new { pushHistory(o) }
         currentIndex = new
         if let n = new { dequeue(n) }
@@ -599,7 +613,7 @@ final class PlayerController {
 
     /// The preloaded track may no longer be the right one (order/filter/shuffle changed).
     private func invalidatePreload() {
-        if player.hasQueuedNext { player.cancelQueuedNext() }
+        if player.hasQueuedNext { droppedPreload = preloaded; player.cancelQueuedNext() }
         preloaded = nil
         preloadAttempted = false
         schedulePreloadCheck()
@@ -676,13 +690,22 @@ final class PlayerController {
         ui?.optionsDidChange()
     }
 
-    /// Short output status for the UI, e.g. "BIT-PERFECT 96 kHz" or "RESAMPLED 96→48 kHz".
+    /// Short output status for the UI, e.g. "BIT-PERFECT 96 kHz", or what changes the samples on the way:
+    /// "RESAMPLED 96→48 kHz", "MONO → STEREO", "24→16-BIT".
     var outputBadge: (text: String, ok: Bool)? {
         guard player.bitPerfect else { return nil }
-        guard currentTrack != nil, player.sampleRate > 0 else { return ("BIT-PERFECT", true) }
+        guard let t = currentTrack, player.sampleRate > 0 else { return ("BIT-PERFECT", true) }
         func k(_ r: Double) -> String { r.truncatingRemainder(dividingBy: 1000) == 0 ? "\(Int(r / 1000))" : String(format: "%.1f", r / 1000) }
-        if player.isBitPerfectNow { return ("BIT-PERFECT \(k(player.sampleRate)) kHz", true) }
-        return ("RESAMPLED \(k(player.sampleRate))→\(k(player.deviceRate)) kHz", false)
+        guard player.isBitPerfectNow else { return ("RESAMPLED \(k(player.sampleRate))→\(k(player.deviceRate)) kHz", false) }
+        // Playback runs in stereo 32-bit float: other channel counts are mixed, and float holds up to 24 bits.
+        let ch = player.channelCount
+        if ch != 2 { return ("\(ch == 1 ? "MONO" : "\(ch) CH") → STEREO", false) }
+        if let bits = t.bitDepth {
+            let device = AudioDevices.outputBitDepth(player.deviceID) ?? 24
+            let limit = min(device, 24)
+            if bits > limit { return ("\(bits)→\(limit)-BIT", false) }
+        }
+        return ("BIT-PERFECT \(k(player.sampleRate)) kHz", true)
     }
 
     func shutdown() {

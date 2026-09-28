@@ -116,8 +116,14 @@ enum AudioDevices {
         AudioObjectSetPropertyData(id, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v)
     }
 
-    static func ioBufferFrames(_ id: AudioDeviceID) -> UInt32 {
-        get(id, address(kAudioDevicePropertyBufferFrameSize), UInt32(0)) ?? 0
+    /// Bits per sample the device's output stream really takes (its physical format): a file with more is
+    /// truncated on the way. A float stream holds 24-bit samples exactly. nil if the device won't say.
+    static func outputBitDepth(_ id: AudioDeviceID) -> Int? {
+        let streams = getArray(id, address(kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput), AudioStreamID(0))
+        guard let s = streams.first,
+              let f = get(s, address(kAudioStreamPropertyPhysicalFormat), AudioStreamBasicDescription()), f.mBitsPerChannel > 0
+        else { return nil }
+        return f.mFormatFlags & kAudioFormatFlagIsFloat != 0 ? 24 : Int(f.mBitsPerChannel)
     }
 
     // MARK: Hog mode (exclusive access)
