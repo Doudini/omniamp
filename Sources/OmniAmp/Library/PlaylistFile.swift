@@ -25,13 +25,10 @@ enum PlaylistFile {
         var cueNumber: Int?
     }
 
-    /// Entries with their titles (#EXTINF / TitleN), station logos (tvg-logo) and podcast shows.
-    static func entries(_ url: URL) -> [Entry] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
-        let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
-        let base = url.deletingLastPathComponent()
-        var refs: [(ref: String, title: String?, head: String?)] = []   // head: the #EXTINF attributes
-        if url.pathExtension.lowercased() == "pls" {
+    /// The targets a playlist's text lists, in order, with their titles and #EXTINF attributes (`head`).
+    static func refs(_ text: String, pls: Bool) -> [(ref: String, title: String?, head: String?)] {
+        var refs: [(ref: String, title: String?, head: String?)] = []
+        if pls {
             var titles: [String: String] = [:], files: [(String, String)] = []
             for line in text.components(separatedBy: .newlines) {
                 let t = line.trimmingCharacters(in: .whitespaces)
@@ -57,7 +54,15 @@ enum PlaylistFile {
                 pendingHead = nil
             }
         }
-        return refs.compactMap { ref, title, head in
+        return refs
+    }
+
+    /// Entries with their titles (#EXTINF / TitleN), station logos (tvg-logo) and podcast shows.
+    static func entries(_ url: URL) -> [Entry] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
+        let base = url.deletingLastPathComponent()
+        return refs(text, pls: url.pathExtension.lowercased() == "pls").compactMap { ref, title, head in
             let h = head ?? ""
             if ref.hasPrefix("http://") || ref.hasPrefix("https://") {   // radio or podcast
                 return URL(string: ref).map {

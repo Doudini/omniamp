@@ -114,18 +114,40 @@ final class PlayerController {
         return v.firstIndex(of: i)
     }
 
+    /// What the filter searches, lowercased, per track: built once when filtering starts (not per keystroke),
+    /// kept current as tags arrive, dropped when the filter is cleared.
+    private var searchText: [String]?
+    /// The last query and its rows: typing on (a longer query) only needs to look at those.
+    private var lastFilter: (query: String, rows: [Int])?
+
+    /// Lowercased and precomposed (file names often spell "é" as e + accent, tags and typing as one
+    /// character), so a plain byte search finds it: String.contains is several times slower per row.
+    private static func searchable(_ t: Track) -> String { fold("\(t.displayTitle) \(t.album ?? "") \(t.path)") }
+    private static func fold(_ s: String) -> String { s.lowercased().precomposedStringWithCanonicalMapping }
+
+    private static func contains(_ hay: String, _ needle: [UInt8]) -> Bool {
+        var hay = hay
+        return hay.withUTF8 { h in
+            needle.withUnsafeBytes { n in memmem(h.baseAddress, h.count, n.baseAddress, n.count) != nil }
+        }
+    }
+
     func setFilter(_ query: String) {
         filterQuery = query
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let q = Self.fold(query.trimmingCharacters(in: .whitespaces))
         if q.isEmpty {
             visible = nil
+            searchText = nil
+            lastFilter = nil
         } else {
-            let words = q.split(separator: " ")
-            visible = store.tracks.indices.filter { i in
-                let t = store.tracks[i]
-                let hay = "\(t.displayTitle) \(t.album ?? "") \(t.path)".lowercased()
-                return words.allSatisfy { hay.contains($0) }
-            }
+            if searchText?.count != store.tracks.count { searchText = store.tracks.map(Self.searchable); lastFilter = nil }
+            let hay = searchText!
+            let words = q.split(separator: " ").map { Array($0.utf8) }
+            // Every match of "abc" also matches "ab": narrow the previous result instead of the whole list.
+            let pool = lastFilter.flatMap { q.hasPrefix($0.query) ? $0.rows : nil }
+            let rows = (pool ?? Array(store.tracks.indices)).filter { i in words.allSatisfy { Self.contains(hay[i], $0) } }
+            visible = rows
+            lastFilter = (q, rows)
         }
         // Typing a filter near the end of a track mustn't break gapless when the next track stays the same.
         let keep = preloaded.map { p in shuffle && playQueue.isEmpty ? playOrder().contains(p.index) : nextTarget() == p.index } ?? false
@@ -251,10 +273,14 @@ final class PlayerController {
     }
 
     /// Insert tracks that were already scanned (watched folders), keeping the current track.
-    func insertScanned(_ tracks: [Track], at position: Int) {
+    func insertScanned(_ tracks: [Track], at position: Int) { insertScanned([(position, tracks)]) }
+
+    /// Many groups at once (a folder sync): one insert, one reload, one save.
+    func insertScanned(_ groups: [(at: Int, tracks: [Track])]) {
+        guard groups.contains(where: { !$0.tracks.isEmpty }) else { return }
         invalidatePreload()
         let currentID = currentIndex.map { store.id(at: $0) }
-        store.insert(tracks, at: position)
+        store.insert(groups: groups)
         remapCurrent(currentID)
         scheduleSave()
     }
@@ -1144,10 +1170,16 @@ final class PlayerController {
 
 extension PlayerController: PlaylistStoreDelegate {
     func playlistDidReload() {
+        searchText = nil   // rows added, removed or moved: rebuilt by the next filter
+        lastFilter = nil
         if visible != nil { setFilter(filterQuery) } else { ui?.playlistDidReload(); ui?.optionsDidChange() }
     }
 
     func playlistDidUpdate(indices: IndexSet) {
+        if searchText != nil {
+            for i in indices where i < store.tracks.count && i < searchText!.count { searchText![i] = Self.searchable(store.tracks[i]) }
+            lastFilter = nil   // a row's text changed: the next keystroke looks at everything again
+        }
         // Tags can arrive after playback started (autoplay right after a scan): pick up ReplayGain then.
         if let c = currentIndex, indices.contains(c) { applyReplayGain() }
         ui?.playlistRowsDidUpdate(indices)

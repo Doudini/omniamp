@@ -45,7 +45,10 @@ final class LastFM: ScrobbleService {
         let on = !k.isEmpty && !s.isEmpty
         UserDefaults.standard.set(on ? k : nil, forKey: "lastfmCustomKey")
         Keychain.set("lastfm.customSecret", on ? s : nil)
+        // A session belongs to its key: reconnect with the new one. Plays wait in the queue meanwhile.
+        let was = isConnected || needsReconnect
         disconnect()
+        if was { ReconnectMark.set(id, true) }
     }
 
     /// There's an API key to use (otherwise Last.fm can't be offered).
@@ -53,6 +56,7 @@ final class LastFM: ScrobbleService {
     var sessionKey: String? { Keychain.get("lastfm.session") }
     var username: String? { UserDefaults.standard.string(forKey: "lastfmUser") }
     var isConnected: Bool { isAvailable && sessionKey != nil }
+    var needsReconnect: Bool { !isConnected && ReconnectMark.get(id) }
 
     // MARK: Signing
 
@@ -85,7 +89,7 @@ final class LastFM: ScrobbleService {
         if let code = json["error"] as? Int {
             let msg = json["message"] as? String ?? "error \(code)"
             // 9 = invalid session (user revoked access): forget it.
-            if code == 9 { Keychain.set("lastfm.session", nil) }
+            if code == 9 { Keychain.set("lastfm.session", nil); ReconnectMark.set(id, true) }
             // 6 / 7: invalid parameters or resource: that scrobble will never be accepted (auth and outages will).
             if code == 6 || code == 7 { throw ScrobbleError.rejected(msg) }
             throw ScrobbleError.http(status, msg)
@@ -119,11 +123,13 @@ final class LastFM: ScrobbleService {
             throw ScrobbleError.auth("Not approved yet")
         }
         Keychain.set("lastfm.session", key)
+        ReconnectMark.set(id, false)
         UserDefaults.standard.set(session["name"] as? String, forKey: "lastfmUser")
     }
 
     func disconnect() {
         Keychain.set("lastfm.session", nil)
+        ReconnectMark.set(id, false)
         UserDefaults.standard.removeObject(forKey: "lastfmUser")
     }
 

@@ -38,6 +38,11 @@ final class URLProbeTests: XCTestCase {
         let m3u = "#EXTM3U\n#EXTINF:-1,Talk\nhttps://t.example/talk.mp3\n"
         XCTAssertEqual(try classify("https://r.example/listen.m3u", type: "audio/x-mpegurl", body: m3u),
                        .stations([URLProbe.Station(url: "https://t.example/talk.mp3", name: "Talk")]))
+        // Relative entries keep their folders and resolve against the playlist's address.
+        let rel = "#EXTM3U\n#EXTINF:-1,Hi\nstreams/hi.mp3\n/root/low.aac\n"
+        XCTAssertEqual(try classify("https://r.example/radio/listen.m3u", type: "audio/x-mpegurl", body: rel),
+                       .stations([URLProbe.Station(url: "https://r.example/radio/streams/hi.mp3", name: "Hi"),
+                                  URLProbe.Station(url: "https://r.example/root/low.aac", name: nil)]))
         XCTAssertThrowsError(try classify("https://r.example/empty.pls", type: "audio/x-scpls", body: "[playlist]\nNumberOfEntries=0\n"))
     }
 

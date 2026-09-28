@@ -91,15 +91,11 @@ enum URLProbe {
 
     /// Stations in a .pls or .m3u (text), with their titles.
     static func parsePlaylist(_ text: String, base: URL) -> [Station] {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-probe-\(UUID().uuidString)")
-            .appendingPathExtension(text.lowercased().contains("[playlist]") ? "pls" : "m3u")
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        guard (try? text.write(to: tmp, atomically: true, encoding: .utf8)) != nil else { return [] }
-        return PlaylistFile.entries(tmp).compactMap { e in
-            // Relative entries resolve against the playlist's web address.
-            let url: URL? = e.url.isFileURL ? URL(string: e.url.lastPathComponent, relativeTo: base)?.absoluteURL : e.url
-            guard let u = url, ["http", "https"].contains(u.scheme?.lowercased() ?? "") else { return nil }
-            return Station(url: u.absoluteString, name: e.title.flatMap { $0.isEmpty ? nil : $0 })
+        PlaylistFile.refs(text, pls: text.lowercased().contains("[playlist]")).compactMap { ref, title, _ in
+            // Relative entries ("streams/hi.mp3", "/live", "../x") resolve against the playlist's web address.
+            guard let u = URL(string: ref.replacingOccurrences(of: "\\", with: "/"), relativeTo: base)?.absoluteURL,
+                  ["http", "https"].contains(u.scheme?.lowercased() ?? "") else { return nil }
+            return Station(url: u.absoluteString, name: title.flatMap { $0.isEmpty ? nil : $0 })
         }
     }
 

@@ -341,7 +341,11 @@ final class AudioPlayer {
     /// on the network queue: reading that from here was a data race).
     private var mainStreamInfo = StreamSource.Info()
 
+    /// Bumped whenever the stream is stopped or started anew: a reconnect scheduled before that is stale.
+    private var reconnectToken = 0
+
     private func openStream(_ url: URL) {
+        stream?.stop()   // never two connections: an old one would keep downloading and decoding unseen
         let src = StreamSource(url: url)
         stream = src
         streamFormat = nil
@@ -413,8 +417,10 @@ final class AudioPlayer {
                     NSLog("OmniAmp: stream ended (%@), reconnecting (%d/3)", error?.localizedDescription ?? "closed", self.reconnects)
                     self.stopNode()
                     self.stopStream(keepState: true)
+                    let token = self.reconnectToken
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        guard self.state == .playing, self.streamURL == u else { return }
+                        // Stop → Play of the same station in the meantime already connected again.
+                        guard self.reconnectToken == token, self.state == .playing, self.streamURL == u else { return }
                         self.openStream(u)
                     }
                 } else {
@@ -445,6 +451,7 @@ final class AudioPlayer {
     }
 
     private func stopStream(keepState: Bool = false) {
+        if !keepState { reconnectToken += 1 }
         stream?.stop()
         stream = nil
         streamFormat = nil
@@ -774,11 +781,7 @@ final class AudioPlayer {
         let item = Item(id: nextItemID, file: file, url: url, range: range, offset: 0)
         nextItemID += 1
         upcoming = item
-        let gen = generation, id = item.id
-        node.scheduleSegment(file, startingFrame: item.startFrame, frameCount: AVAudioFrameCount(max(0, item.frames)), at: nil,
-                             completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
-        }
+        schedule(item, gen: generation)
         return true
     }
 
@@ -909,12 +912,38 @@ final class AudioPlayer {
     private func scheduleCurrent() {
         guard let c = current, c.frames > 0 else { return }
         generation += 1
-        let gen = generation
-        let id = c.id
-        node.scheduleSegment(c.file, startingFrame: c.startFrame, frameCount: AVAudioFrameCount(c.frames), at: nil,
-                             completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
+        schedule(c, gen: generation)
+    }
+
+    /// Queue an item on the node. A segment's length is 32-bit (4.29e9 frames: 27 h at 44.1 kHz, 6 h at
+    /// 192 kHz), so a longer track goes in back-to-back pieces (sample-contiguous, like gapless tracks);
+    /// only the last one reports the end.
+    private func schedule(_ item: Item, gen: Int) {
+        let pieces = Self.segments(from: item.startFrame, count: item.frames)
+        let id = item.id
+        for (i, p) in pieces.enumerated() {
+            let last = i == pieces.count - 1
+            node.scheduleSegment(item.file, startingFrame: p.start, frameCount: p.frames, at: nil,
+                                 completionCallbackType: .dataPlayedBack,
+                                 completionHandler: last ? { [weak self] _ in
+                                     DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
+                                 } : nil)
         }
+    }
+
+    /// `count` frames from `start`, in pieces a segment can hold (at most `limit` frames each).
+    static func segments(from start: AVAudioFramePosition, count: AVAudioFramePosition,
+                         limit: AVAudioFramePosition = AVAudioFramePosition(AVAudioFrameCount.max))
+        -> [(start: AVAudioFramePosition, frames: AVAudioFrameCount)] {
+        var out: [(start: AVAudioFramePosition, frames: AVAudioFrameCount)] = []
+        var at = start, left = max(0, count)
+        repeat {
+            let n = min(left, limit)
+            out.append((at, AVAudioFrameCount(n)))
+            at += n
+            left -= n
+        } while left > 0
+        return out
     }
 
     /// A scheduled segment finished playing out of the speakers.

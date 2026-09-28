@@ -234,15 +234,21 @@ final class FolderSync {
             seen[r, default: []].insert(f.key)
             if isNew && index[f.key] == nil { fresh.append(f) }
         }
-        var byDir: [(String, [Track])] = []
-        for f in fresh {
-            let d = (f.path as NSString).deletingLastPathComponent
-            if let k = byDir.firstIndex(where: { $0.0 == d }) { byDir[k].1.append(f) } else { byDir.append((d, [f])) }
-        }
-        for (dir, group) in byDir {
+        // Grouped by folder, each after the last playlist row from that folder (new folders at the end), all
+        // in one pass and one insert: per folder it scanned the whole playlist and reloaded the table.
+        if !fresh.isEmpty {
+            var order: [String] = [], byDir: [String: [Track]] = [:]
+            for f in fresh {
+                let d = (f.path as NSString).deletingLastPathComponent
+                if byDir[d] == nil { order.append(d) }
+                byDir[d, default: []].append(f)
+            }
+            var lastRow: [String: Int] = [:]
             let all = controller.tracks
-            let at = all.lastIndex { ($0.path as NSString).deletingLastPathComponent == dir }.map { $0 + 1 } ?? all.count
-            controller.insertScanned(group, at: at)
+            for (i, t) in all.enumerated() where byDir[(t.path as NSString).deletingLastPathComponent] != nil {
+                lastRow[(t.path as NSString).deletingLastPathComponent] = i
+            }
+            controller.insertScanned(order.map { d in (lastRow[d].map { $0 + 1 } ?? all.count, byDir[d]!) })
         }
 
         saveSeen()

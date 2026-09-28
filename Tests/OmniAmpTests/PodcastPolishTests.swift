@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 @testable import OmniAmp
 
 final class ShowNotesEntityTests: XCTestCase {
@@ -58,5 +59,19 @@ final class EpisodeGuidTests: XCTestCase {
         }
         wait(for: [done], timeout: 5)
         return try result.get()
+    }
+}
+
+final class LongFileSegmentTests: XCTestCase {
+    func testLongTracksAreScheduledInPiecesThatFitASegment() {
+        // 30 h at 44.1 kHz: more frames than one segment (UInt32) can hold; converting trapped.
+        let frames = AVAudioFramePosition(30 * 3600 * 44_100)
+        let parts = AudioPlayer.segments(from: 1000, count: frames)
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertEqual(parts[0].start, 1000)
+        XCTAssertEqual(parts[1].start, 1000 + AVAudioFramePosition(parts[0].frames), "back to back, no gap or overlap")
+        XCTAssertEqual(parts.reduce(0) { $0 + AVAudioFramePosition($1.frames) }, frames)
+        XCTAssertEqual(AudioPlayer.segments(from: 0, count: 500).map(\.frames), [500], "normal tracks: one segment")
+        XCTAssertEqual(AudioPlayer.segments(from: 0, count: 10, limit: 4).map(\.frames), [4, 4, 2])
     }
 }

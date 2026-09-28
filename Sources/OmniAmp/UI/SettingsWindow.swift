@@ -200,12 +200,17 @@ final class SettingsWindowController: NSWindowController {
         } else if authTask != nil {
             lfmStatus.stringValue = "Waiting for you to approve OmniAmp in the browser…"
             lfmButton.title = "Cancel"
+        } else if lfm.needsReconnect {
+            lfmStatus.stringValue = "Login expired: reconnect to send what's waiting" + keyNote
+            lfmButton.title = "Reconnect…"
+            lfmButton.isEnabled = true
         } else {
             lfmStatus.stringValue = "Not connected" + keyNote
             lfmButton.title = "Connect…"
             lfmButton.isEnabled = true
         }
-        lbStatus.stringValue = lb.isConnected ? "✓ Scrobbling as \(lb.username ?? "your account")" : "Not connected"
+        lbStatus.stringValue = lb.isConnected ? "✓ Scrobbling as \(lb.username ?? "your account")"
+            : (lb.needsReconnect ? "Token no longer valid: paste a new one to send what's waiting" : "Not connected")
         lbButton.title = lb.isConnected ? "Disconnect" : "Connect"
         lbToken.isHidden = lb.isConnected
         let s = Scrobbler.shared

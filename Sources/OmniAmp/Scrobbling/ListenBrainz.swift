@@ -12,6 +12,7 @@ final class ListenBrainz: ScrobbleService {
     var token: String? { Keychain.get("listenbrainz.token") }
     var username: String? { UserDefaults.standard.string(forKey: "listenbrainzUser") }
     var isConnected: Bool { token != nil }
+    var needsReconnect: Bool { !isConnected && ReconnectMark.get(id) }
 
     private func request(_ path: String, token: String, body: [String: Any]? = nil) async throws -> [String: Any] {
         var req = URLRequest(url: URL(string: api + path)!)
@@ -25,7 +26,7 @@ final class ListenBrainz: ScrobbleService {
         let (data, status) = try await transport.send(req)
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         guard (200..<300).contains(status) else {
-            if status == 401 { Keychain.set("listenbrainz.token", nil) }
+            if status == 401 { Keychain.set("listenbrainz.token", nil); ReconnectMark.set(id, true) }
             let msg = json["error"] as? String ?? String(decoding: data.prefix(200), as: UTF8.self)
             if status == 400 { throw ScrobbleError.rejected(msg) }   // a bad listen, not auth or an outage
             throw ScrobbleError.http(status, msg)
@@ -41,11 +42,13 @@ final class ListenBrainz: ScrobbleService {
             throw ScrobbleError.auth(json["message"] as? String ?? "That token isn't valid")
         }
         Keychain.set("listenbrainz.token", token)
+        ReconnectMark.set(id, false)
         UserDefaults.standard.set(user, forKey: "listenbrainzUser")
     }
 
     func disconnect() {
         Keychain.set("listenbrainz.token", nil)
+        ReconnectMark.set(id, false)
         UserDefaults.standard.removeObject(forKey: "listenbrainzUser")
     }
 

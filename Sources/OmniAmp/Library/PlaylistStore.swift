@@ -169,6 +169,31 @@ final class PlaylistStore {
         loadMissingTags()
     }
 
+    /// Several insertions at once (positions in the current list): one pass, one reload. A new watched folder
+    /// of thousands of albums used to insert, reload and rescan once per album folder.
+    func insert(groups: [(at: Int, tracks: [Track])]) {
+        let groups = groups.filter { !$0.tracks.isEmpty }
+            .map { (at: min(max(0, $0.at), tracks.count), tracks: $0.tracks) }
+            .enumerated().sorted { ($0.element.at, $0.offset) < ($1.element.at, $1.offset) }.map(\.element)
+        guard !groups.isEmpty else { return }
+        let added = groups.reduce(0) { $0 + $1.tracks.count }
+        var newTracks: [Track] = [], newIDs: [Int] = []
+        newTracks.reserveCapacity(tracks.count + added)
+        newIDs.reserveCapacity(tracks.count + added)
+        var from = 0
+        for g in groups {
+            newTracks += tracks[from..<g.at]; newIDs += ids[from..<g.at]
+            newTracks += g.tracks; newIDs += g.tracks.map { _ in allocID() }
+            from = g.at
+        }
+        newTracks += tracks[from...]; newIDs += ids[from...]
+        tracks = newTracks
+        ids = newIDs
+        indexByID = nil
+        delegate?.playlistDidReload()
+        loadMissingTags()
+    }
+
     /// A podcast episode already in the list got newer details from its feed (its own cover, notes…).
     func updateEpisode(at i: Int, from new: Track) {
         guard i < tracks.count, tracks[i].isEpisode else { return }

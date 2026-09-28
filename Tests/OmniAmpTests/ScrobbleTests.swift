@@ -26,6 +26,7 @@ final class FakeService: ScrobbleService {
     let id = "fake"
     let maxBatch = 2
     var isConnected = true
+    var needsReconnect = false
     var fail = false
     var refuse: Set<String> = []   // titles the service answers 400 for
     var received: [[Scrobble]] = []
@@ -109,6 +110,36 @@ final class ScrobbleTests: XCTestCase {
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("Service Offline"))
         }
+    }
+
+    func testExpiredLoginKeepsQueueingUntilReconnected() async throws {
+        // Last.fm answers "invalid session": the login is gone, but it wasn't a disconnect.
+        let lfm = LastFM(apiKey: "KEY", secret: "SECRET")
+        let mock = MockTransport()
+        mock.body = ["error": 9, "message": "Invalid session key"]
+        lfm.transport = mock
+        Keychain.set("lastfm.session", "SESSION")
+        defer { Keychain.set("lastfm.session", nil); ReconnectMark.set(lfm.id, false) }
+        _ = try? await lfm.submit([Scrobble(artist: "a", title: "b", album: nil, duration: nil, timestamp: 1)])
+        XCTAssertFalse(lfm.isConnected)
+        XCTAssertTrue(lfm.needsReconnect)
+        lfm.disconnect()
+        XCTAssertFalse(lfm.needsReconnect, "disconnecting in Settings ends it")
+
+        // Meanwhile plays are queued, not dropped, and go out after reconnecting.
+        let svc = FakeService()
+        svc.isConnected = false
+        svc.needsReconnect = true
+        let s = Scrobbler(services: [svc])
+        s.enqueue(Scrobble(artist: "A", title: "while expired", album: nil, duration: 60, timestamp: 1))
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(s.pendingCount("fake"), 1)
+        XCTAssertTrue(svc.received.isEmpty, "nothing sent without a login")
+        svc.isConnected = true
+        svc.needsReconnect = false
+        s.flushAll()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(svc.received.flatMap { $0 }.map(\.title), ["while expired"])
     }
 
     // MARK: ListenBrainz

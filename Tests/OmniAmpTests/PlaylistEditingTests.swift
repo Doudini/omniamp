@@ -26,6 +26,17 @@ final class PlaylistEditingTests: XCTestCase {
 
     private func names(_ s: PlaylistStore) -> [String] { s.tracks.map { $0.title ?? "" } }
 
+    func testGroupedInsertInOnePass() {
+        let s = PlaylistStore()
+        s.restore(["a", "b", "c"].map { track($0) })
+        let ids = (0..<3).map { s.id(at: $0) }
+        s.insert(groups: [(at: 3, tracks: [track("end")]), (at: 1, tracks: [track("x"), track("y")]),
+                          (at: 3, tracks: [track("end2")]), (at: 0, tracks: [])])
+        XCTAssertEqual(names(s), ["a", "x", "y", "b", "c", "end", "end2"], "each group at its place, same-place groups in order")
+        XCTAssertEqual([0, 3, 4].map { s.id(at: $0) }, ids, "existing rows keep their IDs")
+        XCTAssertEqual(Set((0..<7).map { s.id(at: $0) }).count, 7)
+    }
+
     func testStoreMoveDown() {
         let s = PlaylistStore()
         s.restore(["a", "b", "c", "d", "e"].map { track($0) })
@@ -50,6 +61,25 @@ final class PlaylistEditingTests: XCTestCase {
         XCTAssertEqual(s.index(ofID: idC), 0)
         s.remove(at: [1])
         XCTAssertEqual(s.index(ofID: idC), 0)
+    }
+
+    func testFilterNarrowsAsYouTypeAndFollowsChanges() {
+        let c = PlayerController()
+        c.store.restore([track("Alpha", artist: "Band"), track("Alpine", artist: "Other"), track("Beta", artist: "Band")])
+        func shown() -> [String] { (0..<c.rowCount).map { c.tracks[c.trackIndex(forRow: $0)].title ?? "" } }
+        c.setFilter("al")
+        XCTAssertEqual(shown(), ["Alpha", "Alpine"])
+        c.setFilter("alp band")
+        XCTAssertEqual(shown(), ["Alpha"], "typing on narrows (words in any order)")
+        c.setFilter("a")
+        XCTAssertEqual(shown(), ["Alpha", "Alpine", "Beta"], "deleting widens again")
+        c.store.restore(c.tracks.enumerated().map { i, x in var x = x; if i == 2 { x.title = "Gamma" }; return x })
+        c.setFilter("gam")
+        XCTAssertEqual(shown(), ["Gamma"], "rows replaced: the search text is rebuilt")
+        c.store.insert([track("Gamma two")], at: 0)
+        XCTAssertEqual(shown(), ["Gamma two", "Gamma"], "added rows are filtered too")
+        c.setFilter("")
+        XCTAssertEqual(c.rowCount, 4)
     }
 
     func testQueueFollowsTracksThroughReorder() {

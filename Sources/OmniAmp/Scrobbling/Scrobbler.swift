@@ -13,6 +13,9 @@ struct Scrobble: Codable, Equatable {
 protocol ScrobbleService: AnyObject {
     var id: String { get }
     var isConnected: Bool { get }
+    /// The login expired or was revoked by the service (not a disconnect in Settings): plays keep being
+    /// queued, and go out once you reconnect.
+    var needsReconnect: Bool { get }
     func nowPlaying(_ s: Scrobble) async throws
     /// Submit a batch (the service may accept fewer; returns how many were accepted from the front).
     func submit(_ batch: [Scrobble]) async throws -> Int
@@ -20,6 +23,17 @@ protocol ScrobbleService: AnyObject {
 }
 
 /// Sends HTTP requests; swapped out in tests.
+extension ScrobbleService {
+    /// Plays are timed and queued for this service (sent only while connected).
+    var collectsScrobbles: Bool { isConnected || needsReconnect }
+}
+
+/// The "needs reconnect" mark of the real services, kept across launches.
+enum ReconnectMark {
+    static func get(_ id: String) -> Bool { UserDefaults.standard.bool(forKey: id + "NeedsReconnect") }
+    static func set(_ id: String, _ on: Bool) { UserDefaults.standard.set(on ? true : nil, forKey: id + "NeedsReconnect") }
+}
+
 protocol HTTPTransport {
     func send(_ req: URLRequest) async throws -> (Data, Int)
 }
@@ -111,7 +125,7 @@ final class Scrobbler {
         pending = nil
         listened = 0
         guard let t, let id = Self.identify(t), let th = Self.threshold(for: duration),
-              services.contains(where: { $0.isConnected }) else { return }
+              services.contains(where: { $0.collectsScrobbles }) else { return }
         pending = Scrobble(artist: id.artist, title: id.title, album: t.album, duration: Sane.int(duration.rounded()),
                            timestamp: Int(Date().timeIntervalSince1970))
         threshold = th
@@ -161,7 +175,7 @@ final class Scrobbler {
     // MARK: Queue
 
     func enqueue(_ s: Scrobble) {
-        for svc in services where svc.isConnected { queues[svc.id, default: []].append(s) }
+        for svc in services where svc.collectsScrobbles { queues[svc.id, default: []].append(s) }
         saveQueue()
         flushAll()
     }
