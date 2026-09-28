@@ -26,10 +26,16 @@ final class MetadataLookup: @unchecked Sendable {
     static let userAgent = "OmniAmp/\(Updater.currentVersion) ( https://github.com/Doudini/omniamp )"
 
     private let http: HTTPTransport
-    private let mbGate = Gate(interval: 1.1)
+    /// Wait before asking a busy MusicBrainz again (grows with each try).
+    var retryPause: UInt64 = 3_000_000_000
+    /// One gate for every MusicBrainz call in the app: its limit is per client, not per feature.
+    private static let sharedGate = Gate(interval: 1.25)
+    private let mbGate: Gate
 
-    init(http: HTTPTransport = URLSessionTransport()) {
+    /// `pace`: seconds between MusicBrainz requests; nil = the app-wide gate (tests pass 0).
+    init(http: HTTPTransport = URLSessionTransport(), pace: TimeInterval? = nil) {
         self.http = http
+        mbGate = pace.map { Gate(interval: $0) } ?? Self.sharedGate
     }
 
     /// All sources at once; results best-first. A source that fails or times out just adds nothing.
@@ -60,12 +66,26 @@ final class MetadataLookup: @unchecked Sendable {
     // MARK: Sources
 
     private func get(_ url: URL, musicBrainz: Bool = false) async -> Any? {
-        if musicBrainz { await mbGate.wait() }
-        var req = URLRequest(url: url, timeoutInterval: 12)
-        req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        guard let (data, status) = try? await http.send(req), status == 200 else { return nil }
-        return try? JSONSerialization.jsonObject(with: data)
+        // MusicBrainz sheds load with 503 "currently busy" now and then: that request, a few seconds later, works.
+        for attempt in 0..<(musicBrainz ? 4 : 1) {
+            if musicBrainz { await mbGate.wait() }
+            var req = URLRequest(url: url, timeoutInterval: 12)
+            req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            if musicBrainz, ProcessInfo.processInfo.environment["OMNIAMP_DEBUG"] != nil { NSLog("OmniAmp: MB request %@", url.absoluteString) }
+            guard let (data, status) = try? await http.send(req) else {
+                if musicBrainz { NSLog("OmniAmp: MusicBrainz unreachable") }
+                return nil
+            }
+            if status == 200 { return try? JSONSerialization.jsonObject(with: data) }
+            if musicBrainz, status == 503, attempt < 3 {
+                try? await Task.sleep(nanoseconds: retryPause * UInt64(1 + attempt))
+                continue
+            }
+            if musicBrainz, status != 404, status != 400 { NSLog("OmniAmp: MusicBrainz answered %d", status) }
+            return nil
+        }
+        return nil
     }
 
     private static func url(_ base: String, _ query: [String: String]) -> URL {
@@ -165,6 +185,80 @@ final class MetadataLookup: @unchecked Sendable {
                                  genre: nil, thumbURL: nil, coverURL: nil,
                                  detail: [kind, d["identifier"] as? String].compactMap { $0 }.joined(separator: " · "), score: 0.95)
         }
+    }
+
+    // MARK: Artist countries
+
+    /// An ISO country code, or nil for MusicBrainz's regions ("XE" Europe, "XW" worldwide…) that aren't countries.
+    static func realCountry(_ code: String) -> String? {
+        let c = code.uppercased()
+        return c.count == 2 && !["XE", "XW", "XG", "XU"].contains(c) ? c : nil
+    }
+
+    /// Where an artist comes from, per MusicBrainz. `failed`: the service couldn't be reached (try again later).
+    struct ArtistPlace: Sendable, Equatable {
+        var mbid: String?
+        var country: String?
+        var area: String?
+        var found = false
+        var failed = false
+    }
+
+    /// By MBID when known (exact), else by name: only an exact name match (accents, "The", case aside) counts.
+    /// `album`: one of the artist's albums, to tell apart artists with the same name ("The Sound").
+    /// `trusted`: the MBID comes from the files' tags (Picard) and is used as it is. Last.fm's MBIDs are only a
+    /// hint: some point to another artist of the same name, so the name search goes first.
+    func artistPlace(name: String, mbid: String?, album: String? = nil, trusted: Bool = true) async -> ArtistPlace {
+        func place(_ a: [String: Any]) -> ArtistPlace {
+            let area = (a["area"] as? [String: Any])?["id"] as? String ?? (a["begin-area"] as? [String: Any])?["id"] as? String
+            let country = (a["country"] as? String).flatMap { Self.realCountry($0) }
+            return ArtistPlace(mbid: a["id"] as? String, country: country, area: area, found: true)
+        }
+        func byID(_ id: String) async -> ArtistPlace? {
+            guard let a = await get(URL(string: "https://musicbrainz.org/ws/2/artist/\(id)?fmt=json")!, musicBrainz: true) as? [String: Any],
+                  a["id"] != nil else { return nil }
+            return place(a)
+        }
+        if trusted, let mbid, let p = await byID(mbid) { return p }
+        guard let json = await get(Self.url("https://musicbrainz.org/ws/2/artist/", ["query": "artist:\(Self.lucene(name))", "fmt": "json",
+                                                                                       "limit": "5"]), musicBrainz: true) as? [String: Any]
+        else { return ArtistPlace(failed: true) }
+        let key = Keys.artist(name)
+        let hits = ((json["artists"] as? [[String: Any]]) ?? []).filter { a in
+            ((a["score"] as? Int) ?? 0) >= 90 && (Keys.artist(a["name"] as? String ?? "") == key
+                || ((a["aliases"] as? [[String: Any]]) ?? []).contains { Keys.artist($0["name"] as? String ?? "") == key })
+        }
+        if hits.count == 1 { return place(hits[0]) }
+        // Several artists by that name: the one last.fm names, else the one with this album.
+        if hits.count > 1, let mbid, let hit = hits.first(where: { ($0["id"] as? String) == mbid }) { return place(hit) }
+        if hits.count > 1, let album, !album.isEmpty,
+           let rg = await get(Self.url("https://musicbrainz.org/ws/2/release-group/", [
+               "query": "releasegroup:\(Self.lucene(album)) AND artist:\(Self.lucene(name))", "fmt": "json", "limit": "5"]),
+                              musicBrainz: true) as? [String: Any] {
+            let ids = Set(((rg["release-groups"] as? [[String: Any]]) ?? []).flatMap { g in
+                ((g["artist-credit"] as? [[String: Any]]) ?? []).compactMap { ($0["artist"] as? [String: Any])?["id"] as? String }
+            })
+            if let match = hits.first(where: { ids.contains($0["id"] as? String ?? "") }) { return place(match) }
+        }
+        if let first = hits.first { return place(first) }
+        // Not found by name: last.fm's MBID is all there is.
+        if !trusted, let mbid, let p = await byID(mbid) { return p }
+        return ArtistPlace()
+    }
+
+    /// An area's country: its own ISO code, a subdivision's prefix ("US-NC" → "US"), or the next area up.
+    /// Returns (country, parent area to try next); both nil when the area can't be placed. `failed` when unreachable.
+    func areaStep(_ id: String) async -> (country: String?, parent: String?, failed: Bool) {
+        guard let a = await get(URL(string: "https://musicbrainz.org/ws/2/area/\(id)?inc=area-rels&fmt=json")!, musicBrainz: true)
+            as? [String: Any] else { return (nil, nil, true) }
+        if let c = (a["iso-3166-1-codes"] as? [String])?.first.flatMap(Self.realCountry) { return (c, nil, false) }
+        if let sub = (a["iso-3166-2-codes"] as? [String])?.first, let dash = sub.firstIndex(of: "-") {
+            return (String(sub[..<dash]).uppercased(), nil, false)
+        }
+        let parent = ((a["relations"] as? [[String: Any]]) ?? []).first {
+            ($0["type"] as? String) == "part of" && ($0["direction"] as? String) == "backward"
+        }.flatMap { ($0["area"] as? [String: Any])?["id"] as? String }
+        return (nil, parent, false)
     }
 
     /// "alternative rock" → "Alternative Rock".

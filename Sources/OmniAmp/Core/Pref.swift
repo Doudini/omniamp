@@ -34,6 +34,10 @@ enum Pref {
     static let watchedFolders = "watchedFolders"
     /// The music library's folders (the Library window), separate from the playlist's watched folders.
     static let libraryFolders = "libraryFolders"
+    /// The library may look things up online in the background (artist countries from MusicBrainz).
+    static let libraryOnlineLookups = "libraryOnlineLookups"
+    /// Whose last.fm history the library shows (defaults to the connected account).
+    static let lastfmHistoryUser = "lastfmHistoryUser"
     // Podcasts
     static let podcastSpeeds = "podcastSpeeds"
     static let podcastUnplayedOnly = "podcastUnplayedOnly"

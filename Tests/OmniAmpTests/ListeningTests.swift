@@ -1,0 +1,106 @@
+import XCTest
+@testable import OmniAmp
+
+private struct CannedLastFM: HTTPTransport {
+    let body: String
+    func send(_ req: URLRequest) async throws -> (Data, Int) {
+        let url = req.url!.absoluteString
+        XCTAssertTrue(url.contains("method=user.getRecentTracks"))
+        XCTAssertFalse(url.contains("api_sig"), "reading history needs no signature")
+        return (Data(body.utf8), 200)
+    }
+}
+
+final class ListeningTests: XCTestCase {
+    private var tmp: URL!
+
+    override func setUpWithError() throws {
+        tmp = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-listening-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    }
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: tmp) }
+
+    private func db() throws -> CollectionDB { try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite")) }
+
+    func testRecentTracksParsing() async throws {
+        let lf = LastFM(apiKey: "k", secret: "s")
+        lf.transport = CannedLastFM(body: """
+            {"recenttracks":{"@attr":{"totalPages":"3","total":"5","page":"1"},"track":[
+              {"@attr":{"nowplaying":"true"},"artist":{"#text":"Björk","mbid":""},"name":"Hunter","album":{"#text":"Homogenic"}},
+              {"artist":{"#text":"Björk","mbid":"87c5dedd"},"name":"Jóga","album":{"#text":"Homogenic"},"date":{"uts":"1000"}},
+              {"artist":{"#text":"Nirvana","mbid":""},"name":"Polly","album":{"#text":""},"date":{"uts":"900"}}]}}
+            """)
+        let r = try await lf.recentTracks(user: "someone")
+        XCTAssertEqual(r.pages, 3)
+        XCTAssertEqual(r.total, 5)
+        XCTAssertEqual(r.tracks, [LastFM.Play(ts: 1000, artist: "Björk", album: "Homogenic", title: "Jóga", artistMBID: "87c5dedd"),
+                                  LastFM.Play(ts: 900, artist: "Nirvana", album: "", title: "Polly", artistMBID: nil)],
+                       "the track playing now has no date and is left out")
+        // A single track comes as an object, not an array.
+        lf.transport = CannedLastFM(body: """
+            {"recenttracks":{"@attr":{"totalPages":"1","total":"1"},"track":{"artist":{"#text":"A"},"name":"B","album":{"#text":"C"},
+             "date":{"uts":"5"}}}}
+            """)
+        let one = try await lf.recentTracks(user: "someone")
+        XCTAssertEqual(one.tracks.map(\.title), ["B"])
+    }
+
+    func testPlaysPlacesAndFigures() throws {
+        let d = try db()
+        let plays = (0..<10).map { LastFM.Play(ts: 1_600_000_000 + $0 * 3600, artist: $0 < 7 ? "The Beatles" : "Björk", album: "",
+                                              title: "Song \($0)", artistMBID: nil) }
+        XCTAssertEqual(try d.addPlays(plays), 10)
+        XCTAssertEqual(try d.addPlays(plays), 0, "the same plays again are skipped")
+        let range = try d.playRange()
+        XCTAssertEqual(range.count, 10)
+        XCTAssertEqual(range.oldest, 1_600_000_000)
+
+        // Most played first; "The Beatles" folded to one artist.
+        let pending = try d.pendingArtists(limit: 10)
+        XCTAssertEqual(pending.map(\.key), ["beatles", "bjork"])
+        try d.savePlace(pending[0], mbid: "b1", country: "GB", found: true)
+        try d.savePlace(pending[1], mbid: nil, country: nil, found: false)
+        XCTAssertEqual(try d.pendingArtists(limit: 10).count, 0, "a miss isn't retried right away")
+        XCTAssertEqual(try d.pendingArtists(limit: 10, retryAfter: -1).map(\.key), ["bjork"], "…but later")
+        try d.savePlace(pending[1], mbid: nil, country: nil, found: false, retryInDays: 1)
+        XCTAssertEqual(try d.pendingArtists(limit: 10, retryAfter: 90 * 86400 - 2 * 86400).map(\.key), ["bjork"],
+                       "a failed lookup comes back after a day")
+
+        d.saveArea("city", country: "US")
+        d.saveArea("nowhere", country: nil)
+        XCTAssertEqual(d.areaCountry("city"), .some("US"))
+        XCTAssertEqual(d.areaCountry("nowhere"), .some(nil))
+        XCTAssertNil(d.areaCountry("unknown") as String??)
+
+        let s = try d.listeningStats()
+        XCTAssertEqual(s.plays, 10)
+        XCTAssertEqual(s.artists, 2)
+        XCTAssertEqual(s.playsByCountry, ["GB": 7])
+        XCTAssertEqual(s.mappedPlays, 7)
+        XCTAssertEqual(s.topArtists.map(\.label), ["The Beatles", "Björk"])
+        XCTAssertEqual(s.notOwned.count, 2, "nothing in the library yet")
+        XCTAssertEqual(s.clock.flatMap { $0 }.reduce(0, +), 10)
+        XCTAssertEqual(try d.artists(country: "GB", owned: false).map(\.value), [7])
+
+        try d.forgetPlays()
+        XCTAssertEqual(try d.playRange().count, 0)
+    }
+
+    func testWorldMap() {
+        let map = WorldMap.shared
+        XCTAssertGreaterThan(map.countries.count, 170)
+        XCTAssertFalse(map.countries.contains { $0.iso == "AQ" })
+        for iso in ["CH", "US", "GB", "FR", "NO", "IS", "JP", "BR"] { XCTAssertTrue(map.countries.contains { $0.iso == iso }, iso) }
+        // Bern is inside Switzerland; Paris isn't.
+        let ch = map.countries.first { $0.iso == "CH" }!
+        XCTAssertTrue(ch.path.contains(WorldMap.project(lon: 7.45, lat: 46.95)))
+        XCTAssertFalse(ch.path.contains(WorldMap.project(lon: 2.35, lat: 48.86)))
+        // Equal Earth: the origin stays put, east is right, north is up.
+        XCTAssertEqual(WorldMap.project(lon: 0, lat: 0), .zero)
+        XCTAssertGreaterThan(WorldMap.project(lon: 90, lat: 0).x, 0)
+        XCTAssertGreaterThan(WorldMap.project(lon: 0, lat: 45).y, 0)
+        XCTAssertEqual(WorldMapView.step(0, max: 100), -1)
+        XCTAssertEqual(WorldMapView.step(100, max: 100), 4)
+        XCTAssertEqual(WorldMapView.step(1, max: 100_000), 0, "one play is still lit")
+    }
+}

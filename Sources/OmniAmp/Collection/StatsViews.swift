@@ -117,6 +117,8 @@ final class BarListChart: StatsChart {
 final class YearsChart: StatsChart {
     var years: [(year: Int, releases: Int)] = [] { didSet { needsLayout = true; needsDisplay = true } }
     var onClick: ((Int) -> Void)?
+    /// What the columns count ("release", "play").
+    var unit = "release"
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 150) }
 
     private var span: ClosedRange<Int> {
@@ -131,7 +133,7 @@ final class YearsChart: StatsChart {
         regions = years.map { y in
             let x = p.minX + CGFloat(y.year - span.lowerBound) * s
             return Region(rect: NSRect(x: x, y: p.minY, width: max(s, 3), height: p.height),
-                          tip: "\(y.year): \(y.releases.formatted()) release\(y.releases == 1 ? "" : "s")",
+                          tip: "\(y.year): \(y.releases.formatted()) \(unit)\(y.releases == 1 ? "" : "s")",
                           action: onClick.map { f in { f(y.year) } })
         }
     }

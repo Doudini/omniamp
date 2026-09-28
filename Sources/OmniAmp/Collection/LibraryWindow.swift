@@ -9,7 +9,7 @@ import AppKit
 final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
                                      NSMenuDelegate, NSSearchFieldDelegate {
     enum Section: Int, CaseIterable {
-        case artists, shows, years, genres, added, stats
+        case artists, shows, years, genres, added, stats, listening
 
         var title: String {
             switch self {
@@ -19,6 +19,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             case .genres: "Genres"
             case .added: "Recently Added"
             case .stats: "Stats"
+            case .listening: "Listening"
             }
         }
         var glyph: String {
@@ -29,6 +30,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             case .genres: "\u{F0770}"    // nf-md-tag_multiple
             case .added: "\u{F0150}"     // nf-md-clock_outline
             case .stats: "\u{F0128}"     // nf-md-chart_bar
+            case .listening: "\u{F01E7}"   // nf-md-earth
             }
         }
     }
@@ -75,6 +77,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var observers: [NSObjectProtocol] = []
     private var refreshPending = false
     private let statsPage = StatsPage()
+    private let listeningPage = ListeningPage()
     private var statsGeneration = 0
 
     init(controller: PlayerController) {
@@ -219,7 +222,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             self.search.stringValue = q
             self.searchChanged()
         }
-        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage] as [NSView] {
+        listeningPage.onArtist = { [weak self] a in self?.open(.artists, a) }
+        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage]
+            as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -269,6 +274,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             statsPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
             statsPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
             statsPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            listeningPage.topAnchor.constraint(equalTo: side.topAnchor),
+            listeningPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
+            listeningPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
+            listeningPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
 
             bottom.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             bottom.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
@@ -313,8 +322,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         updateStatus()
     }
 
-    /// Stats replaces the lists; everything else shows them.
+    /// Stats and Listening replace the lists; everything else shows them.
     private var showingStats: Bool { section == .stats && !searching }
+    private var showingListening: Bool { section == .listening && !searching }
+    private var showingPage: Bool { showingStats || showingListening }
 
     private func showStatsPage() {
         for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty] as [NSView] { v.isHidden = true }
@@ -343,8 +354,14 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func loadEntries(keep: String?, keepAlbum: String? = nil) {
         statsPage.isHidden = !showingStats
-        for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingStats }
+        listeningPage.isHidden = !showingListening
+        for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingPage }
         if showingStats { showStatsPage(); return }
+        if showingListening {
+            for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
+            listeningPage.appear()
+            return
+        }
         guard let db else { entries = []; middle.reloadData(); showEmpty(); return }
         do {
             switch searching ? .artists : section {
@@ -359,7 +376,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 entries = try db.genres(filter).map { Entry(id: $0.id, title: $0.title, count: $0.count) }
             case .added:
                 entries = try db.addedMonths(filter).map { Entry(id: $0.id, title: $0.title, count: $0.count) }
-            case .stats:
+            case .stats, .listening:
                 entries = []
             }
         } catch {
@@ -414,7 +431,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 case .added:
                     list = try db.albums(addedIn: e.id, filter)
                     grouping = { _ in "" }
-                case .stats:
+                case .stats, .listening:
                     break
                 }
             } catch {
@@ -479,7 +496,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private func showEmpty() {
-        if showingStats { empty.isHidden = true; return }
+        if showingPage { empty.isHidden = true; return }
         if let err = library.openError {
             empty.stringValue = "The library database couldn't be opened:\n\(err)"
         } else if library.roots.isEmpty {

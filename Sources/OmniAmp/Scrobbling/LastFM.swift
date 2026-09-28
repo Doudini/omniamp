@@ -157,3 +157,37 @@ final class LastFM: ScrobbleService {
         return min(batch.count, maxBatch)
     }
 }
+
+// MARK: Listening history (read-only; a public profile needs no login)
+
+extension LastFM {
+    struct Play: Sendable, Equatable {
+        let ts: Int
+        let artist: String
+        let album: String
+        let title: String
+        let artistMBID: String?
+    }
+
+    /// One page of a user's plays, newest first. `from`/`to`: UNIX times (inclusive). The track playing right now
+    /// (no date yet) is left out.
+    func recentTracks(user: String, from: Int? = nil, to: Int? = nil, page: Int = 1, limit: Int = 200) async throws
+        -> (tracks: [Play], pages: Int, total: Int) {
+        var p = ["user": user, "limit": String(limit), "page": String(page)]
+        if let from { p["from"] = String(from) }
+        if let to { p["to"] = String(to) }
+        let json = try await call("user.getRecentTracks", p, signed: false, post: false)
+        guard let recent = json["recenttracks"] as? [String: Any] else { throw ScrobbleError.http(0, "unexpected answer") }
+        let attr = recent["@attr"] as? [String: Any]
+        let pages = Int(attr?["totalPages"] as? String ?? "") ?? 0, total = Int(attr?["total"] as? String ?? "") ?? 0
+        // A single track comes as an object, several as an array.
+        let items = (recent["track"] as? [[String: Any]]) ?? ((recent["track"] as? [String: Any]).map { [$0] } ?? [])
+        func text(_ v: Any?) -> String { ((v as? [String: Any])?["#text"] as? String) ?? (v as? String) ?? "" }
+        let tracks: [Play] = items.compactMap { t in
+            guard let uts = ((t["date"] as? [String: Any])?["uts"] as? String).flatMap(Int.init) else { return nil }   // now playing
+            let mbid = ((t["artist"] as? [String: Any])?["mbid"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return Play(ts: uts, artist: text(t["artist"]), album: text(t["album"]), title: (t["name"] as? String) ?? "", artistMBID: mbid)
+        }
+        return (tracks, pages, total)
+    }
+}

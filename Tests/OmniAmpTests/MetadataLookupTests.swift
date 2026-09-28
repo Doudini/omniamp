@@ -34,7 +34,7 @@ final class MetadataLookupTests: XCTestCase {
     ]
 
     func testParsesEachSource() async {
-        let lookup = MetadataLookup(http: StubTransport(answers: answers))
+        let lookup = MetadataLookup(http: StubTransport(answers: answers), pace: 0)
         let found = await lookup.candidates(artist: "shannon wright", album: "flightsafety")
         XCTAssertEqual(Set(found.prefix(3).map(\.source)), [.musicBrainz, .iTunes, .deezer], "exact matches first")
         let mb = found.first { $0.source == .musicBrainz }!
@@ -50,7 +50,7 @@ final class MetadataLookupTests: XCTestCase {
     }
 
     func testShowsFromArchive() async {
-        let lookup = MetadataLookup(http: StubTransport(answers: answers))
+        let lookup = MetadataLookup(http: StubTransport(answers: answers), pace: 0)
         let found = await lookup.archive(artist: "Grateful Dead", date: "1977-05-08")
         XCTAssertEqual(found.first?.album, "1977-05-08 Barton Hall, Ithaca, NY")
         XCTAssertEqual(found.first?.year, 1977)
@@ -58,7 +58,7 @@ final class MetadataLookupTests: XCTestCase {
     }
 
     func testNothingFoundIsEmpty() async {
-        let lookup = MetadataLookup(http: StubTransport(answers: [:]))
+        let lookup = MetadataLookup(http: StubTransport(answers: [:]), pace: 0)
         let found = await lookup.candidates(artist: "x", album: "y", showDate: "2001-01-01")
         XCTAssertEqual(found, [])
     }
@@ -67,5 +67,48 @@ final class MetadataLookupTests: XCTestCase {
         let c = InfoCandidate(source: .iTunes, artist: "The Beatles", album: "Abbey Road", detail: "", score: 0)
         XCTAssertEqual(MetadataLookup.similarity(artist: "beatles", album: "abbey road", to: c), 1)
         XCTAssertLessThan(MetadataLookup.similarity(artist: "Beatles", album: "Revolver", to: c), 0.6)
+    }
+
+    func testSameNameArtistsToldApartByAlbum() async {
+        let lookup = MetadataLookup(http: StubTransport(answers: [
+            "ws/2/artist/?": """
+                {"artists":[{"id":"kr","name":"The Sound","score":100,"country":"KR"},
+                            {"id":"uk","name":"The Sound","score":100,"country":"GB"}]}
+                """,
+            "ws/2/release-group/?": #"{"release-groups":[{"id":"rg","artist-credit":[{"artist":{"id":"uk"}}]}]}"#,
+        ]), pace: 0)
+        let withAlbum = await lookup.artistPlace(name: "The Sound", mbid: nil, album: "Jeopardy")
+        XCTAssertEqual(withAlbum.country, "GB")
+        XCTAssertEqual(withAlbum.mbid, "uk")
+        // Last.fm's MBID points at the wrong one: the album still decides.
+        let wrongID = await lookup.artistPlace(name: "The Sound", mbid: "someone-else", album: "Jeopardy", trusted: false)
+        XCTAssertEqual(wrongID.country, "GB")
+        let noMatch = await lookup.artistPlace(name: "Somebody Else", mbid: nil)
+        XCTAssertFalse(noMatch.found)
+        XCTAssertFalse(noMatch.failed)
+    }
+
+    func testBusyMusicBrainzIsAskedAgain() async {
+        final class BusyOnce: HTTPTransport, @unchecked Sendable {
+            var calls = 0
+            func send(_ req: URLRequest) async throws -> (Data, Int) {
+                calls += 1
+                return calls == 1 ? (Data(#"{"error":"busy"}"#.utf8), 503)
+                                  : (Data(#"{"artists":[{"id":"x","name":"Low","score":100,"country":"US"}]}"#.utf8), 200)
+            }
+        }
+        let http = BusyOnce()
+        let lookup = MetadataLookup(http: http, pace: 0)
+        lookup.retryPause = 10_000_000
+        let place = await lookup.artistPlace(name: "Low", mbid: nil)
+        XCTAssertEqual(place.country, "US")
+        XCTAssertEqual(http.calls, 2)
+    }
+
+    func testRegionsAreNotCountries() {
+        XCTAssertEqual(MetadataLookup.realCountry("gb"), "GB")
+        XCTAssertNil(MetadataLookup.realCountry("XE"))
+        XCTAssertNil(MetadataLookup.realCountry("XW"))
+        XCTAssertEqual(MetadataLookup.realCountry("XK"), "XK", "Kosovo is a country")
     }
 }

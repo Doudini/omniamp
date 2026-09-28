@@ -139,6 +139,7 @@ final class CollectionDB {
         try addColumn("files", "playable", "INTEGER NOT NULL DEFAULT 1")
         try addColumn("albums", "unplayable", "INTEGER NOT NULL DEFAULT 0")
         try addColumn("albums", "unplayable_format", "TEXT")
+        try ensureListeningTables()
         let content = try db.scalar("SELECT value FROM meta WHERE key = 'content'") ?? 0
         if content < Self.contentVersion {
             // Unknown mtime: the scanner treats every file as changed.
