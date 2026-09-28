@@ -97,7 +97,7 @@ final class FolderSync {
     /// Folders whose changes FSEvents keeps a history of: local internal disks. Network shares report no
     /// events from other computers and external drives may keep no history: those are read again.
     private static func historyKept(_ root: String) -> Bool {
-        let v = try? URL(fileURLWithPath: root).resourceValues(forKeys: [.volumeIsLocalKey, .volumeIsInternalKey])
+        let v = try? URL(exactPath: root, isDirectory: true).resourceValues(forKeys: [.volumeIsLocalKey, .volumeIsInternalKey])
         return v?.volumeIsLocal == true && v?.volumeIsInternal == true
     }
 
@@ -122,7 +122,7 @@ final class FolderSync {
 
     /// Start watching a folder and add its music to the playlist.
     func add(_ url: URL) {
-        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+        let path = ExactPath.resolved(url.path)
         guard !roots.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { rescan([path]); return }
         // A new parent replaces watched subfolders.
         for r in roots where r.hasPrefix(path + "/") {
@@ -162,7 +162,7 @@ final class FolderSync {
     /// rather than wiping them; they come back on remount.
     nonisolated static func deletionIsReal(_ path: String, roots: [String]) -> Bool {
         guard let r = roots.first(where: { path == $0 || path.hasPrefix($0 + "/") }) else { return false }
-        return FileManager.default.fileExists(atPath: r)
+        return ExactPath.exists(r)
     }
 
     /// Rewrite a path into its root's stored spelling. The file system hands out several spellings of
@@ -170,7 +170,7 @@ final class FolderSync {
     nonisolated static func canonical(_ path: String, roots: [String]) -> String {
         for r in roots {
             var forms = [r, r.hasPrefix("/private/") ? String(r.dropFirst(8)) : "/private" + r]
-            let resolved = URL(fileURLWithPath: r).resolvingSymlinksInPath().path
+            let resolved = ExactPath.resolved(r)
             if !forms.contains(resolved) { forms.append(resolved) }
             for f in forms where path == f || path.hasPrefix(f + "/") { return r + path.dropFirst(f.count) }
         }
@@ -191,9 +191,7 @@ final class FolderSync {
                 let name = (p as NSString).lastPathComponent
                 guard !name.hasPrefix(".") else { continue }  // .DS_Store, temp files
                 // A changed file is rescanned with its folder: a .cue there may split it into tracks.
-                var isDir: ObjCBool = false
-                let exists = FileManager.default.fileExists(atPath: p, isDirectory: &isDir)
-                pending.insert(exists && !isDir.boolValue ? (p as NSString).deletingLastPathComponent : p)
+                pending.insert(ExactPath.kind(p) == false ? (p as NSString).deletingLastPathComponent : p)
             }
         }
         // Coalesce bursts (copying an album fires one event per file).
@@ -222,13 +220,11 @@ final class FolderSync {
         let rootsSnapshot = roots
         scansRunning += 1
         DispatchQueue.global(qos: .utility).async {
-            let fm = FileManager.default
             var dirs: [String] = [], gone: [String] = [], found: [Track] = [], unreadable: [String] = []
             for s in scopes {
-                var isDir: ObjCBool = false
-                if fm.fileExists(atPath: s, isDirectory: &isDir) {
-                    if isDir.boolValue { dirs.append(s) }
-                    found += FolderScanner.scan([URL(fileURLWithPath: s)], unreadable: &unreadable).map { t in
+                if let isDir = ExactPath.kind(s) {
+                    if isDir { dirs.append(s) }
+                    found += FolderScanner.scan([URL(exactPath: s, isDirectory: isDir)], unreadable: &unreadable).map { t in
                         var t = t
                         t.path = Self.canonical(t.path, roots: rootsSnapshot)
                         return t

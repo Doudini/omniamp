@@ -77,7 +77,7 @@ enum PlaylistFile {
             } else {
                 if ref.contains("://") { return nil }
                 let path = ref.replacingOccurrences(of: "\\", with: "/")
-                u = path.hasPrefix("/") ? URL(fileURLWithPath: path) : base.appendingPathComponent(path).standardizedFileURL
+                u = URL(exactPath: path.hasPrefix("/") ? path : ((base.path as NSString).appendingPathComponent(path) as NSString).standardizingPath)
             }
             var e = Entry(url: u, title: title)
             if let cue = Self.attribute("omniamp-cue", in: h) {

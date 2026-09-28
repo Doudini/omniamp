@@ -93,24 +93,23 @@ struct CueSheet {
     /// The audio file a FILE line refers to. Cue files often name a .wav that was later converted to .flac,
     /// or differ in case, so fall back to a same-name file with any supported audio extension.
     static func resolve(_ name: String, relativeTo dir: URL) -> URL? {
-        let fm = FileManager.default
         let clean = name.replacingOccurrences(of: "\\", with: "/")
-        let direct = clean.hasPrefix("/") ? URL(fileURLWithPath: clean) : dir.appendingPathComponent(clean)
+        let direct = URL(exactPath: clean.hasPrefix("/") ? clean : (dir.path as NSString).appendingPathComponent(clean))
         // Always answer with the name as it is on disk: on a case-insensitive volume "ALBUM.FLAC" exists
         // for album.flac, but the scanner lists album.flac, and the two must match to replace its row.
         let parent = direct.deletingLastPathComponent()
-        let files = (try? fm.contentsOfDirectory(atPath: parent.path)) ?? []
+        let files = ExactPath.contents(ofDirectory: parent.path) ?? []
         let name = direct.lastPathComponent
         // Only audio: a sheet naming itself, a cover or anything else would become "tracks" that can't play.
         func isAudio(_ f: String) -> Bool { FolderScanner.audioExtensions.contains((f as NSString).pathExtension.lowercased()) }
         if let f = files.first(where: { $0 == name && isAudio($0) }) ?? files.first(where: { $0.lowercased() == name.lowercased() && isAudio($0) }) {
-            return parent.appendingPathComponent(f)
+            return parent.appendingExact(f)
         }
         let stem = (name.lowercased() as NSString).deletingPathExtension
         if let f = files.first(where: {
             ($0.lowercased() as NSString).deletingPathExtension == stem
                 && FolderScanner.audioExtensions.contains(($0 as NSString).pathExtension.lowercased())
-        }) { return parent.appendingPathComponent(f) }
+        }) { return parent.appendingExact(f) }
         return nil
     }
 

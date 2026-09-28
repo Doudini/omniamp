@@ -40,7 +40,7 @@ struct Track: Codable, Sendable {
     var isStream: Bool { isRemote && podcast == nil }
     /// A podcast episode: a web audio file with a length, played by seeking/resuming like a file.
     var isEpisode: Bool { isRemote && podcast != nil }
-    var url: URL { isRemote ? (URL(string: path) ?? URL(fileURLWithPath: path)) : URL(fileURLWithPath: path) }
+    var url: URL { isRemote ? (URL(string: path) ?? URL(exactPath: path)) : URL(exactPath: path) }
 
     /// A radio station entry for the playlist.
     static func stream(_ url: String, name: String?, logo: String? = nil) -> Track {

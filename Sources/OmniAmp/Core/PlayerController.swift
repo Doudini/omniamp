@@ -388,8 +388,7 @@ final class PlayerController {
         let streams = store.tracks.map(\.isRemote)
         let ids = store.tracks.indices.map { store.id(at: $0) }
         DispatchQueue.global(qos: .userInitiated).async {
-            let fm = FileManager.default
-            let dead = paths.indices.filter { !streams[$0] && !fm.fileExists(atPath: paths[$0]) }.map { ids[$0] }
+            let dead = paths.indices.filter { !streams[$0] && !ExactPath.exists(paths[$0]) }.map { ids[$0] }
             DispatchQueue.main.async {
                 let idx = IndexSet(dead.compactMap { self.store.index(ofID: $0) })
                 if !idx.isEmpty { self.remove(trackIndices: idx) }
