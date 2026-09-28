@@ -34,7 +34,9 @@ enum PodcastOPML {
     /// OPML 2.0 with one outline per show.
     static func write(_ shows: [PodcastShow], date: Date = Date()) -> Data {
         func esc(_ s: String) -> String {
-            s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+            // XML can't hold most control characters (one in a title made the whole export unreadable).
+            let clean = String(String.UnicodeScalarView(s.unicodeScalars.filter { $0.value >= 0x20 || $0 == "\t" || $0 == "\n" || $0 == "\r" }))
+            return clean.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
         }
         let when = date.formatted(.dateTime.locale(Locale(identifier: "en_US_POSIX")).weekday(.abbreviated).day(.twoDigits)

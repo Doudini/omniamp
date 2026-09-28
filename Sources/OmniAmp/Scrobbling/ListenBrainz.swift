@@ -26,7 +26,9 @@ final class ListenBrainz: ScrobbleService {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         guard (200..<300).contains(status) else {
             if status == 401 { Keychain.set("listenbrainz.token", nil) }
-            throw ScrobbleError.http(status, json["error"] as? String ?? String(decoding: data.prefix(200), as: UTF8.self))
+            let msg = json["error"] as? String ?? String(decoding: data.prefix(200), as: UTF8.self)
+            if status == 400 { throw ScrobbleError.rejected(msg) }   // a bad listen, not auth or an outage
+            throw ScrobbleError.http(status, msg)
         }
         return json
     }

@@ -190,6 +190,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             let q = search.stringValue.lowercased()
             stations = RadioFavorites.all.filter { q.isEmpty || $0.name.lowercased().contains(q) || $0.tags.lowercased().contains(q) }
             table.reloadData()
+            selectTopResult()
             status.stringValue = stations.isEmpty ? "No favorites yet: select a station and press FAV." : "\(stations.count) favorites"
             return
         }
@@ -204,6 +205,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
                 guard !Task.isCancelled else { return }
                 stations = list
                 table.reloadData()
+                selectTopResult()
                 table.scrollRowToVisible(0)
                 status.stringValue = list.isEmpty ? "No stations found." : "\(list.count) stations" + (filtered ? "" : " · most popular")
             } catch {
@@ -224,7 +226,6 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
     /// Return plays, Space pauses, ⌘D favorite, Esc closes, typing searches.
     private func tableKey(_ e: NSEvent) -> Bool {
         let mods = e.modifierFlags.intersection([.command, .control, .option])
-        if mods == .command, e.charactersIgnoringModifiers?.lowercased() == "d" { toggleFavorite(); return true }
         guard mods.isEmpty else { return false }
         switch e.keyCode {
         case 36, 76: playSelected(); return true
@@ -268,6 +269,15 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
     func focusList() {
         window?.makeFirstResponder(table)
         if table.selectedRow < 0, table.numberOfRows > 0 { table.selectRowIndexes([0], byExtendingSelection: false) }
+    }
+
+    /// A new list: the top row is selected (the old row number would point at another station, and on first
+    /// open nothing was selected, so Return did nothing).
+    private func selectTopResult() {
+        if stations.isEmpty { table.deselectAll(nil) } else {
+            table.selectRowIndexes([0], byExtendingSelection: false)
+            table.scrollRowToVisible(0)
+        }
     }
 
     /// ⌘F while this window is in front.
@@ -355,6 +365,10 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             }
         }
     }
+
+    /// ⌘D (File → Favorite Station): from the list or while typing in the search.
+    var canToggleFavorite: Bool { selected != nil }
+    func toggleFavoriteFromMenu() { toggleFavorite() }
 
     @objc private func toggleFavorite() {
         guard let s = selected else { return }

@@ -32,7 +32,7 @@ final class FakeService: ScrobbleService {
     func nowPlaying(_ s: Scrobble) async throws {}
     func submit(_ batch: [Scrobble]) async throws -> Int {
         if fail { throw ScrobbleError.http(503, "down") }
-        if batch.contains(where: { refuse.contains($0.title) }) { throw ScrobbleError.http(400, "invalid parameters") }
+        if batch.contains(where: { refuse.contains($0.title) }) { throw ScrobbleError.rejected("invalid parameters") }
         received.append(batch)
         return batch.count
     }

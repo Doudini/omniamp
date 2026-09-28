@@ -56,8 +56,19 @@ final class EpisodeMarkView: NSView {
 final class KeyTableView: NSTableView {
     var onKey: ((NSEvent) -> Bool)?
     override func keyDown(with event: NSEvent) {
+        // ⌃Return: the row's right-click menu, from the keyboard.
+        if event.modifierFlags.intersection([.command, .control, .option]) == .control, event.keyCode == 36 || event.keyCode == 76 {
+            showRowMenu()
+            return
+        }
         if onKey?(event) == true || handleJumpKey(event) { return }   // same fast jumps as the playlist
         super.keyDown(with: event)
+    }
+
+    func showRowMenu() {
+        guard let menu, selectedRow >= 0 else { NSSound.beep(); return }
+        let r = rect(ofRow: selectedRow)
+        menu.popUp(positioning: nil, at: NSPoint(x: r.minX + 40, y: r.maxY), in: self)
     }
 }
 
@@ -149,6 +160,7 @@ final class EpisodeNotesView: NSView {
     private var dim: NSColor { Theme.phosphorDim.blended(withFraction: 0.35, of: Theme.phosphor) ?? Theme.phosphorDim }
 
     func applyTheme() {
+        shownURL = nil
         layer?.backgroundColor = Theme.lcd.cgColor
         title.font = Fonts.hack(12, bold: true)
         title.textColor = Theme.playlistText
@@ -162,6 +174,7 @@ final class EpisodeNotesView: NSView {
     /// `status`: played / how much is left / new, for the meta line.
     func show(_ e: PodcastEpisode?, show: PodcastShow?, status: String?) {
         guard let e, let show else {
+            shownURL = nil
             art.isHidden = true
             title.stringValue = ""
             meta.stringValue = ""
@@ -186,9 +199,17 @@ final class EpisodeNotesView: NSView {
                 self.art.image = img
             }
         }
+        // The notes only when the episode changes: this runs for every progress tick and download percent,
+        // and rebuilding would jump back to the top and drop a selection while you read.
+        guard e.url != shownURL || e.summary != shownSummary else { return }
+        shownURL = e.url
+        shownSummary = e.summary
         text.textStorage?.setAttributedString(Self.notes(e, font: Fonts.hack(11), color: Theme.playlistText))
         text.scroll(.zero)
     }
+
+    private var shownURL: String?
+    private var shownSummary: String?
 
     /// Show notes with the feed's links put back on their text, plus any bare web addresses.
     static func notes(_ e: PodcastEpisode, font: NSFont, color: NSColor) -> NSAttributedString {

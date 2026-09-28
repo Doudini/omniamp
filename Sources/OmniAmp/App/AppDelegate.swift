@@ -205,6 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var podcasts: PodcastWindowController?
 
     @objc private func showPodcasts(_ sender: Any?) {
+        let wasOpen = podcasts?.window?.isVisible == true
         if podcasts == nil {
             podcasts = PodcastWindowController(controller: controller)
             // Closing frees the window and its lists: they're rebuilt (from caches) when it opens again.
@@ -214,8 +215,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         podcasts?.showWindow(nil)
         podcasts?.window?.makeKeyAndOrderFront(nil)
-        podcasts?.focusList()
+        if !wasOpen { podcasts?.focusList() }   // already open: keep your place (search, episodes…)
     }
+
+    @objc private func favoriteStation(_ sender: Any?) {
+        if let p = podcasts, NSApp.keyWindow === p.window { p.downloadFromMenu() } else { radio?.toggleFavoriteFromMenu() }
+    }
+    @objc private func toggleEpisodeNotes(_ sender: Any?) { podcasts?.toggleNotesFromMenu() }
+    @objc private func toggleUnplayedOnly(_ sender: Any?) { podcasts?.toggleUnplayedFromMenu() }
 
     @objc private func toggleRadio(_ sender: Any?) {
         if let w = radio?.window, w.isVisible, w.isKeyWindow { w.performClose(nil) } else { showRadio(nil) }
@@ -233,6 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func showRadio(_ sender: Any?) {
+        let wasOpen = radio?.window?.isVisible == true
         if radio == nil {
             radio = RadioWindowController(controller: controller)
             radio?.onClose = { [weak self] in
@@ -241,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         radio?.showWindow(nil)
         radio?.window?.makeKeyAndOrderFront(nil)
-        radio?.focusList()
+        if !wasOpen { radio?.focusList() }
     }
 
     @objc private func showSettings(_ sender: Any?) {
@@ -391,6 +399,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func showClassic(_ sender: Any?) { if mode != .classic || look == nil { showLook(.classic) } }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(favoriteStation(_:)) {
+            if let p = podcasts, NSApp.keyWindow === p.window {
+                item.title = "Download Episode"
+                return p.canDownloadSelection
+            }
+            item.title = "Favorite Station"
+            guard let r = radio, NSApp.keyWindow === r.window else { return false }
+            return r.canToggleFavorite
+        }
+        if item.action == #selector(toggleEpisodeNotes(_:)) || item.action == #selector(toggleUnplayedOnly(_:)) {
+            if item.action == #selector(toggleUnplayedOnly(_:)) { item.state = UserDefaults.standard.bool(forKey: "podcastUnplayedOnly") ? .on : .off }
+            return podcasts != nil && NSApp.keyWindow === podcasts?.window
+        }
         if item.action == #selector(switchView(_:)) {
             let key = NSApp.keyWindow
             return key != nil && (key === podcasts?.window || key === radio?.window)
@@ -716,6 +737,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // ⌘F searches in whichever window is in front.
         if let p = podcasts, NSApp.keyWindow === p.window { p.focusSearch(); return }
         if let r = radio, NSApp.keyWindow === r.window { r.focusSearch(); return }
+        // From Settings, the shortcuts list…: bring the player forward first (its field would be invisible).
+        if let k = NSApp.keyWindow, look?.owns(k) != true { look?.show() }
         look?.focusFilter()
     }
     /// Only when asked: there are no automatic update checks.
@@ -796,6 +819,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let radio = fileMenu.addItem(withTitle: "Internet Radio…", action: #selector(showRadio(_:)), keyEquivalent: "r")
         radio.keyEquivalentModifierMask = [.command, .option]
         radio.target = self
+        // A menu item, so it works from the station list and while typing in the Radio search alike.
+        // ⌘D is "keep this": favorite in Radio, download in Podcasts (the title follows the window in front).
+        fileMenu.addItem(withTitle: "Favorite Station", action: #selector(favoriteStation(_:)), keyEquivalent: "d").target = self
+        fileMenu.addItem(withTitle: "Show Episode Notes", action: #selector(toggleEpisodeNotes(_:)), keyEquivalent: "i").target = self
+        let unplayed = fileMenu.addItem(withTitle: "Unplayed Episodes Only", action: #selector(toggleUnplayedOnly(_:)), keyEquivalent: "u")
+        unplayed.keyEquivalentModifierMask = [.command, .shift]
+        unplayed.target = self
         let pods = fileMenu.addItem(withTitle: "Podcasts…", action: #selector(showPodcasts(_:)), keyEquivalent: "p")
         pods.keyEquivalentModifierMask = [.command, .option]
         pods.target = self
@@ -919,8 +949,11 @@ extension AppDelegate: NSMenuDelegate {
     /// only the Playlist menu has a shortcut, ⌘R.
     func menuHasKeyEquivalent(_ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
                               action: UnsafeMutablePointer<Selector?>) -> Bool {
-        guard menu.title == "Playlist", event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-              event.charactersIgnoringModifiers == "r" else { return false }
+        // Only ⌘ (Caps Lock or fn don't matter), and only for the player's playlist: Podcasts has its own
+        // Show in Finder for downloads.
+        guard menu.title == "Playlist", event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+              event.charactersIgnoringModifiers?.lowercased() == "r",
+              let k = NSApp.keyWindow, look?.owns(k) == true else { return false }
         target.pointee = self
         action.pointee = #selector(revealSelected(_:))
         return true

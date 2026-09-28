@@ -17,12 +17,15 @@ enum Updater {
     }
 
     enum UpdateError: LocalizedError {
-        case noRelease, noDMG, checksum, signature(String), notWritable(String), translocated, tool(String)
+        case noRelease, noDMG, checksum, noChecksum, http(Int), notNewer(String), signature(String), notWritable(String), translocated, tool(String)
         var errorDescription: String? {
             switch self {
             case .noRelease: return "Couldn't read the latest release from GitHub."
             case .noDMG: return "The latest release has no OmniAmp DMG to install."
             case .checksum: return "The download doesn't match the checksum GitHub lists for it, so it wasn't installed."
+            case .noChecksum: return "GitHub lists no checksum for this download, so it can't be verified and wasn't installed."
+            case .http(let code): return "The download failed (the server answered \(code))."
+            case .notNewer(let v): return "The downloaded app is version \(v), not newer than this one, so it wasn't installed."
             case .signature(let why): return "The downloaded app failed the signature check (\(why)), so it wasn't installed."
             case .notWritable(let path): return "OmniAmp can't replace itself in \(path). Install the update from the DMG instead."
             case .translocated: return "OmniAmp is running from a temporary location. Move it to the Applications folder first, then check again."
@@ -81,34 +84,44 @@ enum Updater {
     /// Download, verify and stage the new app; returns the staged OmniAmp.app.
     static func download(_ r: Release, progress: @escaping (Double) -> Void) async throws -> URL {
         guard r.dmg.pathExtension.lowercased() == "dmg" else { throw UpdateError.noDMG }
-        let (bytes, resp) = try await URLSession.shared.bytes(from: r.dmg)
-        let total = max(1, resp.expectedContentLength)
+        guard let want = r.sha256 else { throw UpdateError.noChecksum }   // never install what can't be verified
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("OmniAmp-update-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent(r.dmg.lastPathComponent)
-        FileManager.default.createFile(atPath: file.path, contents: nil)
-        let out = try FileHandle(forWritingTo: file)
-        var hasher = SHA256()
-        var buf = Data(), done: Int64 = 0
-        buf.reserveCapacity(1 << 16)
-        for try await b in bytes {
-            buf.append(b)
-            if buf.count >= 1 << 16 {
-                hasher.update(data: buf); try out.write(contentsOf: buf)
-                done += Int64(buf.count); buf.removeAll(keepingCapacity: true)
-                let f = Double(done) / Double(total)
-                await MainActor.run { progress(f) }
-            }
-        }
-        hasher.update(data: buf); try out.write(contentsOf: buf)
-        try out.close()
-        if let want = r.sha256 {
+        do {
+            // Straight to a file (with progress), then hashed in 1 MB chunks: far faster than byte by byte.
+            let (tmp, resp) = try await URLSession.shared.download(from: r.dmg, delegate: DownloadProgress(progress))
+            if let code = (resp as? HTTPURLResponse)?.statusCode, !(200..<300).contains(code) { throw UpdateError.http(code) }
+            let file = dir.appendingPathComponent(r.dmg.lastPathComponent)
+            try FileManager.default.moveItem(at: tmp, to: file)
+            let h = try FileHandle(forReadingFrom: file)
+            defer { try? h.close() }
+            var hasher = SHA256()
+            while let chunk = try h.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
             let got = hasher.finalize().map { String(format: "%02x", $0) }.joined()
             guard got == want.lowercased() else { throw UpdateError.checksum }
+            let app = try extractApp(from: file, into: dir)
+            try verify(app)
+            // Only forward: an older signed build published under a newer tag must not be installed.
+            let version = Bundle(url: app)?.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+            guard isNewer(version, than: currentVersion) else { throw UpdateError.notNewer(version) }
+            return app
+        } catch {
+            try? FileManager.default.removeItem(at: dir)
+            throw error
         }
-        let app = try extractApp(from: file, into: dir)
-        try verify(app)
-        return app
+    }
+
+    /// Download progress (0…1) on the main thread.
+    private final class DownloadProgress: NSObject, URLSessionDownloadDelegate {
+        let report: (Double) -> Void
+        init(_ report: @escaping (Double) -> Void) { self.report = report }
+        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64,
+                        totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+            guard totalBytesExpectedToWrite > 0 else { return }
+            let f = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+            DispatchQueue.main.async { self.report(f) }
+        }
+        func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
     }
 
     private static func run(_ tool: String, _ args: [String]) throws -> String {
@@ -143,15 +156,11 @@ enum Updater {
         return SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess ? code : nil
     }
 
-    /// True when this copy is signed with a certificate (the OmniAmp one), not ad-hoc.
-    private static func certificates(of code: SecStaticCode) -> [SecCertificate] {
-        var info: CFDictionary?
-        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let d = info as? [String: Any] else { return [] }
-        return d[kSecCodeInfoCertificates as String] as? [SecCertificate] ?? []
-    }
 
-    /// The new app must be a valid, intact OmniAmp; if we're signed with a certificate, it must be the same one.
+    /// Official builds: OmniAmp's bundle id, signed with the OmniAmp certificate (same as scripts/release.sh).
+    static let requirement = #"identifier "com.microbot.omniamp" and certificate root = H"4acac334c056879abebe11fc6caa607f1a91800c""#
+
+    /// The new app must be a valid, intact OmniAmp, signed with the OmniAmp certificate.
     static func verify(_ app: URL) throws {
         guard let new = staticCode(app) else { throw UpdateError.signature("unreadable") }
         guard SecStaticCodeCheckValidity(new, SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate), nil) == errSecSuccess else {
@@ -160,12 +169,12 @@ enum Updater {
         guard Bundle(url: app)?.bundleIdentifier == Bundle.main.bundleIdentifier ?? "com.microbot.omniamp" else {
             throw UpdateError.signature("different app")
         }
-        if let current = staticCode(Bundle.main.bundleURL), !certificates(of: current).isEmpty {
-            var req: SecRequirement?
-            guard SecCodeCopyDesignatedRequirement(current, [], &req) == errSecSuccess, let req,
-                  SecStaticCodeCheckValidity(new, [], req) == errSecSuccess else {
-                throw UpdateError.signature("not signed with the OmniAmp certificate")
-            }
+        // Always the OmniAmp certificate, also when this copy is a development build signed ad hoc (which
+        // would otherwise accept any validly signed app with our bundle id).
+        var req: SecRequirement?
+        guard SecRequirementCreateWithString(Self.requirement as CFString, [], &req) == errSecSuccess, let req,
+              SecStaticCodeCheckValidity(new, [], req) == errSecSuccess else {
+            throw UpdateError.signature("not signed with the OmniAmp certificate")
         }
     }
 

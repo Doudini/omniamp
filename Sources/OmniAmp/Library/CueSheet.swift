@@ -101,7 +101,9 @@ struct CueSheet {
         let parent = direct.deletingLastPathComponent()
         let files = (try? fm.contentsOfDirectory(atPath: parent.path)) ?? []
         let name = direct.lastPathComponent
-        if let f = files.first(where: { $0 == name }) ?? files.first(where: { $0.lowercased() == name.lowercased() }) {
+        // Only audio: a sheet naming itself, a cover or anything else would become "tracks" that can't play.
+        func isAudio(_ f: String) -> Bool { FolderScanner.audioExtensions.contains((f as NSString).pathExtension.lowercased()) }
+        if let f = files.first(where: { $0 == name && isAudio($0) }) ?? files.first(where: { $0.lowercased() == name.lowercased() && isAudio($0) }) {
             return parent.appendingPathComponent(f)
         }
         let stem = (name.lowercased() as NSString).deletingPathExtension

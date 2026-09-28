@@ -37,3 +37,30 @@ final class PlaylistFileTests: XCTestCase {
         XCTAssertEqual(FolderScanner.scan([pls]).map { ($0.path as NSString).lastPathComponent }, ["b.flac", "a.mp3"])
     }
 }
+
+final class PlaylistSanitizingTests: XCTestCase {
+    func testTitlesCannotInjectEntriesAndWebFilesStayFiles() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-m3u-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var evil = Track.stream("https://radio.example.com/live", name: "Evil\r/tmp/other.mp3\u{2028}more", logo: "https://x.com/\"logo\".png")
+        evil.tagsLoaded = true
+        let web = Track.webFile("https://example.com/talk.mp3", title: "A Talk")
+        let m3u = dir.appendingPathComponent("x.m3u")
+        try PlaylistFile.writeM3U([evil, web], to: m3u)
+        let back = PlaylistFile.entries(m3u)
+        XCTAssertEqual(back.count, 2, "no injected entry")
+        XCTAssertEqual(back[0].logo, "https://x.com/'logo'.png")
+        XCTAssertTrue(back[1].web)
+        let tracks = FolderScanner.scan([m3u])
+        XCTAssertTrue(tracks[1].isWebFile, "a web file comes back as a web file, not a station")
+        XCTAssertFalse(tracks[1].isStream)
+    }
+
+    func testOPMLExportDropsControlCharacters() {
+        let shows = [PodcastShow(feedURL: "https://a.com/f", title: "A", author: ""),
+                     PodcastShow(feedURL: "https://b.com/f", title: "B\u{1}ad", author: ""),
+                     PodcastShow(feedURL: "https://c.com/f", title: "C", author: "")]
+        XCTAssertEqual(PodcastOPML.read(PodcastOPML.write(shows)).count, 3)
+    }
+}

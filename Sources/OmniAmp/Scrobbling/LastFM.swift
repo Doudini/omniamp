@@ -86,6 +86,8 @@ final class LastFM: ScrobbleService {
             let msg = json["message"] as? String ?? "error \(code)"
             // 9 = invalid session (user revoked access): forget it.
             if code == 9 { Keychain.set("lastfm.session", nil) }
+            // 6 / 7: invalid parameters or resource: that scrobble will never be accepted (auth and outages will).
+            if code == 6 || code == 7 { throw ScrobbleError.rejected(msg) }
             throw ScrobbleError.http(status, msg)
         }
         guard (200..<300).contains(status) else { throw ScrobbleError.http(status, String(decoding: data.prefix(200), as: UTF8.self)) }

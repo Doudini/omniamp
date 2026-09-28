@@ -409,7 +409,7 @@ final class PlayerController {
             player.rate = speed(for: t)
             // Downloaded: play from disk (offline too). The track keeps its web address as its identity.
             player.playEpisode(url: PodcastDownloads.shared.localFile(t.path) ?? t.url, from: resumePosition(for: t), duration: t.duration)
-            PodcastLibrary.shared.noteListened(t.path)
+            PodcastLibrary.shared.noteListened(t.path, track: t)
             Scrobbler.shared.trackStarted(nil, duration: 0)   // podcasts aren't scrobbled
             ui?.currentTrackDidChange(old: old, new: index)
             updateNowPlaying()
@@ -796,7 +796,7 @@ final class PlayerController {
         UserDefaults.standard.set(resumeDates, forKey: "resumeDates")
         resumePositions = all
         if t.isEpisode {
-            PodcastLibrary.shared.noteListened(t.path)
+            PodcastLibrary.shared.noteListened(t.path, track: t)
             NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil)
         }
     }
@@ -1021,8 +1021,19 @@ final class PlayerController {
 
     private func setupRemoteCommands() {
         let cc = MPRemoteCommandCenter.shared()
-        cc.playCommand.addTarget { [weak self] _ in self?.playOrResume(); return .success }
-        cc.pauseCommand.addTarget { [weak self] _ in self?.player.pause(); self?.updateNowPlaying(); return .success }
+        // Headsets often send "play" when they reconnect: while playing that must not restart the track.
+        cc.playCommand.addTarget { [weak self] _ in
+            guard let self else { return .success }
+            if self.player.state != .playing { self.playOrResume() }
+            return .success
+        }
+        cc.pauseCommand.addTarget { [weak self] _ in
+            guard let self, self.player.state == .playing else { return .success }
+            self.player.pause()
+            self.rememberPosition()   // like every other pause
+            self.updateNowPlaying()
+            return .success
+        }
         cc.togglePlayPauseCommand.addTarget { [weak self] _ in self?.togglePlayPause(); return .success }
         cc.stopCommand.addTarget { [weak self] _ in self?.stop(); return .success }
         cc.nextTrackCommand.addTarget { [weak self] _ in self?.next(); return .success }

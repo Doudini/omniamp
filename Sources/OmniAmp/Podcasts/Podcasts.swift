@@ -449,18 +449,58 @@ final class PodcastLibrary {
         played = load("played.json") ?? Dictionary((load("played.json") ?? [String]()).map { ($0, 0) }, uniquingKeysWith: { a, _ in a })
         seen = load("seen.json") ?? [:]
         listened = load("listened.json") ?? [:]
+        started = load("started.json") ?? [:]
+        // Only subscriptions have "new" episodes: drop what browsing other shows left behind.
+        let subscribed = Set(subscriptions.map(\.feedURL))
+        if seen.keys.contains(where: { !subscribed.contains($0) }) {
+            seen = seen.filter { subscribed.contains($0.key) }
+            save(seen, "seen.json")
+        }
+        // Saved feeds of shows you only browsed are dropped after 30 days (subscriptions' are kept).
+        let keep = Set(subscriptions.map { feedFile($0.feedURL).lastPathComponent }), folder = dir.appendingPathComponent("feeds")
+        DispatchQueue.global(qos: .background).async {
+            let cutoff = Date().addingTimeInterval(-30 * 86_400)
+            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            for f in files where !keep.contains(f.lastPathComponent) {
+                if let d = try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, d < cutoff {
+                    try? FileManager.default.removeItem(at: f)
+                }
+            }
+        }
     }
 
-    func noteListened(_ url: String) {
+    /// What Continue listening needs to show an episode after a relaunch, also when its show isn't subscribed
+    /// (those feeds don't stay in memory or on disk).
+    private struct Started: Codable { var episode: PodcastEpisode; var show: PodcastShow }
+    private var started: [String: Started] = [:]
+
+    /// `track`: the playlist entry, used when no feed read so far has the episode.
+    func noteListened(_ url: String, track: Track? = nil) {
         listened[url] = Date().timeIntervalSince1970
         if listened.count > 500 { for k in listened.sorted(by: { $0.value < $1.value }).prefix(100).map(\.key) { listened.removeValue(forKey: k) } }
         save(listened, "listened.json")
+        if let found = lookupInFeeds(url) {
+            started[url] = Started(episode: found.episode, show: found.show)
+        } else if started[url] == nil, let t = track, t.isEpisode {
+            let showName = t.podcast.flatMap { $0.isEmpty ? nil : $0 } ?? "Web audio"
+            started[url] = Started(episode: PodcastEpisode(title: t.title ?? "Episode", url: url, published: t.published,
+                                                          duration: t.duration, summary: t.summary, image: t.logo),
+                                   show: PodcastShow(feedURL: "", title: showName, author: "", artwork: t.logo))
+        }
+        started = started.filter { listened[$0.key] != nil }
+        save(started, "started.json")
     }
 
     func lastListened(_ url: String) -> Double? { listened[url] }
 
-    /// An episode and its show, from the feeds read so far or the subscriptions' saved feeds.
+    /// An episode and its show: from the feeds read so far, the subscriptions' saved feeds, or what was noted
+    /// when it was listened to.
     func lookup(_ url: String) -> (episode: PodcastEpisode, show: PodcastShow)? {
+        if let found = lookupInFeeds(url) { return found }
+        return started[url].map { ($0.episode, $0.show) }
+    }
+
+    private func lookupInFeeds(_ url: String) -> (episode: PodcastEpisode, show: PodcastShow)? {
         for (feed, c) in feeds {
             if let e = c.episodes.first(where: { $0.url == url }), let s = knownShows[feed] ?? subscriptions.first(where: { $0.feedURL == feed }) {
                 return (e, s)
@@ -545,6 +585,20 @@ final class PodcastLibrary {
         knownShows[show.feedURL] = show
         _ = cachedEpisodes(show)   // loads the disk cache
         if let c = feeds[show.feedURL], Date().timeIntervalSince1970 - c.fetched < maxAge { return c.episodes }
+        // Opening the window refreshes subscriptions while the show you click loads too: one download per feed.
+        if let running = fetching[show.feedURL] { return try await running.value }
+        let task = Task { @MainActor in try await self.fetch(show) }
+        fetching[show.feedURL] = task
+        defer { fetching[show.feedURL] = nil }
+        return try await task.value
+    }
+
+    private var fetching: [String: Task<[PodcastEpisode], Error>] = [:]
+    /// Feed caches are written here, one after the other (tests wait on it with `writes.sync {}`).
+    static let writes = DispatchQueue(label: "omniamp.podcast.writes", qos: .utility)
+
+    @MainActor
+    private func fetch(_ show: PodcastShow) async throws -> [PodcastEpisode] {
         guard let url = URL(string: show.feedURL) else { return [] }
         var req = URLRequest(url: url)
         req.setValue("OmniAmp/1.0", forHTTPHeaderField: "User-Agent")
@@ -566,7 +620,8 @@ final class PodcastLibrary {
         }
         let c = FeedCache(fetched: Date().timeIntervalSince1970, episodes: eps)
         feeds[show.feedURL] = c
-        try? JSONEncoder().encode(c).write(to: feedFile(show.feedURL), options: .atomic)
+        let file = feedFile(show.feedURL)
+        Self.writes.async { try? JSONEncoder().encode(c).write(to: file, options: .atomic) }   // off the main thread, in order
         keepInMemory(show.feedURL)
         MemoryTrim.soon()   // parsing and saving a big feed leaves freed memory behind
         completeSubscription(show.feedURL, title: channel.title, author: channel.author, artwork: channel.artwork, newest: eps.first?.published)
@@ -625,17 +680,17 @@ final class PodcastLibrary {
         }
     }
 
-    /// Mark many episodes played at once (one save).
-    func markPlayed(_ urls: [String]) {
+    /// Mark (or unmark) many at once: one save and one refresh, not one per episode.
+    func markPlayed(_ urls: [String], _ on: Bool = true) {
         let now = Date().timeIntervalSince1970
-        for u in urls { played[u] = now }
+        for u in urls { if on { played[u] = now } else { played.removeValue(forKey: u) } }
         prunePlayed()
         save(played, "played.json")
         NotificationCenter.default.post(name: Self.progressChanged, object: nil)
     }
 
     func markSeen(_ show: PodcastShow) {
-        guard let newest = cachedEpisodes(show).first?.published, seen[show.feedURL] != newest else { return }
+        guard isSubscribed(show), let newest = cachedEpisodes(show).first?.published, seen[show.feedURL] != newest else { return }
         seen[show.feedURL] = newest
         save(seen, "seen.json")
     }

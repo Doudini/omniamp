@@ -170,6 +170,7 @@ final class PodcastTests: XCTestCase {
         XCTAssertTrue(lib.isPlayed(eps[0].url))
 
         // Everything is saved: a fresh library sees the same state (and the cached feed, offline).
+        PodcastLibrary.writes.sync {}
         let again = PodcastLibrary(directory: dir)
         XCTAssertTrue(again.isSubscribed(show))
         XCTAssertTrue(again.isPlayed(eps[0].url))
@@ -211,5 +212,26 @@ final class PlayedPruningTests: XCTestCase {
 
         let again = PodcastLibrary(directory: dir)
         XCTAssertTrue(again.isPlayed("https://new.example.com/single.mp3"), "saved with dates")
+    }
+}
+
+final class ContinueListeningMemoryTests: XCTestCase {
+    func testStartedEpisodeOfAnUnsubscribedShowIsFoundAfterRelaunch() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-started-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let lib = PodcastLibrary(directory: dir)
+        let url = "https://example.com/unsubscribed/ep1.mp3"
+        let t = Track.episode(url, title: "Ep 1", show: "Browsed Show", artwork: "https://example.com/c.jpg", duration: 3600,
+                              published: 1, summary: "notes")
+        lib.noteListened(url, track: t)
+        let again = PodcastLibrary(directory: dir)   // relaunch: no feeds in memory, not subscribed
+        let found = try XCTUnwrap(again.lookup(url))
+        XCTAssertEqual(found.episode.title, "Ep 1")
+        XCTAssertEqual(found.show.title, "Browsed Show")
+        XCTAssertEqual(found.episode.artwork(show: found.show), "https://example.com/c.jpg")
+
+        let web = Track.webFile("https://example.com/talk.mp3", title: "A Talk")
+        lib.noteListened(web.path, track: web)
+        XCTAssertEqual(PodcastLibrary(directory: dir).lookup(web.path)?.show.title, "Web audio", "no empty show name")
     }
 }

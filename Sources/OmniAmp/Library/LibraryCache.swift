@@ -29,8 +29,15 @@ enum LibraryCache {
     }
 
     static func load() -> Payload? {
-        guard let data = try? Data(contentsOf: fileURL),
-              var p = try? PropertyListDecoder().decode(Payload.self, from: data) else { return nil }
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        guard var p = try? PropertyListDecoder().decode(Payload.self, from: data) else {
+            // Unreadable (damaged, or from a future version): set it aside rather than overwrite it with an
+            // empty playlist on the next save.
+            let aside = fileURL.deletingLastPathComponent().appendingPathComponent("library-unreadable-\(Int(Date().timeIntervalSince1970)).cache")
+            try? FileManager.default.moveItem(at: fileURL, to: aside)
+            NSLog("OmniAmp: the library cache couldn't be read; kept it as %@", aside.lastPathComponent)
+            return nil
+        }
         // Caches written before lengths were checked may hold impossible values (a crafted tag): clean them.
         for i in p.tracks.indices {
             p.tracks[i].duration = Sane.duration(p.tracks[i].duration)

@@ -40,18 +40,16 @@ enum FolderScanner {
             return try? url.resolvingSymlinksInPath().resourceValues(forKeys: Set(keys))
         }
 
-        // Real paths of the roots and of linked folders: a link back up the tree must not loop forever.
-        // (Resolved only for links and roots: every lookup is a round trip on a network share.)
+        // Every folder's real path: a link back up the tree must neither loop nor add a folder twice. Only links
+        // and roots are resolved (a lookup per folder is a round trip on a network share); a plain subfolder's
+        // real path is its parent's plus its name.
         var visited = Set<String>()
 
         /// One folder: its audio files (with CUE sheets applied), sorted, then its subfolders in name order.
-        func walk(_ dir: URL, linked: Bool = false) {
-            var listFrom = dir
-            if linked {
-                // The listing doesn't follow a linked folder: list its target, keep the paths under the link.
-                listFrom = dir.resolvingSymlinksInPath()
-                guard visited.insert(listFrom.path).inserted else { return }
-            }
+        func walk(_ dir: URL, real: String, linked: Bool = false) {
+            guard visited.insert(real).inserted else { return }
+            // The listing doesn't follow a linked folder: list its target, keep the paths under the link.
+            let listFrom = linked ? URL(fileURLWithPath: real, isDirectory: true) : dir
             guard let listed = try? FileManager.default.contentsOfDirectory(at: listFrom, includingPropertiesForKeys: keys,
                                                                           options: [.skipsHiddenFiles]) else {
                 unreadable?(dir.path)
@@ -92,7 +90,8 @@ enum FolderScanner {
             }
             if !files.isEmpty { emit(files) }
             for d in subdirs.sorted(by: { $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending }) {
-                walk(d.url, linked: d.linked)
+                walk(d.url, real: d.linked ? d.url.resolvingSymlinksInPath().path : real + "/" + d.url.lastPathComponent,
+                     linked: d.linked)
             }
         }
 
@@ -116,14 +115,17 @@ enum FolderScanner {
             if rv?.isDirectory == true {
                 flushLoose()
                 let isLink = (try? root.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
-                if !isLink { visited.insert(root.resolvingSymlinksInPath().path) }   // a linked one is added by walk
-                walk(root, linked: isLink)
+                walk(root, real: root.resolvingSymlinksInPath().path, linked: isLink)
             } else if root.pathExtension.lowercased() == "cue" {
                 if let sheet = CueSheet.load(root) { loose += sheet.tracks(cueURL: root).tracks }
             } else if PlaylistFile.isPlaylist(root) {
                 // Keep the playlist's own order; skip entries whose files are gone.
                 for e in PlaylistFile.entries(root) {
                     let url = e.url
+                    if !url.isFileURL, e.web {   // a web audio file, not a station
+                        loose.append(.webFile(url.absoluteString, title: e.title ?? url.lastPathComponent))
+                        continue
+                    }
                     if !url.isFileURL, let show = e.podcast {
                         // Saved as "Show - Episode": keep just the episode title.
                         var title = e.title ?? url.lastPathComponent

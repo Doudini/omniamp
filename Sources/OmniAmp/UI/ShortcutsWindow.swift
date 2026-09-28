@@ -17,12 +17,12 @@ enum Shortcuts {
         ("Windows", [
             ("I", "INFO drawer (modern look)"), ("E", "Equalizer"), ("⌘1", "Player"), ("⌘2", "Internet Radio (again: close)"),
             ("⌘3", "Podcasts (again: close)"), ("⌃⌘1  ⌃⌘2", "Modern / classic look"), ("⌘O", "Add files or folder"), ("⌘L", "Add a URL"), ("⌘,", "Settings"),
-            ("⌘/", "This list"), ("Esc", "Close Radio / Podcasts (from the list)"),
+            ("⌘/", "This list"), ("⌘W  ⌘M", "Close / minimize a window"), ("⌘S  ⇧⌘O", "Save / open a playlist"),
         ]),
         ("Radio and Podcasts", [
-            ("⌘F", "Search"), ("Return  ↓", "From the search to the results"), ("Esc", "Clear the search, then back to the list"), ("⌃Tab", "Top ⇄ Subscribed, Popular ⇄ Favorites"), ("↑  ↓", "Move through the list"), ("⌘↑  ⌘⇧↑ …", "Jump 10 / 100 rows, page, first / last (as in the playlist)"), ("←  →", "Shows ↔ episodes (Podcasts)"),
-            ("Return", "Play"), ("Space", "Play / pause"), ("Type", "Search stations / filter episodes"),
-            ("⇧⌘F", "Filter episodes"), ("⌘D", "Add or remove a favorite station"),
+            ("⌘F", "Search"), ("Return  ↓", "From the search to the results"), ("Esc", "Clear search · back a step · close"), ("Tab", "Search ↔ lists"), ("⌃Tab", "Top ⇄ Subscribed, Popular ⇄ Favorites"), ("↑  ↓", "Move through the list"), ("⌘↑  ⌘⇧↑ …", "Jump 10 / 100 rows, page, first / last (as in the playlist)"), ("←  →", "Shows ↔ episodes (Podcasts)"),
+            ("Return", "Play (shows: open the episodes)"), ("Space", "Play / pause"), ("Type", "Search stations / filter episodes"),
+            ("⇧⌘F", "Filter episodes"), ("⌘D", "Favorite station · download episode"), ("⌘I  ⇧⌘U", "Episode notes · unplayed only"), ("⌃Return", "Menu for the selected row"),
         ]),
     ]
 }

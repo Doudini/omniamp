@@ -837,6 +837,17 @@ final class AudioPlayer {
             current = c
             stopNode()
             state = .playing
+            // Bit-perfect: while idle another app may have changed the device rate: match the file again.
+            let fileRate = c.file.fileFormat.sampleRate
+            if bitPerfect, AudioDevices.bestRate(for: fileRate, supported: AudioDevices.availableRates(deviceID)) != graphRate {
+                bindOutputUnit()
+                let before = AudioDevices.nominalRate(deviceID)
+                matchDeviceRate(to: fileRate)
+                rebuildGraph()
+                connect(format: c.file.processingFormat)
+                onOutputChange?()
+                if AudioDevices.nominalRate(deviceID) != before { awaitSettle(); return }
+            }
             beginPlayback()
             return
         }
@@ -869,16 +880,22 @@ final class AudioPlayer {
         let wasPaused = state == .paused
         let frame = c.trackStart + AVAudioFramePosition((Sane.offset(min(seconds, duration)) ?? 0) * c.sampleRate)
         stopNode()
-        upcoming = nil
+        // A queued gapless track went with the schedule: have it queued again (near the end, gapless stays).
+        if upcoming != nil { upcoming = nil; onPreloadDropped?() }
         c.startFrame = min(frame, max(c.trackStart, c.trackEnd - 1))
         current = c
         clockStart = nil
         scheduleCurrent()
+        if wasPaused {
+            // Stay paused: the clock shows the new place and resume() plays from there. (Playing and pausing
+            // again flickered the state, could leak a moment of audio and woke an idle engine.)
+            clockBase = Double(c.startFrame - c.trackStart) / c.sampleRate
+            return
+        }
         startEngineIfNeeded()
         guard playNode() else { return }
         startClock()
         state = .playing
-        if wasPaused { node.pause(); freezeClock(); state = .paused; scheduleIdleStop() }
     }
 
     // MARK: Scheduling

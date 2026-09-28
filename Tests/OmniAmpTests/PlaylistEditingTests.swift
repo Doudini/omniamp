@@ -109,3 +109,35 @@ final class UnplayableLoopTests: XCTestCase {
         XCTAssertTrue(c.statusText.hasPrefix("Stopped"))
     }
 }
+
+final class PausedSeekTests: XCTestCase {
+    func testSeekingWhilePausedStaysPaused() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-seek-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        setenv("OMNIAMP_CACHE_DIR", dir.path, 1)
+        setenv("OMNIAMP_VOLUME", "0", 1)
+        defer { unsetenv("OMNIAMP_CACHE_DIR"); unsetenv("OMNIAMP_VOLUME"); try? FileManager.default.removeItem(at: dir) }
+        // 10 s of silence, 44.1 kHz mono 16-bit.
+        let sr = 44_100, n = sr * 10
+        var wav = Data("RIFF".utf8)
+        func le32(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        wav += le32(36 + n * 2) + Data("WAVEfmt ".utf8) + le32(16) + [1, 0, 1, 0] + le32(sr) + le32(sr * 2) + [2, 0, 16, 0]
+        wav += Data("data".utf8) + le32(n * 2) + Data(count: n * 2)
+        let file = dir.appendingPathComponent("silence.wav")
+        try wav.write(to: file)
+
+        let p = AudioPlayer()
+        guard p.play(url: file) else { throw XCTSkip("no audio output here") }
+        p.pause()
+        var states: [AudioPlayer.State] = []
+        p.onStateChange = { states.append(p.state) }
+        p.seek(to: 5)
+        XCTAssertEqual(p.state, .paused)
+        XCTAssertTrue(states.isEmpty, "no playing → paused flicker")
+        XCTAssertEqual(p.currentTime, 5, accuracy: 0.05)
+        p.resume()
+        XCTAssertEqual(p.state, .playing)
+        XCTAssertEqual(p.currentTime, 5, accuracy: 0.2, "resumes from the new place")
+        p.stop()
+    }
+}

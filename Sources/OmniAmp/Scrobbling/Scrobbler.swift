@@ -33,11 +33,14 @@ struct URLSessionTransport: HTTPTransport {
 
 enum ScrobbleError: Error, LocalizedError {
     case http(Int, String)
+    /// The service refused the scrobble itself (bad data): retrying the same one can never work.
+    case rejected(String)
     case notConnected
     case auth(String)
     var errorDescription: String? {
         switch self {
         case .http(let c, let m): return "HTTP \(c): \(m)"
+        case .rejected(let m): return "Refused: \(m)"
         case .notConnected: return "Not connected"
         case .auth(let m): return m
         }
@@ -175,14 +178,17 @@ final class Scrobbler {
         Task { @MainActor in
             do {
                 let n = try await svc.submit(batch)
-                self.queues[svc.id] = Array((self.queues[svc.id] ?? []).dropFirst(max(1, n)))
+                // Remove exactly what was sent (the queue may have been trimmed at the front meanwhile).
+                var q = self.queues[svc.id] ?? []
+                for sent in batch.prefix(max(1, n)) { if let i = q.firstIndex(of: sent) { q.remove(at: i) } }
+                self.queues[svc.id] = q
                 self.lastError[svc.id] = nil
                 if (self.queues[svc.id] ?? []).isEmpty { self.oneByOne.remove(svc.id) }
                 self.saveQueue()
                 self.flushing.remove(svc.id)
                 self.onChange?()
                 if !(self.queues[svc.id] ?? []).isEmpty { self.flush(svc) }
-            } catch ScrobbleError.http(400, let msg) {
+            } catch ScrobbleError.rejected(let msg) {
                 // The service refused the content itself (not auth, not an outage): retrying it as is
                 // would block the queue for good. Split the batch; drop a single refused scrobble.
                 self.flushing.remove(svc.id)
@@ -194,7 +200,7 @@ final class Scrobbler {
                     self.oneByOne.remove(svc.id)
                     self.saveQueue()
                 }
-                self.flush(svc)
+                if svc.isConnected { self.flush(svc) }
             } catch {
                 // Keep everything queued (offline, server trouble); retried on the next scrobble or launch.
                 self.lastError[svc.id] = error.localizedDescription

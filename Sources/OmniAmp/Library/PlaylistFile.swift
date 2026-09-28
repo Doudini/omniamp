@@ -17,6 +17,8 @@ enum PlaylistFile {
         /// Podcast episodes are saved with the show's name (omniamp-podcast="…") and their length.
         var podcast: String?
         var seconds: Double?
+        /// A web audio file added by URL (not a station, not a podcast episode).
+        var web = false
         /// A CUE track's slice of its file (omniamp-cue="start,end,number"; end empty = to the end).
         var cueStart: Double?
         var cueEnd: Double?
@@ -60,7 +62,7 @@ enum PlaylistFile {
             if ref.hasPrefix("http://") || ref.hasPrefix("https://") {   // radio or podcast
                 return URL(string: ref).map {
                     Entry(url: $0, title: title, logo: Self.attribute("tvg-logo", in: h), podcast: Self.attribute("omniamp-podcast", in: h),
-                          seconds: Sane.duration(Double(h.split(separator: " ").first ?? "")))
+                          seconds: Sane.duration(Double(h.split(separator: " ").first ?? "")), web: Self.attribute("omniamp-web", in: h) != nil)
                 }
             }
             let u: URL
@@ -102,15 +104,23 @@ enum PlaylistFile {
     }
 
     /// Writes an extended M3U (UTF-8) with durations and titles.
+    /// One line: any line break (\r, U+2028…) in a tag would split the entry and inject a line of its own.
+    private static func oneLine(_ s: String) -> String {
+        String(s.unicodeScalars.map { CharacterSet.newlines.contains($0) ? " " : Character($0) })
+    }
+
+    /// An attribute value: one line, no double quotes (they end the value).
+    private static func attr(_ s: String) -> String { oneLine(s).replacingOccurrences(of: "\"", with: "'") }
+
     static func writeM3U(_ tracks: [Track], to url: URL) throws {
         var out = "#EXTM3U\n"
         out.reserveCapacity(tracks.count * 120)
         for t in tracks {
             let secs = Sane.duration(t.duration).map { Int($0.rounded()) } ?? -1
-            let logo = t.logo.map { " tvg-logo=\"\($0)\"" } ?? ""
-            let show = t.podcast.map { " omniamp-podcast=\"\($0.replacingOccurrences(of: "\"", with: "'"))\"" } ?? ""
+            let logo = t.logo.map { " tvg-logo=\"\(attr($0))\"" } ?? ""
+            let show = t.isWebFile ? " omniamp-web=\"1\"" : t.podcast.flatMap { $0.isEmpty ? nil : " omniamp-podcast=\"\(attr($0))\"" } ?? ""
             let cue = t.cueStart.map { " omniamp-cue=\"\($0),\(t.cueEnd.map { String($0) } ?? ""),\(t.cueNumber ?? 0)\"" } ?? ""
-            out += "#EXTINF:\(secs)\(logo)\(show)\(cue),\(t.displayTitle.replacingOccurrences(of: "\n", with: " "))\n\(t.path)\n"
+            out += "#EXTINF:\(secs)\(logo)\(show)\(cue),\(oneLine(t.displayTitle))\n\(oneLine(t.path))\n"
         }
         try out.write(to: url, atomically: true, encoding: .utf8)
     }

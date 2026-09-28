@@ -171,6 +171,11 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
         if playlistVisible { attach(playlistWindow) } else { detach(playlistWindow) }
     }
 
+    private func focusPlaylist() {
+        playlistWindow.makeKeyAndOrderFront(nil)
+        playlistWindow.makeFirstResponder(playlistView)
+    }
+
     /// Classic has no INFO drawer.
     func toggleInfo() { NSSound.beep() }
 
@@ -178,6 +183,7 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
         guard let i = controller.currentIndex, let r = controller.row(forTrackIndex: i) else { NSSound.beep(); return }
         if !playlistVisible { togglePlaylist() }
         playlistView.select(row: r)
+        focusPlaylist()   // so the playlist keys work from here
     }
 
     func toggleEQ() {
@@ -319,10 +325,15 @@ extension ClassicLookController: PlayerUI {
     private func closeJump(play: Bool) {
         var target: Int?
         if play, let r = playlistView.selectedRow, r < controller.rowCount { target = controller.trackIndex(forRow: r) }
+        let picked = playlistView.selectedTrackIndices
         jumpField?.stringValue = ""
         controller.setFilter("")
+        // Rows change with the filter: keep the same tracks selected, not whatever is at those rows now.
+        if let first = picked.first, let r = controller.row(forTrackIndex: first) { playlistView.select(row: r) }
+        else { playlistView.setSelection([]) }
         jumpPanel?.orderOut(nil)
-        mainWindow.makeKeyAndOrderFront(nil)
+        // Back to the playlist, so ↑↓ / Return / ⌫ work at once (the main window doesn't take those keys).
+        if playlistVisible { focusPlaylist() } else { mainWindow.makeKeyAndOrderFront(nil) }
         if let t = target {
             controller.play(index: t)
             if let r = controller.row(forTrackIndex: t) { playlistView.select(row: r) }

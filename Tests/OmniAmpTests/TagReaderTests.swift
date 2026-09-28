@@ -120,6 +120,16 @@ final class TagReaderTests: XCTestCase {
         XCTAssertEqual(FolderScanner.scan([lib.appendingPathComponent("Album")]).map(\.path).first.map { ($0 as NSString).lastPathComponent }, "1.mp3")
     }
 
+    func testLinkToAnAncestorDoesNotAddItsFilesTwice() throws {
+        let fm = FileManager.default
+        let root = tmp.appendingPathComponent("anc")
+        try fm.createDirectory(at: root.appendingPathComponent("x/y"), withIntermediateDirectories: true)
+        fm.createFile(atPath: root.appendingPathComponent("x/s.mp3").path, contents: Data([0]))
+        try fm.createSymbolicLink(at: root.appendingPathComponent("x/y/link"), withDestinationURL: root.appendingPathComponent("x"))
+        let names = FolderScanner.scan([root]).map { ($0.path as NSString).lastPathComponent }
+        XCTAssertEqual(names, ["s.mp3"], "x/y/link/s.mp3 is the same file")
+    }
+
     func testScannerFindsNestedFilesSorted() throws {
         let sub = tmp.appendingPathComponent("b/c", isDirectory: true)
         try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)

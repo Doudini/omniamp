@@ -169,6 +169,7 @@ final class FeedRobustnessTests: XCTestCase {
         net.body = "<html><body><h1>Please log in to the Wi-Fi</h1></body></html>"   // captive portal, HTTP 200
         XCTAssertThrowsError(try fetch().get())
         XCTAssertEqual(lib.cachedEpisodes(show).map(\.title), ["E1"], "the saved episodes survive")
+        PodcastLibrary.writes.sync {}
         XCTAssertEqual(PodcastLibrary(directory: dir).cachedEpisodes(show).count, 1, "on disk too")
     }
 

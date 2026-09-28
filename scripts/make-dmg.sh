@@ -51,6 +51,11 @@ TXT
 
 DMG="dist/OmniAmp-$VERSION.dmg"
 rm -f "$DMG"
-hdiutil create -volname "OmniAmp $VERSION" -srcfolder "$STAGE" -ov -format UDZO -fs HFS+ "$DMG" 2>&1 | grep -v deprecated >&2 || true
+LOG=$(mktemp)
+if ! hdiutil create -volname "OmniAmp $VERSION" -srcfolder "$STAGE" -ov -format UDZO -fs HFS+ "$DMG" >"$LOG" 2>&1; then
+  cat "$LOG" >&2; rm -f "$LOG"; echo "Creating the DMG failed." >&2; exit 1
+fi
+grep -v deprecated "$LOG" >&2 || true   # hdiutil's own "deprecated" notices aren't worth showing
+rm -f "$LOG"
 rm -rf "$(dirname "$STAGE")"
 echo "Built $PWD/$DMG ($(du -h "$DMG" | cut -f1))"

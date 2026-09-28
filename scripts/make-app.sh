@@ -4,7 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 swift build -c release
 # Version: the latest release tag (v0.3 → 0.3) unless OMNIAMP_VERSION says otherwise; build number: commit count.
-VERSION=${OMNIAMP_VERSION:-$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')}
+# (No tags or no git, e.g. a source zip: fall back to 0.1 instead of stopping silently under pipefail.)
+VERSION=${OMNIAMP_VERSION:-$( (git describe --tags --abbrev=0 2>/dev/null || true) | sed 's/^v//')}
 VERSION=${VERSION:-0.1}
 BUILD=${OMNIAMP_BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}
 # OMNIAMP_APP_PATH: build somewhere else (make-dmg.sh uses it so your own OmniAmp.app keeps its keys).

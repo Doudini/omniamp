@@ -53,6 +53,7 @@ enum DetailsReader {
                 var p: Int64 = 12
                 for _ in 0..<256 where p + 8 <= size {
                     let h = bytes(p, 8)
+                    guard h.count == 8 else { break }   // the file shrank, or a network read failed
                     let id = String(decoding: h[0..<4], as: UTF8.self)
                     let len = Int64(littleEndian ? le32(h, 4) : be32(h, 4))
                     if id.lowercased() == "id3 " { readID3(bytes(p + 8, Int(min(len, 32 << 20))), into: &d); break }
@@ -249,7 +250,7 @@ enum DetailsReader {
             var len = Int64(be32(h, 0)), header: Int64 = 8
             if len == 1 { len = Int64(be32(h, 8)) << 32 | Int64(be32(h, 12)); header = 16 } else if len == 0 { len = size - p }
             guard len >= header, len <= size - p else { return }
-            if String(decoding: h[4..<8], as: UTF8.self) == "moov" {
+            if h.count >= 8, String(decoding: h[4..<8], as: UTF8.self) == "moov" {
                 let m = bytes(p + header, Int(min(len - header, 64 << 20)))
                 walk(m, 0, m.count, into: &d)
                 return

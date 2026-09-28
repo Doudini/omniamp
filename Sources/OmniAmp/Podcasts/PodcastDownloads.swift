@@ -37,6 +37,8 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     private(set) var entries: [String: Entry] = [:]
     private var waiting: [(PodcastEpisode, PodcastShow)] = []
     private var active: [String: (task: URLSessionDownloadTask, episode: PodcastEpisode, show: PodcastShow, progress: Double)] = [:]
+    /// The running downloads in the order they started (a dictionary's order changes: rows would jump).
+    private var activeOrder: [String] = []
     /// Why the last attempt for an episode failed (shown until it's tried again).
     private(set) var failures: [String: String] = [:]
     private let maxActive = 2
@@ -182,7 +184,9 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     var totalBytes: Int64 { entries.values.reduce(0) { $0 + $1.bytes } }
     var isBusy: Bool { !active.isEmpty || !waiting.isEmpty }
     /// Running, then waiting downloads (for the Downloads list).
-    var pending: [(episode: PodcastEpisode, show: PodcastShow)] { active.values.map { ($0.episode, $0.show) } + waiting.map { ($0.0, $0.1) } }
+    var pending: [(episode: PodcastEpisode, show: PodcastShow)] {
+        activeOrder.compactMap { active[$0].map { ($0.episode, $0.show) } } + waiting.map { ($0.0, $0.1) }
+    }
     func failure(_ url: String) -> String? { failures[url] }
 
     // MARK: Actions
@@ -198,6 +202,7 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     /// Stop a queued or running download.
     func cancel(_ url: String) {
         if let a = active.removeValue(forKey: url) { a.task.cancel() }
+        activeOrder.removeAll { $0 == url }
         waiting.removeAll { $0.0.url == url }
         changed(url)
         startNext()
@@ -219,6 +224,7 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
             let task = session.downloadTask(with: u)
             task.taskDescription = e.url
             active[e.url] = (task, e, show, 0)
+            activeOrder.append(e.url)
             task.resume()
             changed(e.url)
         }
@@ -243,6 +249,11 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
             failures[url] = "the server answered \(http.statusCode)"
             return
         }
+        // A paywall, a login or an expired private link can answer 200 with a web page: not an episode.
+        if let mime = downloadTask.response?.mimeType?.lowercased(), mime.hasPrefix("text/") {
+            failures[url] = "the server sent a web page, not audio (a login or an expired link?)"
+            return
+        }
         ensureFolder()
         let name = uniqueName(Self.fileName(for: a.episode, show: a.show, ext: Self.fileExtension(for: url, response: downloadTask.response)))
         let dest = dir.appendingPathComponent(name)
@@ -259,6 +270,7 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let url = task.taskDescription, active.removeValue(forKey: url) != nil else { return }
+        activeOrder.removeAll { $0 == url }
         if let error, (error as? URLError)?.code != .cancelled {
             failures[url] = AudioPlayer.friendly(error)
             NSLog("OmniAmp: episode download failed: %@", error.localizedDescription)

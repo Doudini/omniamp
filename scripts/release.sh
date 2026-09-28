@@ -13,6 +13,11 @@ NOTES=${2:-}
 [[ -z "$(git status --porcelain)" ]] || { echo "Commit or stash your changes first." >&2; exit 1; }
 git fetch -q origin
 [[ "$(git rev-parse HEAD)" == "$(git rev-parse @{u})" ]] || { echo "Push your commits first (the release is tagged on what's on GitHub)." >&2; exit 1; }
+# Only forward: the updater installs a release only if it's newer than what people have.
+LAST=$( (git describe --tags --abbrev=0 2>/dev/null || true) | sed 's/^v//')
+if [[ -n "$LAST" ]] && { [[ "$LAST" == "$VERSION" ]] || [[ "$(printf '%s\n%s\n' "$LAST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; }; then
+  echo "Version $VERSION isn't newer than the last release ($LAST)." >&2; exit 1
+fi
 # Check for Updates only installs builds signed with the OmniAmp certificate: an ad-hoc build published
 # here would be refused by everyone's updater, so don't publish one.
 security find-identity -p codesigning 2>/dev/null | grep -q '"OmniAmp Code Signing"' ||
@@ -24,11 +29,11 @@ DMG="dist/OmniAmp-$VERSION.dmg"
 # The same check the updater makes (Updater.swift): the app in the DMG must satisfy OmniAmp's requirement.
 MNT=$(mktemp -d)
 hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG" >/dev/null
-trap 'hdiutil detach -quiet "$MNT" 2>/dev/null || true' EXIT
+trap 'hdiutil detach -quiet "$MNT" 2>/dev/null || true; rmdir "$MNT" 2>/dev/null || true' EXIT
 REQ='identifier "com.microbot.omniamp" and certificate root = H"4acac334c056879abebe11fc6caa607f1a91800c"'
 codesign --verify --deep --strict -R="$REQ" "$MNT/OmniAmp.app" ||
   { echo "The DMG's app doesn't pass the updater's signature check; not publishing." >&2; exit 1; }
-hdiutil detach -quiet "$MNT"; trap - EXIT
+hdiutil detach -quiet "$MNT"; rmdir "$MNT" 2>/dev/null || true; trap - EXIT
 
 if [[ -z "$NOTES" ]]; then
   NOTES=$(mktemp)

@@ -63,6 +63,14 @@ final class CueTests: XCTestCase {
         XCTAssertNil(CueSheet.resolve("Missing.wav", relativeTo: dir))
     }
 
+    func testCueNeverPointsAtNonAudioFiles() throws {
+        try "FILE \"Self.cue\" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n".write(to: dir.appendingPathComponent("Self.cue"), atomically: true, encoding: .utf8)
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("cover.jpg").path, contents: Data([0]))
+        XCTAssertNil(CueSheet.resolve("Self.cue", relativeTo: dir))
+        XCTAssertNil(CueSheet.resolve("cover.jpg", relativeTo: dir))
+        XCTAssertTrue(FolderScanner.scan([dir]).isEmpty, "a sheet naming itself adds nothing")
+    }
+
     func testFolderScanUsesCueInsteadOfWholeFile() throws {
         FileManager.default.createFile(atPath: dir.appendingPathComponent("Portishead - Dummy.flac").path, contents: Data([0]))
         FileManager.default.createFile(atPath: dir.appendingPathComponent("bonus.mp3").path, contents: Data([0]))

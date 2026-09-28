@@ -460,10 +460,22 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     }
 
     @objc private func filterChanged() {
+        let picked = selectedTrackIndices
         controller.setFilter(filterField.stringValue)
-        if controller.rowCount > 0 {
-            table.selectRowIndexes([0], byExtendingSelection: false)
+        if filterField.stringValue.isEmpty {
+            reselect(picked)   // cleared (ⓧ): the same tracks as before, not whatever is at those rows now
+        } else if controller.rowCount > 0 {
+            table.selectRowIndexes([0], byExtendingSelection: false)   // typing: the top hit
             table.scrollRowToVisible(0)
+        }
+    }
+
+    /// Select these tracks by identity (row numbers change when the filter does); nothing if they're gone.
+    private func reselect(_ tracks: IndexSet) {
+        let rows = IndexSet(tracks.compactMap { controller.row(forTrackIndex: $0) })
+        if rows.isEmpty { table.deselectAll(nil) } else {
+            table.selectRowIndexes(rows, byExtendingSelection: false)
+            table.scrollRowToVisible(rows.first!)
         }
     }
 
@@ -609,9 +621,11 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
 extension ModernWindowController: NSSearchFieldDelegate {
     /// Clear the filter and land on the playing track in the full playlist.
     private func clearFilterShowingCurrent() {
+        let picked = selectedTrackIndices
         filterField.stringValue = ""
         controller.setFilter("")
-        if let c = controller.currentIndex, let r = controller.row(forTrackIndex: c) {
+        reselect(picked)
+        if picked.isEmpty, let c = controller.currentIndex, let r = controller.row(forTrackIndex: c) {
             table.selectRowIndexes([r], byExtendingSelection: false)
             // Center it: after a jump the surrounding tracks are what you want to see.
             let visible = table.rows(in: table.visibleRect).length

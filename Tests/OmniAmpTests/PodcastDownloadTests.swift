@@ -123,6 +123,18 @@ final class PodcastDownloadTests: XCTestCase {
         XCTAssertEqual(PodcastDownloads(directory: store).state(ep.url), .none)
     }
 
+    func testAWebPageIsNotSavedAsAnEpisode() throws {
+        let page = dir.appendingPathComponent("login.html")
+        try "<html><body>Please log in</body></html>".write(to: page, atomically: true, encoding: .utf8)
+        let ep = PodcastEpisode(title: "Paywalled", url: page.absoluteString, published: nil, duration: nil, summary: nil)
+        let d = PodcastDownloads(directory: dir.appendingPathComponent("store4"))
+        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in d.state(ep.url) == .none && d.failure(ep.url) != nil }
+        d.download(ep, show: show)
+        wait(for: [done], timeout: 10)
+        XCTAssertNil(d.localFile(ep.url))
+        XCTAssertTrue(d.failure(ep.url)?.contains("web page") == true)
+    }
+
     func testRelativeDates() {
         let now = Date().timeIntervalSince1970
         XCTAssertEqual(PodcastWindowController.relative(now), "today")

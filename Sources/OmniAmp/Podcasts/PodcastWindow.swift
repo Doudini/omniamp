@@ -87,6 +87,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             self?.episodesTable.reloadData()
         }
         progressObserver = NotificationCenter.default.addObserver(forName: PodcastLibrary.progressChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.countedAsStarted = nil   // finished or reset: counts again past 30 s when replayed
             self?.refreshMarks()
             self?.refreshPinned(PodcastWindowController.continueShow)
         }
@@ -131,7 +132,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     /// The playing episode that has been added to Continue listening (once it's past 30 s).
-    private var countedAsStarted: String?
+    private var countedAsStarted: String?   // reset when an episode finishes or is marked (progressObserver)
 
     /// While an episode plays, its pie keeps up, and past 30 s it joins Continue listening (every few seconds;
     /// nothing runs when the window is closed).
@@ -463,6 +464,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         switch e.keyCode {
         case Key.tab: focus(e.modifierFlags.contains(.shift) ? -1 : 1, from: .shows); return true
         case Key.escape: window?.performClose(nil); return true
+        case Key.space: controller.togglePlayPause(); return true
         case Key.right, Key.returnKey, Key.enter:
             showSelectionWork?.perform()   // open the highlighted show now
             focusEpisodes()
@@ -484,8 +486,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard Self.plain(e) else { return false }
         switch e.keyCode {
         case Key.tab: focus(e.modifierFlags.contains(.shift) ? -1 : 1, from: .episodes); return true
-        case Key.escape: window?.performClose(nil); return true
-        case Key.left: window?.makeFirstResponder(showsTable); return true
+        case Key.escape, Key.left: focusShows(); return true   // one step back (Esc again in the shows closes)
         case Key.returnKey, Key.enter: playSelected(); return true
         case Key.space: controller.togglePlayPause(); return true
         default:
@@ -503,6 +504,12 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             episodesTable.scrollRowToVisible(0)
         }
     }
+
+    // Menu shortcuts that act here (AppDelegate routes them when this window is in front).
+    var canDownloadSelection: Bool { !selectedEpisodes.isEmpty }
+    func downloadFromMenu() { downloadSelected() }
+    func toggleNotesFromMenu() { toggleNotes() }
+    func toggleUnplayedFromMenu() { toggleUnplayed() }
 
     /// ⌘F while this window is in front.
     func focusSearch() {
@@ -638,7 +645,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         episodesTable.reloadData()
         let keep = IndexSet(episodes.indices.filter { selected.contains(episodes[$0].url) })
-        if !keep.isEmpty { episodesTable.selectRowIndexes(keep, byExtendingSelection: false) }
+        // By identity: the old row numbers now point at other episodes (PLAY / DOWNLOAD would act on them).
+        if keep.isEmpty { episodesTable.deselectAll(nil) } else { episodesTable.selectRowIndexes(keep, byExtendingSelection: false) }
         updateHeader()
         updateNotes()
         updateDownloadButton()
@@ -793,7 +801,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         if let found = library.lookup(url) { return found }
         guard let t = controller.tracks.first(where: { $0.path == url && $0.isEpisode }) else { return nil }
         return (PodcastEpisode(title: t.title ?? "Episode", url: url, published: t.published, duration: t.duration, summary: t.summary),
-                PodcastShow(feedURL: "", title: t.podcast ?? "Podcast", author: "", artwork: t.logo))
+                PodcastShow(feedURL: "", title: t.podcast.flatMap { $0.isEmpty ? nil : $0 } ?? "Web audio", author: "", artwork: t.logo))
     }
 
     private func pinnedEpisodes(_ s: PodcastShow) -> [(episode: PodcastEpisode, show: PodcastShow)] {
@@ -1231,7 +1239,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         let eps = selectedEpisodes
         guard !eps.isEmpty else { return }
         let makePlayed = !eps.allSatisfy { library.isPlayed($0.url) }
-        for e in eps { library.markPlayed(e.url, makePlayed) }
+        library.markPlayed(eps.map(\.url), makePlayed)   // one save and one refresh for 500 episodes too
         if unplayedOnly { applyEpisodeFilter() } else {
             episodesTable.reloadData(forRowIndexes: episodesTable.selectedRowIndexes, columnIndexes: IndexSet(integersIn: 0..<6))
             updateNotes()
