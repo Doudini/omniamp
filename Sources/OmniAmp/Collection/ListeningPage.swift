@@ -60,6 +60,18 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
     var onPlayRelease: ((LibraryAlbum) -> Void)?
     private let stack = NSStackView()
     private let history = ListeningHistory.shared
+    /// Everything the page shows, with what it was computed from.
+    private struct Figures: @unchecked Sendable {
+        let version: String
+        let stats: ListeningStats?
+        let river: ListeningRiver
+        let today: OnThisDay
+        let years: [Int]
+    }
+    /// Kept while the window is closed too: reopening Listening is instant until plays, places or the library change.
+    nonisolated(unsafe) private static var cache: Figures?
+    private static let lock = NSLock()
+
     private var stats: ListeningStats?
     private var river = ListeningRiver()
     private var today = OnThisDay()
@@ -148,19 +160,34 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         generation += 1
         let gen = generation
         updateStatus()
+        let started = Date()
         DispatchQueue.global(qos: .userInitiated).async {
             let db = try? CollectionDB()
-            let s = try? db?.listeningStats()
-            let river = (try? db?.river()) ?? ListeningRiver()
-            let today = (try? db?.onThisDay()) ?? OnThisDay()
-            let years = (try? db?.playYears()) ?? []
+            try? db?.fillPlayCalendar()
+            // The same plays, places and library as last time (and the same day): the figures from then.
+            let version = ((try? db?.listeningVersion()) ?? nil).map { $0 + "/" + Date().formatted(.iso8601.year().month().day()) }
+            let data: ListeningPage.Figures
+            if let version, let hit = ListeningPage.lock.withLock({ ListeningPage.cache?.version == version ? ListeningPage.cache : nil }) {
+                data = hit
+            } else {
+                data = ListeningPage.Figures(version: version ?? "", stats: try? db?.listeningStats(), river: (try? db?.river()) ?? ListeningRiver(),
+                                    today: (try? db?.onThisDay()) ?? OnThisDay(), years: (try? db?.playYears()) ?? [])
+                if version != nil { ListeningPage.lock.withLock { ListeningPage.cache = data } }
+            }
+            let s = data.stats, river = data.river, today = data.today, years = data.years
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation, let s else { return }
                 self.stats = s
                 self.river = river
                 self.today = today
                 self.playYears = years
+                let figures = Date()
                 self.build()
+                self.layoutSubtreeIfNeeded()
+                if ProcessInfo.processInfo.environment["OMNIAMP_DEBUG"] != nil {
+                    NSLog("OmniAmp: listening page: figures %.0f ms, building %.0f ms", figures.timeIntervalSince(started) * 1000,
+                          Date().timeIntervalSince(figures) * 1000)
+                }
             }
         }
     }

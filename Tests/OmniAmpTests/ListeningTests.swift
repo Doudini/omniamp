@@ -141,4 +141,18 @@ final class ListeningTests: XCTestCase {
         XCTAssertEqual(o.days.first?.plays, 2)
         XCTAssertEqual(o.days.first?.title, "Lullaby")
     }
+
+    func testPlayCalendarFilledForOlderPlays() throws {
+        let d = try db()
+        // A play stored before the calendar columns existed: no year, date, weekday or hour.
+        try d.db.run("INSERT INTO scrobbles(ts, artist, album, title, artist_key) VALUES (?, 'Low', '', 'Lullaby', 'low')", [1_200_000_000])
+        XCTAssertEqual(try d.playYears(), [], "not in the calendar yet")
+        let v1 = try d.listeningVersion()
+        try d.fillPlayCalendar()
+        let local = Calendar.current.component(.year, from: Date(timeIntervalSince1970: 1_200_000_000))
+        XCTAssertEqual(try d.playYears(), [local])
+        try d.addPlays([LastFM.Play(ts: 1_300_000_000, artist: "Low", album: "", title: "Words", artistMBID: nil)])
+        XCTAssertNotEqual(try d.listeningVersion(), v1, "new plays: the page's figures are computed again")
+        XCTAssertEqual(try d.listeningStats().clock.flatMap { $0 }.reduce(0, +), 2)
+    }
 }

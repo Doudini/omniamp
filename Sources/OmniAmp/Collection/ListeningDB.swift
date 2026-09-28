@@ -34,6 +34,45 @@ extension CollectionDB {
             checked REAL);
         CREATE TABLE IF NOT EXISTS area_country(area TEXT PRIMARY KEY, country TEXT);
         """)
+        // Each play's local calendar (year, "MM-DD", weekday 0 = Sunday, hour), worked out once: the charts group
+        // 200,000 plays by these, and converting every timestamp each time was most of the Listening page's cost.
+        var has = false
+        try db.query("PRAGMA table_info(scrobbles)") { if $0.text(1) == "year" { has = true } }
+        if !has {
+            try db.exec("""
+            ALTER TABLE scrobbles ADD COLUMN year INTEGER;
+            ALTER TABLE scrobbles ADD COLUMN md TEXT;
+            ALTER TABLE scrobbles ADD COLUMN wday INTEGER;
+            ALTER TABLE scrobbles ADD COLUMN hour INTEGER;
+            """)
+        }
+        try db.exec("""
+        CREATE INDEX IF NOT EXISTS scrobbles_year ON scrobbles(year, artist_key);
+        CREATE INDEX IF NOT EXISTS scrobbles_md ON scrobbles(md);
+        """)
+    }
+
+    /// Fill in the calendar of plays stored before it existed (one pass, the first time). Off the main thread.
+    func fillPlayCalendar() throws {
+        guard (try db.scalar("SELECT count(*) FROM scrobbles WHERE year IS NULL") ?? 0) > 0 else { return }
+        try db.exec("""
+        UPDATE scrobbles SET year = CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER),
+            md = strftime('%m-%d', ts, 'unixepoch', 'localtime'),
+            wday = CAST(strftime('%w', ts, 'unixepoch', 'localtime') AS INTEGER),
+            hour = CAST(strftime('%H', ts, 'unixepoch', 'localtime') AS INTEGER)
+        WHERE year IS NULL
+        """)
+    }
+
+    /// Changes whenever plays, places or the library change: the Listening page's figures are kept until it does.
+    func listeningVersion() throws -> String {
+        var v = ""
+        try db.query("""
+            SELECT (SELECT count(*) || ':' || coalesce(max(ts), 0) FROM scrobbles) || '/' ||
+                   (SELECT count(*) || ':' || coalesce(max(checked), 0) FROM artist_places) || '/' ||
+                   (SELECT count(*) || ':' || coalesce(max(added), 0) FROM albums)
+            """) { v = $0.text(0) }
+        return v
     }
 
     func meta(_ key: String) -> Int? { try? db.scalar("SELECT value FROM meta WHERE key = ?", [key]).map(Int.init) }
@@ -47,9 +86,13 @@ extension CollectionDB {
         guard !plays.isEmpty else { return 0 }
         return try db.transaction {
             var added = 0
+            let cal = Calendar.current
             for p in plays {
-                try db.run("INSERT OR IGNORE INTO scrobbles(ts, artist, album, title, artist_key, mbid) VALUES (?, ?, ?, ?, ?, ?)",
-                           [p.ts, p.artist, p.album, p.title, Keys.artist(p.artist), p.artistMBID])
+                let c = cal.dateComponents([.year, .month, .day, .weekday, .hour], from: Date(timeIntervalSince1970: TimeInterval(p.ts)))
+                try db.run("""
+                    INSERT OR IGNORE INTO scrobbles(ts, artist, album, title, artist_key, mbid, year, md, wday, hour) VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """, [p.ts, p.artist, p.album, p.title, Keys.artist(p.artist), p.artistMBID, c.year,
+                          String(format: "%02d-%02d", c.month ?? 1, c.day ?? 1), (c.weekday ?? 1) - 1, c.hour])
                 added += db.changes
             }
             return added
@@ -169,12 +212,11 @@ extension CollectionDB {
             GROUP BY a.artist_key ORDER BY t DESC LIMIT 15
             """) { r in s.neverPlayed.append(.init(id: r.text(0), label: r.text(1), value: Double(r.int(2)))) }
 
-        try db.query("SELECT CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER), count(*) FROM scrobbles GROUP BY 1 ORDER BY 1") { r in
+        try db.query("SELECT year, count(*) FROM scrobbles GROUP BY year ORDER BY year") { r in
             s.years.append((r.int(0), r.int(1)))
         }
         try db.query("""
-            SELECT CAST(strftime('%w', ts, 'unixepoch', 'localtime') AS INTEGER), CAST(strftime('%H', ts, 'unixepoch', 'localtime') AS INTEGER),
-                   count(*) FROM scrobbles GROUP BY 1, 2
+            SELECT wday, hour, count(*) FROM scrobbles GROUP BY wday, hour
             """) { r in
             let d = r.int(0), h = r.int(1)
             if (0..<7).contains(d), (0..<24).contains(h) { s.clock[d][h] = r.int(2) }
@@ -243,7 +285,7 @@ extension CollectionDB {
     /// The years with plays, newest first (for the year menu).
     func playYears() throws -> [Int] {
         var out: [Int] = []
-        try db.query("SELECT DISTINCT CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER) AS y FROM scrobbles ORDER BY y DESC") {
+        try db.query("SELECT DISTINCT year FROM scrobbles WHERE year IS NOT NULL ORDER BY year DESC") {
             out.append($0.int(0))
         }
         return out
@@ -262,7 +304,7 @@ extension CollectionDB {
         var perArtist: [String: [Int]] = [:]
         var totals = Array(repeating: 0, count: r.years.count)
         try db.query("""
-            SELECT artist_key, CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER), count(*) FROM scrobbles GROUP BY 1, 2
+            SELECT artist_key, year, count(*) FROM scrobbles GROUP BY artist_key, year
             """) { row in
             guard let i = index[row.int(1)] else { return }
             totals[i] += row.int(2)
@@ -283,8 +325,7 @@ extension CollectionDB {
         o.shows = try albumsWhere("a.kind = \(ReleaseKind.show.rawValue) AND substr(a.show_date, 6, 5) = ?", [md], order: "a.show_date")
         var best: [Int: (plays: Int, artists: [String: (String, Int)], titles: [String: Int])] = [:]
         try db.query("""
-            SELECT CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER), artist_key, artist, title FROM scrobbles
-            WHERE strftime('%m-%d', ts, 'unixepoch', 'localtime') = ?
+            SELECT year, artist_key, artist, title FROM scrobbles WHERE md = ?
             """, [md]) { r in
             let y = r.int(0)
             guard y != c.year else { return }   // today isn't history yet

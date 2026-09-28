@@ -43,7 +43,13 @@ final class CollectionScanner: @unchecked Sendable {
         if activeScans == 1 { progress = Progress(running: true) }
         lock.unlock()
         report()
+        let started = Date()
         DispatchQueue.global(qos: .utility).async {
+            defer {
+                let p = self.current
+                NSLog("OmniAmp: library scan of %d folder(s): %d files, %d read, %d removed in %.2fs", scopes.count, p.found, p.read, p.removed,
+                      Date().timeIntervalSince(started))
+            }
             for scope in Self.topmost(scopes) {
                 guard let root = roots.first(where: { scope == $0 || scope.hasPrefix($0 + "/") }) else { continue }
                 self.scan(scope: scope, root: root)
