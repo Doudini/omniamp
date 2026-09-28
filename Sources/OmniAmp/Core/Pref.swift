@@ -25,6 +25,8 @@ enum Pref {
     static let bitPerfect = "bitPerfect"
     static let exclusiveAccess = "exclusiveAccess"
     static let replayGain = "replayGain"
+    /// The saved volume is a slider position (loudness curve), not a gain (set once converted).
+    static let volumeIsPosition = "volumeIsPosition"
     static let resumeLongTracks = "resumeLongTracks"
     static let resumePositions = "resumePositions"
     static let resumeDates = "resumeDates"

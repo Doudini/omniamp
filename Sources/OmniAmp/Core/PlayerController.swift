@@ -168,11 +168,21 @@ final class PlayerController {
 
     private func restore() {
         let t0 = Date()
-        guard let cache = LibraryCache.load() else { player.softwareVolume = 0.8; return }
+        guard let cache = LibraryCache.load() else {
+            player.softwareVolume = 0.8
+            UserDefaults.standard.set(true, forKey: Pref.volumeIsPosition)   // saved from now on as a position
+            return
+        }
         NSLog("OmniAmp: restored %d tracks from cache in %.3fs", cache.tracks.count, Date().timeIntervalSince(t0))
         shuffle = cache.shuffle ?? false
         repeatAll = cache.repeatAll ?? true
-        player.softwareVolume = cache.volume ?? 0.8
+        var volume = cache.volume ?? 0.8
+        if !UserDefaults.standard.bool(forKey: Pref.volumeIsPosition) {
+            // Saved by a version where the slider was the gain: the same loudness on the new curve.
+            volume = cbrt(max(0, min(1, volume)))
+            UserDefaults.standard.set(true, forKey: Pref.volumeIsPosition)
+        }
+        player.softwareVolume = volume
         store.restore(cache.tracks)
         if let i = cache.currentIndex, i < store.tracks.count { currentIndex = i }
     }

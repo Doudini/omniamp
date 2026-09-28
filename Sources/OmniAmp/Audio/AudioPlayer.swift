@@ -100,7 +100,7 @@ final class AudioPlayer {
     /// Volume used outside bit-perfect mode (persisted by the controller).
     var softwareVolume: Float = 0.8 {
         didSet {
-            if !bitPerfect { engine.mainMixerNode.outputVolume = testVolume ?? softwareVolume }
+            if !bitPerfect { engine.mainMixerNode.outputVolume = testVolume ?? Self.loudness(softwareVolume) }
             applyGainStage()
         }
     }
@@ -183,6 +183,7 @@ final class AudioPlayer {
     /// Start an Icecast/SHOUTcast stream. Buffers ~2 s before sound starts.
     /// HLS and Ogg/Opus stations go to the system player (no EQ/visualizer for those).
     func playStream(url: URL) {
+        finishFade()   // radio takes the player now
         stopNode()
         stopStream()
         upcoming = nil
@@ -311,6 +312,7 @@ final class AudioPlayer {
 
     /// Play a podcast episode from `start` seconds. `duration` (from the feed) is shown until the file reports its own.
     func playEpisode(url: URL, from start: Double = 0, duration: Double? = nil) {
+        finishFade()
         stopNode()
         stopStream()
         upcoming = nil
@@ -546,7 +548,7 @@ final class AudioPlayer {
         graphRate = rate
         tapFormat = f
         if analyzerActive { installAnalyzerTap() }
-        if ProcessInfo.processInfo.environment["OMNIAMP_NO_IOBUF"] == nil { AudioDevices.setIOBufferFrames(deviceID, 4096) }
+        if ProcessInfo.processInfo.environment["OMNIAMP_NO_IOBUF"] == nil { AudioDevices.setIOBufferFrames(deviceID, 2048) }
         if let path = recordPath {
             // Test hook: record exactly what goes to the device, one file per rate.
             let url = URL(fileURLWithPath: path).deletingPathExtension().appendingPathExtension("\(Int(rate)).caf")
@@ -578,10 +580,69 @@ final class AudioPlayer {
     var fadeGain: Float = 1 { didSet { applyGainStage() } }
 
     private func applyGainStage() {
-        converter.outputVolume = (bitPerfect ? 1 : replayGain) * fadeGain
+        converter.outputVolume = (bitPerfect ? 1 : replayGain) * fadeGain * transitionGain
         // The system player (HLS/Opus radio) bypasses our mixer: give it the volume directly.
-        systemPlayer?.volume = (bitPerfect ? 1 : (testVolume ?? softwareVolume)) * fadeGain
-        episodePlayer?.volume = (bitPerfect ? 1 : (testVolume ?? softwareVolume)) * fadeGain
+        systemPlayer?.volume = (bitPerfect ? 1 : (testVolume ?? Self.loudness(softwareVolume))) * fadeGain
+        episodePlayer?.volume = (bitPerfect ? 1 : (testVolume ?? Self.loudness(softwareVolume))) * fadeGain
+    }
+
+    /// The volume slider is a position, not a gain: cubed, it follows loudness (50 % ≈ −18 dB, 80 % ≈ −6 dB)
+    /// instead of crowding everything audible into the bottom quarter.
+    static func loudness(_ position: Float) -> Float {
+        let p = max(0, min(1, position))
+        return p * p * p
+    }
+
+    // MARK: Click-free transitions
+
+    // Cutting audio mid-wave clicks. The mixer spreads a volume change evenly over the next render cycle, so a
+    // fade is: set the level, let one cycle render (≈ 85 ms at our IO buffer size), then pause/stop/seek.
+    // Starting again fades in over the first cycle. Gapless changes between tracks are not touched.
+    private var transitionGain: Float = 1
+    private var fading = false
+    private var afterFade: [() -> Void] = []
+    private var fadeEpoch = 0
+
+    /// One render cycle of the output, a little more for safety.
+    private var renderCycle: Double {
+        let rate = graphRate > 0 ? graphRate : 48_000
+        return min(0.2, max(0.02, Double(AudioDevices.ioBufferFrames(deviceID)) / rate * 1.2))
+    }
+
+    /// Fade the file/radio output to silence, then run `action` (right away if nothing is playing).
+    private func fadeOut(then action: @escaping () -> Void) {
+        if fading { afterFade.append(action); return }
+        guard engine.isRunning, node.isPlaying else { action(); return }
+        fading = true
+        afterFade = [action]
+        fadeEpoch += 1
+        let epoch = fadeEpoch
+        transitionGain = 0
+        applyGainStage()
+        DispatchQueue.main.asyncAfter(deadline: .now() + renderCycle) { [weak self] in
+            guard let self, self.fadeEpoch == epoch else { return }
+            self.finishFade()
+        }
+    }
+
+    /// Run what waits for a fade now (something else needs the player at once: radio, a device change…).
+    private func finishFade() {
+        guard fading else { return }
+        fading = false
+        let actions = afterFade
+        afterFade = []
+        actions.forEach { $0() }
+    }
+
+    /// After a fade that is still running, else now.
+    private func whenFaded(_ action: @escaping () -> Void) {
+        if fading { afterFade.append(action) } else { action() }
+    }
+
+    private func fadeIn() {
+        guard transitionGain != 1 else { return }
+        transitionGain = 1
+        applyGainStage()
     }
 
     /// EQ bypass and mixer volume for the current mode.
@@ -590,7 +651,7 @@ final class AudioPlayer {
         eq.bypass = bitPerfect || !eqSettings.enabled
         eq.globalGain = eqSettings.preamp
         for (i, g) in eqSettings.bands.prefix(eq.bands.count).enumerated() { eq.bands[i].gain = g }
-        engine.mainMixerNode.outputVolume = bitPerfect ? 1 : (testVolume ?? softwareVolume)
+        engine.mainMixerNode.outputVolume = bitPerfect ? 1 : (testVolume ?? Self.loudness(softwareVolume))
     }
 
     // MARK: EQ
@@ -629,12 +690,14 @@ final class AudioPlayer {
 
     /// Call on quit.
     func shutdown() {
+        finishFade()
         engine.stop()
         for id in Array(originalRates.keys) { releaseDevice(id) }
         _ = AudioDevices.setHog(deviceID, false)
     }
 
     private func pointEngineAtDevice() {
+        finishFade()   // a device change takes the player now
         let target = outputUID.flatMap { AudioDevices.device(uid: $0)?.id } ?? AudioDevices.defaultOutputID()
         guard target != 0, target != deviceID else { return }
         let t = currentTime, wasState = state
@@ -671,6 +734,7 @@ final class AudioPlayer {
 
     /// Rebuild the graph (optionally matching the current file's rate) and resume where we were.
     private func restart(at t: Double, wasState: State, matchRate: Bool) {
+        finishFade()
         if engine.isRunning { engine.stop() }
         bindOutputUnit()
         if matchRate, current != nil { matchDeviceRate(to: sampleRate) }
@@ -693,6 +757,7 @@ final class AudioPlayer {
     /// The engine stops itself whenever the device format changes, including after our own rate switches,
     /// so always rebuild and resume here.
     private func engineConfigurationChanged() {
+        finishFade()
         dlog("configChange awaiting=\(awaitingRateSettle) running=\(engine.isRunning) rate=\(deviceRate)")
         if awaitingRateSettle {
             // Expected: the device finished switching rate / taking exclusive access.
@@ -754,7 +819,8 @@ final class AudioPlayer {
     /// whether the new one could be played.
     func play(url: URL, from start: Double = 0, range: (start: Double, end: Double?)? = nil,
               opened: @escaping (Bool) -> Void = { _ in }) {
-        stopNode()
+        // The old track fades out while the new file opens; the new one starts once both are done.
+        if stream == nil { fadeOut { [weak self] in self?.stopNode() } } else { finishFade(); stopNode() }
         stopStream()
         upcoming = nil
         pendingNext = nil
@@ -768,7 +834,10 @@ final class AudioPlayer {
         if let p = prepared, p.url == url {
             prepared = nil   // opened ahead of time: start right away
             opening = false
-            opened(self.start(p.file, url: url, from: start, range: range))
+            whenFaded { [weak self] in
+                guard let self, token == self.openToken else { return }
+                opened(self.start(p.file, url: url, from: start, range: range))
+            }
             return
         }
         opening = true
@@ -782,7 +851,10 @@ final class AudioPlayer {
                 guard let self, token == self.openToken else { return }   // another track (or stop) came since
                 self.opening = false
                 guard let file else { self.state = .stopped; opened(false); return }
-                opened(self.start(file, url: url, from: start, range: range))
+                self.whenFaded { [weak self] in
+                    guard let self, token == self.openToken else { return }
+                    opened(self.start(file, url: url, from: start, range: range))
+                }
             }
         }
     }
@@ -836,6 +908,7 @@ final class AudioPlayer {
     /// The device finished (or we stopped waiting for) a reconfiguration: rebuild the graph from scratch
     /// either way. Resuming on the old connections can render digital silence after a hog/rate change.
     private func settleComplete() {
+        finishFade()
         awaitingRateSettle = false
         if engine.isRunning { engine.stop() }
         // Stopping the engine drops everything scheduled: a queued gapless track has to be queued again.
@@ -928,9 +1001,12 @@ final class AudioPlayer {
             state = .paused
             return
         }
-        node.pause()
-        freezeClock()
         state = .paused
+        fadeOut { [weak self] in
+            guard let self, self.state == .paused else { return }   // resumed meanwhile
+            self.node.pause()
+            self.freezeClock()
+        }
     }
 
     func resume() {
@@ -961,10 +1037,14 @@ final class AudioPlayer {
             beginPlayback()
             return
         }
-        startEngineIfNeeded()
-        guard playNode() else { return }
-        if !awaitingRateSettle { clockStart = CACurrentMediaTime() }
         state = .playing
+        whenFaded { [weak self] in
+            guard let self, self.state == .playing, self.current != nil else { return }
+            if self.node.isPlaying { self.fadeIn(); return }   // resumed during the pause's fade: just come back up
+            self.startEngineIfNeeded()
+            guard self.playNode() else { return }
+            if !self.awaitingRateSettle { self.clockStart = CACurrentMediaTime() }
+        }
     }
 
     func stop() {
@@ -972,7 +1052,7 @@ final class AudioPlayer {
         opening = false
         pendingNext = nil
         awaitingRateSettle = false
-        stopNode()
+        if stream == nil { fadeOut { [weak self] in self?.stopNode() } } else { finishFade(); stopNode() }
         stopStream()
         upcoming = nil
         if var c = current { c.startFrame = c.trackStart; current = c }
@@ -988,14 +1068,23 @@ final class AudioPlayer {
             p.seek(to: CMTime(seconds: max(0, min(seconds, duration)), preferredTimescale: 600))
             return
         }
-        guard !isStreaming, var c = current else { return }   // live radio can't seek
+        guard !isStreaming, let c = current else { return }   // live radio can't seek
         awaitingRateSettle = false
+        let frame = min(c.trackStart + AVAudioFramePosition((Sane.offset(min(seconds, duration)) ?? 0) * c.sampleRate),
+                        max(c.trackStart, c.trackEnd - 1))
+        // The clock shows the new place at once (not the old one for the length of the fade).
+        clockBase = Double(frame - c.trackStart) / c.sampleRate
+        clockStart = nil
+        fadeOut { [weak self] in self?.seekNow(to: frame, itemID: c.id) }
+    }
+
+    private func seekNow(to frame: AVAudioFramePosition, itemID: Int) {
+        guard var c = current, c.id == itemID else { return }   // another track started meanwhile
         let wasPaused = state == .paused
-        let frame = c.trackStart + AVAudioFramePosition((Sane.offset(min(seconds, duration)) ?? 0) * c.sampleRate)
         stopNode()
         // A queued gapless track went with the schedule: have it queued again (near the end, gapless stays).
         if upcoming != nil || pendingNext != nil { upcoming = nil; pendingNext = nil; onPreloadDropped?() }
-        c.startFrame = min(frame, max(c.trackStart, c.trackEnd - 1))
+        c.startFrame = frame
         current = c
         clockStart = nil
         scheduleCurrent()
@@ -1079,6 +1168,7 @@ final class AudioPlayer {
     /// If the output can't start (another app holds the device exclusively, it was unplugged…), stop and say why.
     @discardableResult
     private func playNode() -> Bool {
+        defer { fadeIn() }   // from silence after a fade: up over the first cycle
         guard engine.isRunning else {
             NSLog("OmniAmp: the audio output isn't running, stopping")
             stop()

@@ -106,14 +106,20 @@ enum AudioDevices {
 
     // MARK: IO buffer size
 
-    /// Ask for large IO buffers (per-process setting): fewer wakeups per second = less energy.
-    /// A player doesn't need low latency; ~85 ms at 48 kHz is still instant for play/pause/seek.
+    /// Ask for larger IO buffers than the default (per-process setting): fewer wakeups per second = less energy.
+    /// The player uses 2048 frames (~43 ms at 48 kHz): one cycle is also the length of the click-free fades
+    /// on pause/seek/skip, and 4096 made seeking feel slow (≈ 0.4 s from click to sound).
     static func setIOBufferFrames(_ id: AudioDeviceID, _ frames: UInt32) {
         let range = get(id, address(kAudioDevicePropertyBufferFrameSizeRange), AudioValueRange())
         let f = UInt32(min(Double(frames), range?.mMaximum ?? Double(frames)))
         var a = address(kAudioDevicePropertyBufferFrameSize)
         var v = f
         AudioObjectSetPropertyData(id, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v)
+    }
+
+    /// Frames per IO cycle (this process's setting): how long one render cycle lasts.
+    static func ioBufferFrames(_ id: AudioDeviceID) -> UInt32 {
+        get(id, address(kAudioDevicePropertyBufferFrameSize), UInt32(0)) ?? 0
     }
 
     /// Bits per sample the device's output stream really takes (its physical format): a file with more is
