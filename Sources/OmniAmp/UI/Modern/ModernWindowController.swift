@@ -71,7 +71,6 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         eqView.controller = controller
         infoView.controller = controller
         infoView.onReveal = { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: $0)]) }
-        infoView.onContentChange = { [weak self] in self?.fitInfoDrawer() }
         panel.onToggleEQ = { [weak self] in self?.toggle(.eq) }
         panel.onToggleInfo = { [weak self] in self?.pinnedInfoID = nil; self?.toggle(.info) }
         panel.onArtClick = { [weak self] in self?.artClicked() }
@@ -205,6 +204,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         root.addSubview(radioBtn)
 
         let titlebarHeight: CGFloat = 28
+        drawerGrip.translatesAutoresizingMaskIntoConstraints = false
+        drawerGrip.isHidden = true
+        drawerGrip.onDrag = { [weak self] dy, done in self?.resizeInfo(by: dy, done: done) }
+        root.addSubview(drawerGrip)
         drawerHeight = drawerHost.heightAnchor.constraint(equalToConstant: 0)
         drawerGap = scroll.topAnchor.constraint(equalTo: drawerHost.bottomAnchor, constant: 0)
         NSLayoutConstraint.activate([
@@ -220,6 +223,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             drawerHost.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
             drawerHeight,
             drawerGap,
+            drawerGrip.topAnchor.constraint(equalTo: drawerHost.bottomAnchor),
+            drawerGrip.bottomAnchor.constraint(equalTo: scroll.topAnchor),
+            drawerGrip.leadingAnchor.constraint(equalTo: drawerHost.leadingAnchor),
+            drawerGrip.trailingAnchor.constraint(equalTo: drawerHost.trailingAnchor),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
             scroll.bottomAnchor.constraint(equalTo: filterField.topAnchor, constant: -8),
@@ -260,7 +267,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         radioBtn?.compact = narrow
         podcastBtn?.compact = narrow
         infoView.compact = narrow
-        fitInfoDrawer()
+        if drawer == .info, drawerHeight != nil { DispatchQueue.main.async { self.resizeInfo(by: 0, done: false) } }   // a smaller window: INFO gives way
     }
 
     /// Number column: sized once for the longest number (so titles don't stagger), or hidden.
@@ -363,24 +370,31 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         eqView.isHidden = d != .eq
         infoView.isHidden = d != .info
         drawerHost.isHidden = d == .none
-        drawerHeight.constant = d == .none ? 0 : (d == .info ? infoHeight() : 150)
+        drawerHeight.constant = d == .none ? 0 : (d == .info ? infoDrawerHeight : 150)
         drawerGap.constant = d == .none ? 0 : 8
+        drawerGrip.isHidden = d != .info
         panel.eqButton.isOn = d == .eq
         panel.infoButton.isOn = d == .info
         if d == .info { refreshInfo() }
         if d == .eq { eqView.refresh() }   // not kept current while hidden
     }
 
-    /// INFO takes the height its text needs (cover-high at least, 300 pt at most).
-    private func infoHeight() -> CGFloat {
-        let w = drawerHost.bounds.width > 0 ? drawerHost.bounds.width : (window?.contentView?.bounds.width ?? 540) - 20
-        return min(300, infoView.preferredHeight(forWidth: w))
-    }
+    /// INFO keeps one height while you click through tracks (text that doesn't fit scrolls); drag the grip
+    /// under it to change it. Remembered.
+    private var infoDrawerHeight: CGFloat = {
+        let h = UserDefaults.standard.double(forKey: Pref.modernInfoHeight)
+        return h > 0 ? CGFloat(h) : 170
+    }()
+    private static let infoMinHeight: CGFloat = 100
+    private let drawerGrip = DrawerGrip()
 
-    private func fitInfoDrawer() {
-        guard drawer == .info, drawerHeight != nil else { return }
-        let h = infoHeight()
-        if abs(drawerHeight.constant - h) > 0.5 { drawerHeight.constant = h }
+    /// Drag the grip: the INFO drawer grows into the playlist (which keeps a few rows).
+    private func resizeInfo(by dy: CGFloat, done: Bool) {
+        guard drawer == .info else { return }
+        let most = drawerHeight.constant + scroll.frame.height - 3 * PlaylistStyle.rowHeight - 8
+        infoDrawerHeight = min(max(Self.infoMinHeight, infoDrawerHeight + dy), max(Self.infoMinHeight, most))
+        drawerHeight.constant = infoDrawerHeight
+        if done { UserDefaults.standard.set(Double(infoDrawerHeight), forKey: Pref.modernInfoHeight) }
     }
 
     private func refreshInfo() {
@@ -696,4 +710,20 @@ extension ModernWindowController: NSSearchFieldDelegate {
             return false
         }
     }
+}
+
+/// The strip between the INFO drawer and the playlist: drag it to make INFO taller or shorter.
+final class DrawerGrip: NSView {
+    /// Vertical movement (down = taller), and whether the drag ended.
+    var onDrag: ((CGFloat, Bool) -> Void)?
+    private var last: CGFloat = 0
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeUpDown) }
+    override func mouseDown(with event: NSEvent) { last = event.locationInWindow.y }
+    override func mouseDragged(with event: NSEvent) {
+        let y = event.locationInWindow.y
+        onDrag?(last - y, false)   // window coordinates grow upwards
+        last = y
+    }
+    override func mouseUp(with event: NSEvent) { onDrag?(0, true) }
 }

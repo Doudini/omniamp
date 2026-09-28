@@ -6,6 +6,7 @@ enum Pref {
     static let skinPath = "skinPath"
     static let modernTheme = "modernTheme"
     static let modernDrawer = "modernDrawer"
+    static let modernInfoHeight = "modernInfoHeight"
     static let modernEQVisible = "modernEQVisible"
     static let modernRemaining = "modernRemaining"
     static let classicScale = "classicScale"

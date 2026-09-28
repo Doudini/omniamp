@@ -161,15 +161,20 @@ final class HoverCard {
 }
 
 /// INFO drawer: art + all metadata for the playing track (or the one selected in the playlist), or an
-/// ON AIR view for radio. Lines wrap instead of being cut off, and the drawer asks for the height it needs.
+/// ON AIR view for radio. The drawer keeps the height the user gave it; text that doesn't fit scrolls
+/// (the cover stays put).
 final class ModernInfoView: NSView {
 
     weak var controller: PlayerController?
     var onReveal: ((String) -> Void)?
-    /// Content changed size: the window re-reads `preferredHeight(forWidth:)`.
+    /// Content changed (text or cover arrived).
     var onContentChange: (() -> Void)?
 
     private let art = ArtView()
+    /// The text column scrolls inside the drawer.
+    private let textScroll = NSScrollView()
+    private let textDoc = FlippedView()
+    private final class FlippedView: NSView { override var isFlipped: Bool { true } }
     private let modeLabel = NSTextField(labelWithString: "")
     private let stack = NSStackView()
     private let title = NSTextField(labelWithString: "")
@@ -242,7 +247,7 @@ final class ModernInfoView: NSView {
         style(format, 10.5, color: Theme.phosphor)
         style(file, 10, color: dim, lines: 1)
         style(albumLine, 10, color: dim)
-        style(comment, 10, color: dim, lines: 3)
+        style(comment, 10, color: dim, lines: 12)   // the drawer scrolls: notes can be long
         modeLabel.font = Fonts.hack(8.5, bold: true)
         modeLabel.textColor = Theme.phosphorDim
         modeLabel.alignment = .right
@@ -269,8 +274,17 @@ final class ModernInfoView: NSView {
         stack.detachesHiddenViews = true
         stack.translatesAutoresizingMaskIntoConstraints = false
         modeLabel.translatesAutoresizingMaskIntoConstraints = false
+        textScroll.drawsBackground = false
+        textScroll.hasVerticalScroller = true
+        textScroll.autohidesScrollers = true
+        textScroll.scrollerStyle = .overlay
+        textScroll.borderType = .noBorder
+        textScroll.translatesAutoresizingMaskIntoConstraints = false
+        textDoc.translatesAutoresizingMaskIntoConstraints = false
+        textScroll.documentView = textDoc
+        textDoc.addSubview(stack)
         addSubview(art)
-        addSubview(stack)
+        addSubview(textScroll)
         addSubview(modeLabel)
         art.cornerRadius = 4
 
@@ -280,9 +294,17 @@ final class ModernInfoView: NSView {
             art.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             artSize,
             art.heightAnchor.constraint(equalTo: art.widthAnchor),
-            stack.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            textScroll.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 12),
+            textScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            textScroll.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            textScroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            textDoc.topAnchor.constraint(equalTo: textScroll.contentView.topAnchor),
+            textDoc.leadingAnchor.constraint(equalTo: textScroll.contentView.leadingAnchor),
+            textDoc.widthAnchor.constraint(equalTo: textScroll.contentView.widthAnchor),
+            stack.leadingAnchor.constraint(equalTo: textDoc.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: textDoc.trailingAnchor, constant: -6),
+            stack.topAnchor.constraint(equalTo: textDoc.topAnchor, constant: 4),
+            stack.bottomAnchor.constraint(equalTo: textDoc.bottomAnchor, constant: -4),
             fileRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             rule.widthAnchor.constraint(equalTo: stack.widthAnchor),
             modeLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
@@ -296,25 +318,8 @@ final class ModernInfoView: NSView {
         title.trailingAnchor.constraint(lessThanOrEqualTo: modeLabel.leadingAnchor, constant: -8).isActive = true
     }
 
-    /// Height that fits the cover and all visible lines at `width` (drawer width).
-    func preferredHeight(forWidth width: CGFloat) -> CGFloat {
-        setWrapWidths(width)
-        var h: CGFloat = 0
-        var count = 0
-        for v in stack.arrangedSubviews where !v.isHidden {
-            if let l = v as? NSTextField {
-                h += l.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: l.preferredMaxLayoutWidth, height: 1000)).height ?? l.intrinsicContentSize.height
-            } else {
-                h += v.fittingSize.height
-            }
-            count += 1
-        }
-        h += CGFloat(max(0, count - 1)) * stack.spacing + 10   // spacing, plus the larger gaps around the rule
-        return ceil(max(artSize.constant + 16, h + 20))
-    }
-
     private func setWrapWidths(_ width: CGFloat) {
-        let textWidth = max(80, width - 8 - artSize.constant - 12 - 10)
+        let textWidth = max(80, width - 8 - artSize.constant - 12 - 4 - 6)
         for l in labels { l.preferredMaxLayoutWidth = textWidth }
         title.preferredMaxLayoutWidth = max(60, textWidth - (modeLabel.stringValue.isEmpty ? 0 : modeLabel.intrinsicContentSize.width + 8))
     }
@@ -341,6 +346,7 @@ final class ModernInfoView: NSView {
         }
         let t = c.tracks[i]
         let pathChanged = shownPath != t.path
+        if pathChanged { textScroll.contentView.scroll(to: .zero); textScroll.reflectScrolledClipView(textScroll.contentView) }   // a new track: from the top
         art.placeholder = ArtView.placeholder(for: t)
         shownPath = t.path
         modeLabel.stringValue = pinned ? "SELECTED" : (i == c.currentIndex ? (t.isStream ? "● ON AIR" : "NOW PLAYING") : "")

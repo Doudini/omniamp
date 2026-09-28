@@ -5,8 +5,7 @@ let package = Package(
     name: "OmniAmp",
     platforms: [.macOS(.v14)],
     targets: [
-        .target(name: "CAtomics", path: "Sources/CAtomics"),
-        .executableTarget(name: "OmniAmp", dependencies: ["CAtomics"], path: "Sources/OmniAmp"),
+        .executableTarget(name: "OmniAmp", path: "Sources/OmniAmp"),
         .testTarget(name: "OmniAmpTests", dependencies: ["OmniAmp"], path: "Tests/OmniAmpTests"),
     ]
 )

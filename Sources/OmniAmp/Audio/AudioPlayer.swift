@@ -21,11 +21,8 @@ final class AudioPlayer {
     /// A track being played: a whole file, or a slice of one (CUE sheet track).
     private struct Item {
         let id: Int
+        let file: AVAudioFile
         let url: URL
-        /// The decoded format (what the renderer plays) and the file's own rate and channels.
-        let format: AVAudioFormat
-        let fileRate: Double
-        let fileChannels: Int
         /// The caller's name for it (the playlist entry): tells which one a gapless change went to.
         var tag: String?
         /// The track's range in the file (whole file unless it is a CUE track).
@@ -34,14 +31,12 @@ final class AudioPlayer {
         /// Frame where playback of this item began (≥ trackStart; later after a seek or resume).
         var startFrame: AVAudioFramePosition
         var frames: AVAudioFramePosition { trackEnd - startFrame }
-        var sampleRate: Double { format.sampleRate }
+        var sampleRate: Double { file.processingFormat.sampleRate }
 
         init(id: Int, file: AVAudioFile, url: URL, range: (start: Double, end: Double?)?, offset: Double) {
             self.id = id
+            self.file = file
             self.url = url
-            format = file.processingFormat
-            fileRate = file.fileFormat.sampleRate
-            fileChannels = Int(file.fileFormat.channelCount)
             let sr = file.processingFormat.sampleRate
             let len = file.length
             // Times come from CUE sheets and playlists: only believable ones become frame positions.
@@ -61,10 +56,7 @@ final class AudioPlayer {
     private let converter = AVAudioMixerNode()
     private var current: Item?
     private var upcoming: Item?
-    /// A queued track taken back that had already started: if it's reported as heard, it is the current one.
-    private var cancelledNext: Item?
-    /// Local files play through this (sample-exact position, gapless, level changes); radio through `node`.
-    private var files: FileRenderer?
+    private var generation = 0
 
     // Output state.
     private var outputUID: String?                         // nil = follow the system default
@@ -78,9 +70,9 @@ final class AudioPlayer {
     private var awaitingRateSettle = false
     /// Which wait a settle timeout belongs to (the play generation changes too often to tell).
     private var settleToken = 0
-    /// Radio's clock (time since the station started), on the host clock. Files are counted by FileRenderer.
-    /// Never ask the engine (`lastRenderTime`) from the main thread: during a device reconfiguration that call
-    /// waits for an IO cycle while holding the engine lock, and the reconfiguration handler needs it → deadlock.
+    /// Playback clock kept on the host clock. Never ask the engine (`lastRenderTime`) from the main thread:
+    /// during a device reconfiguration that call waits for an IO cycle while holding the engine lock, and the
+    /// engine's own reconfiguration handler needs that lock → deadlock (silent, frozen UI, slow quit).
     private var clockBase: Double = 0          // position (s) when the clock last started
     private var clockStart: Double?            // host time it started; nil while not running
 
@@ -141,12 +133,17 @@ final class AudioPlayer {
             let t = p.currentTime().seconds
             return t.isFinite ? max(0, t) : 0
         }
-        if isStreaming { return clockBase + (clockStart.map { CACurrentMediaTime() - $0 } ?? 0) }   // radio: time since it started
-        guard let c = current else { return 0 }
-        // Files: counted in frames by the renderer, as heard (not an estimate from a clock).
-        guard let p = files?.position() else { return Double(c.startFrame - c.trackStart) / c.sampleRate }
-        guard p.id == c.id else { return p.id > c.id ? duration : 0 }
-        return max(0, min(Double(p.frame - c.trackStart) / c.sampleRate, duration))
+        let running = clockStart.map { CACurrentMediaTime() - $0 } ?? 0
+        if isStreaming { return clockBase + running }   // radio: time since it started playing
+        guard current != nil else { return 0 }
+        return max(0, min(clockBase + running, duration))
+    }
+
+    /// Start the clock at the current item's start frame (called right after node.play()).
+    private func startClock() {
+        guard let c = current else { return }
+        clockBase = Double(c.startFrame - c.trackStart) / c.sampleRate
+        clockStart = CACurrentMediaTime()
     }
 
     private func freezeClock() {
@@ -160,8 +157,8 @@ final class AudioPlayer {
     var currentTag: String? { current?.tag }
     /// A track is queued behind the current one (or its file is still being opened for that).
     var hasQueuedNext: Bool { upcoming != nil || pendingNext != nil }
-    var sampleRate: Double { stream != nil ? mainStreamInfo.sampleRate : current?.fileRate ?? 0 }
-    var channelCount: Int { stream != nil ? mainStreamInfo.channels : current?.fileChannels ?? 0 }
+    var sampleRate: Double { stream != nil ? mainStreamInfo.sampleRate : current?.file.fileFormat.sampleRate ?? 0 }
+    var channelCount: Int { stream != nil ? mainStreamInfo.channels : Int(current?.file.fileFormat.channelCount ?? 0) }
 
     // MARK: Internet radio
 
@@ -174,7 +171,7 @@ final class AudioPlayer {
     private var connectionPlayingSince: CFTimeInterval?
     /// True while waiting for enough audio (start, or after the connection stalled).
     private(set) var isBuffering = false { didSet { if isBuffering != oldValue { onStreamChange?() } } }
-    var isStreaming: Bool { stream != nil || system != nil }
+    var isStreaming: Bool { stream != nil || systemPlayer != nil }
     var streamInfo: StreamSource.Info? { stream != nil ? mainStreamInfo : systemInfo }
     /// Latest "Artist - Title" from the station.
     private(set) var streamTitle: String?
@@ -188,7 +185,6 @@ final class AudioPlayer {
     func playStream(url: URL) {
         stopNode()
         stopStream()
-        files?.stop()
         upcoming = nil
         current = nil
         streamURL = url
@@ -317,7 +313,6 @@ final class AudioPlayer {
     func playEpisode(url: URL, from start: Double = 0, duration: Double? = nil) {
         stopNode()
         stopStream()
-        files?.stop()
         upcoming = nil
         current = nil
         streamError = nil
@@ -500,7 +495,7 @@ final class AudioPlayer {
     var deviceName: String { AudioDevices.device(id: deviceID)?.name ?? "Output" }
     var deviceRate: Double { AudioDevices.nominalRate(deviceID) }
     var selectedOutputUID: String? { outputUID }
-    /// The device runs at the file's rate (the controller's `outputBadge` also checks channels and depth).
+    /// True when the current file reaches the device untouched.
     var isBitPerfectNow: Bool { bitPerfect && current != nil && deviceRate == sampleRate }
 
     // MARK: Setup
@@ -583,10 +578,7 @@ final class AudioPlayer {
     var fadeGain: Float = 1 { didSet { applyGainStage() } }
 
     private func applyGainStage() {
-        // Files: the renderer applies the level per track, from its first sample, ramped when it changes.
-        if let c = current { files?.setGain(itemGain, for: c.id) }
-        files?.setFade(fadeGain)
-        node.volume = fadeGain   // radio through the engine
+        converter.outputVolume = (bitPerfect ? 1 : replayGain) * fadeGain
         // The system player (HLS/Opus radio) bypasses our mixer: give it the volume directly.
         systemPlayer?.volume = (bitPerfect ? 1 : (testVolume ?? softwareVolume)) * fadeGain
         episodePlayer?.volume = (bitPerfect ? 1 : (testVolume ?? softwareVolume)) * fadeGain
@@ -600,9 +592,6 @@ final class AudioPlayer {
         for (i, g) in eqSettings.bands.prefix(eq.bands.count).enumerated() { eq.bands[i].gain = g }
         engine.mainMixerNode.outputVolume = bitPerfect ? 1 : (testVolume ?? softwareVolume)
     }
-
-    /// The level a file plays at (ReplayGain; bit-perfect must not alter samples). The fade comes on top.
-    private var itemGain: Float { bitPerfect ? 1 : replayGain }
 
     // MARK: EQ
 
@@ -640,7 +629,6 @@ final class AudioPlayer {
 
     /// Call on quit.
     func shutdown() {
-        files?.shutdown()
         engine.stop()
         for id in Array(originalRates.keys) { releaseDevice(id) }
         _ = AudioDevices.setHog(deviceID, false)
@@ -655,6 +643,7 @@ final class AudioPlayer {
         deviceID = target
         restart(at: t, wasState: wasState, matchRate: bitPerfect)
         // The system players (HLS/Opus radio, podcast episodes) play outside the engine: move them too.
+        let deviceUID = AudioDevices.device(id: deviceID)?.uid
         systemPlayer?.audioOutputDeviceUniqueID = deviceUID
         episodePlayer?.audioOutputDeviceUniqueID = deviceUID
         onOutputChange?()
@@ -686,6 +675,7 @@ final class AudioPlayer {
         bindOutputUnit()
         if matchRate, current != nil { matchDeviceRate(to: sampleRate) }
         rebuildGraph()
+        if let f = current?.file { connect(format: f.processingFormat) }
         // Radio through our engine: the stopped engine dropped its queued audio, so reconnect the station
         // (without this it stayed silent while showing "playing").
         if stream != nil, let u = streamURL {
@@ -694,10 +684,10 @@ final class AudioPlayer {
             if wasState == .playing { openStream(u) }
             return
         }
-        // Files continue from the exact frame the renderer got to (nothing was lost with the engine).
         guard current != nil, wasState != .stopped else { return }
-        state = wasState
-        if wasState == .playing { beginPlayback() }
+        state = .playing
+        seek(to: t)
+        if wasState == .paused { pause() }
     }
 
     /// The engine stops itself whenever the device format changes, including after our own rate switches,
@@ -713,6 +703,7 @@ final class AudioPlayer {
             // Idle, e.g. the device reconfigured after we gave back exclusive access: just rebuild, stay stopped.
             bindOutputUnit()
             rebuildGraph()
+            if let f = current?.file { connect(format: f.processingFormat) }
             onOutputChange?()
             return
         }
@@ -732,7 +723,7 @@ final class AudioPlayer {
 
     /// Files are opened off the main thread: over a network share (or for a long MP3, which is scanned) that
     /// takes up to a second, and the app must not stall meanwhile. A new `play` or `stop` makes a pending
-    /// open moot. The same opened file is handed to the renderer, so it's opened once.
+    /// open moot.
     private static let opener = DispatchQueue(label: "omniamp.open", qos: .userInitiated)
     private var openToken = 0
     /// A file for `play` is being opened (Play/Pause still work meanwhile).
@@ -766,11 +757,11 @@ final class AudioPlayer {
         stopNode()
         stopStream()
         upcoming = nil
-        cancelledNext = nil
         pendingNext = nil
         awaitingRateSettle = false   // a new track: any earlier wait is over (a new one starts below if needed)
         current = nil
-        files?.stop()
+        clockBase = 0
+        clockStart = nil
         state = .playing
         openToken += 1
         let token = openToken
@@ -796,7 +787,7 @@ final class AudioPlayer {
         }
     }
 
-    /// The file is open: set the device up for it and hand it to the renderer.
+    /// The file is open: set the device up for it and start it.
     private func start(_ file: AVAudioFile, url: URL, from start: Double, range: (start: Double, end: Double?)?) -> Bool {
         var settle = false
         if bitPerfect, AudioDevices.bestRate(for: file.fileFormat.sampleRate, supported: AudioDevices.availableRates(deviceID)) != graphRate {
@@ -808,71 +799,23 @@ final class AudioPlayer {
             rebuildGraph()
             onOutputChange?()
         }
-        let item = Item(id: nextItemID, file: file, url: url, range: range, offset: start)
+        connect(format: file.processingFormat)
+        current = Item(id: nextItemID, file: file, url: url, range: range, offset: start)
         nextItemID += 1
-        guard let r = renderer(for: file.processingFormat) else {
-            NSLog("OmniAmp: cannot play %@ (format %@)", url.path, file.processingFormat.description)
-            state = .stopped
-            return false
-        }
-        current = item
-        r.start(renderItem(item, file: file))
-        // Paused while it opened: stay paused, ready to go.
-        r.setPaused(state != .playing)
-        if state == .playing { if settle { awaitSettle() } else { beginPlayback() } }
+        // The start offset, already while a rate switch settles: pausing then must not lose the resume point.
+        clockBase = current.map { Double($0.startFrame - $0.trackStart) / $0.sampleRate } ?? 0
+        clockStart = nil
+        // Paused while it opened: scheduled, ready to go; resume() starts it.
+        if state == .playing { if settle { awaitSettle() } else { beginPlayback() } } else { scheduleCurrent() }
         return true
-    }
-
-    /// `file`: already open (handed over, the renderer reads it from then on); nil: the renderer opens it.
-    private func renderItem(_ i: Item, gain: Float? = nil, file: AVAudioFile? = nil) -> FileRenderer.Item {
-        FileRenderer.Item(id: i.id, url: i.url, start: i.startFrame, end: i.trackEnd, gain: gain ?? itemGain, file: file)
-    }
-
-    /// The renderer for files of this format (a new one when the format changes: gapless needs the same format).
-    private func renderer(for f: AVAudioFormat) -> FileRenderer? {
-        if let r = files, r.format.sampleRate == f.sampleRate, r.format.channelCount == f.channelCount,
-           r.format.commonFormat == f.commonFormat, r.format.isInterleaved == f.isInterleaved { return r }
-        if let old = files {
-            old.shutdown()
-            engine.disconnectNodeOutput(old.node)
-            engine.detach(old.node)
-            files = nil
-        }
-        guard let r = FileRenderer(format: f) else { return nil }
-        engine.attach(r.node)
-        engine.connect(r.node, to: converter, fromBus: 0, toBus: 1, format: f)
-        r.latency = outputLatency
-        r.setFade(fadeGain)
-        r.onAdvance = { [weak self, weak r] id, session in
-            guard let self, let r, self.files === r, session == r.session else { return }
-            if let n = self.upcoming, n.id == id { self.current = n; self.upcoming = nil }
-            else if let n = self.cancelledNext, n.id == id { self.current = n; self.cancelledNext = nil }
-            else { return }
-            self.onGaplessAdvance?()
-        }
-        r.onEnd = { [weak self, weak r] session in
-            guard let self, let r, self.files === r, session == r.session, self.state == .playing, self.current != nil else { return }
-            self.state = .stopped
-            self.onTrackFinished?()
-            if self.state == .stopped { self.scheduleIdleStop() }
-        }
-        files = r
-        return r
-    }
-
-    /// The output's delay (device and safety offset): what is heard lags what is rendered by this much.
-    private var outputLatency: Double {
-        let l = engine.outputNode.presentationLatency
-        return l.isFinite && l >= 0 && l < 2 ? l : 0
     }
 
     private func beginPlayback() {
         dlog("beginPlayback engineRunning=\(engine.isRunning) state=\(state)")
         // Taking exclusive access reconfigures the device too: wait for that before any audio goes out.
         if startEngineIfNeeded() { awaitSettle(); return }
-        files?.latency = outputLatency
-        // Paused while waiting: resume() goes on from here.
-        if state == .playing, outputRunning() { files?.setPaused(false) }
+        scheduleCurrent()
+        if state == .playing, playNode() { startClock() }   // paused while waiting: resume() starts it
     }
 
     /// Wait for the configuration change that follows a rate switch / hog grab (or give up after 0.8 s).
@@ -895,8 +838,11 @@ final class AudioPlayer {
     private func settleComplete() {
         awaitingRateSettle = false
         if engine.isRunning { engine.stop() }
+        // Stopping the engine drops everything scheduled: a queued gapless track has to be queued again.
+        if upcoming != nil { upcoming = nil; onPreloadDropped?() }
         bindOutputUnit()
         rebuildGraph()
+        if let f = current?.file { connect(format: f.processingFormat) }
         beginPlayback()
         onOutputChange?()
     }
@@ -905,12 +851,12 @@ final class AudioPlayer {
     private var pendingNext: Int?
     private var nextToken = 0
 
-    /// Queue `url` to start exactly when the current track ends. `queued` says (on the main thread) whether
-    /// it could: not if it's unreadable or in another format (the normal end-of-track path plays it then).
-    /// `gain`: its ReplayGain, applied from its first sample; `tag`: the caller's name for it.
-    func queueNext(url: URL, range: (start: Double, end: Double?)? = nil, gain: Float = 1, tag: String? = nil,
-                   queued: @escaping (Bool) -> Void) {
-        guard current != nil, upcoming == nil, pendingNext == nil, state != .stopped, files != nil else { queued(false); return }
+    /// Schedule `url` to start exactly when the current track ends. `queued` says (on the main thread)
+    /// whether it could: not if it's unreadable or in another format (the normal end-of-track path plays it
+    /// then). `tag`: the caller's name for it (`currentTag` once it plays).
+    func queueNext(url: URL, range: (start: Double, end: Double?)? = nil, tag: String? = nil, queued: @escaping (Bool) -> Void) {
+        // Not while the device settles: the restart that follows would drop it, and it could land first.
+        guard current != nil, upcoming == nil, pendingNext == nil, state != .stopped, !awaitingRateSettle else { queued(false); return }
         nextToken += 1
         let token = nextToken, playing = openToken
         pendingNext = token
@@ -919,8 +865,8 @@ final class AudioPlayer {
             DispatchQueue.main.async {
                 guard let self, self.pendingNext == token, self.openToken == playing else { return }   // taken back meanwhile
                 self.pendingNext = nil
-                guard let file, let c = self.current, let r = self.files else { queued(false); return }
-                let a = file.processingFormat, b = c.format
+                guard let file, let c = self.current, self.state != .stopped, !self.awaitingRateSettle else { queued(false); return }
+                let a = file.processingFormat, b = c.file.processingFormat
                 guard a.sampleRate == b.sampleRate, a.channelCount == b.channelCount, a.commonFormat == b.commonFormat else {
                     queued(false)
                     return
@@ -929,20 +875,19 @@ final class AudioPlayer {
                 item.tag = tag
                 self.nextItemID += 1
                 self.upcoming = item
-                r.enqueue(self.renderItem(item, gain: self.bitPerfect ? 1 : gain, file: file))
+                self.schedule(item, gen: self.generation)
                 queued(true)
             }
         }
     }
 
     /// Drop a queued track (e.g. the playlist order changed).
-    /// The current track plays on untouched; if the queued one had already begun, it simply continues.
     func cancelQueuedNext() {
         pendingNext = nil   // still opening: it will never be queued
-        guard let u = upcoming else { return }
-        cancelledNext = u
+        guard upcoming != nil else { return }
+        let t = currentTime
         upcoming = nil
-        files?.cancelQueued()
+        if state != .stopped { seek(to: t) } // reschedules only the current track
     }
 
     /// Paused, stopped, or playing outside the engine (podcasts, HLS radio) for a few seconds: stop the engine.
@@ -952,11 +897,12 @@ final class AudioPlayer {
         idleStop?.cancel()
         let w = DispatchWorkItem { [weak self] in
             guard let self, self.engine.isRunning, !self.awaitingRateSettle,
-                  self.state != .playing || self.episode != nil || self.system != nil else { return }
+                  self.state != .playing || self.episodePlayer != nil || self.systemPlayer != nil else { return }
             dlog("idle: stopping the engine")
             self.idled = true
             self.engine.stop()
             _ = AudioDevices.setHog(self.deviceID, false)
+            if self.upcoming != nil { self.upcoming = nil; self.onPreloadDropped?() }
         }
         idleStop = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: w)
@@ -982,7 +928,8 @@ final class AudioPlayer {
             state = .paused
             return
         }
-        files?.setPaused(true)
+        node.pause()
+        freezeClock()
         state = .paused
     }
 
@@ -990,24 +937,34 @@ final class AudioPlayer {
         guard state == .paused else { return }
         if let p = episodePlayer { p.play(); state = .playing; return }
         if let u = streamURL, !isStreaming { playStream(url: u); return }
-        guard let c = current else {
+        if current == nil {
             if opening { state = .playing }   // resumed while the file opens: it starts when it's ready
             return
         }
-        state = .playing
-        // The renderer kept its place, also if the engine idled out meanwhile. Bit-perfect: while idle another
-        // app may have changed the device rate: match the file again first.
-        let fileRate = c.fileRate
-        if !engine.isRunning, bitPerfect,
-           AudioDevices.bestRate(for: fileRate, supported: AudioDevices.availableRates(deviceID)) != graphRate {
-            bindOutputUnit()
-            let before = AudioDevices.nominalRate(deviceID)
-            matchDeviceRate(to: fileRate)
-            rebuildGraph()
-            onOutputChange?()
-            if AudioDevices.nominalRate(deviceID) != before { awaitSettle(); return }
+        if !engine.isRunning, var c = current {
+            // The engine idled out while paused and dropped the schedule: start again where we paused.
+            c.startFrame = min(c.trackStart + AVAudioFramePosition((Sane.offset(clockBase) ?? 0) * c.sampleRate), max(c.trackStart, c.trackEnd - 1))
+            current = c
+            stopNode()
+            state = .playing
+            // Bit-perfect: while idle another app may have changed the device rate: match the file again.
+            let fileRate = c.file.fileFormat.sampleRate
+            if bitPerfect, AudioDevices.bestRate(for: fileRate, supported: AudioDevices.availableRates(deviceID)) != graphRate {
+                bindOutputUnit()
+                let before = AudioDevices.nominalRate(deviceID)
+                matchDeviceRate(to: fileRate)
+                rebuildGraph()
+                connect(format: c.file.processingFormat)
+                onOutputChange?()
+                if AudioDevices.nominalRate(deviceID) != before { awaitSettle(); return }
+            }
+            beginPlayback()
+            return
         }
-        if !awaitingRateSettle { beginPlayback() }
+        startEngineIfNeeded()
+        guard playNode() else { return }
+        if !awaitingRateSettle { clockStart = CACurrentMediaTime() }
+        state = .playing
     }
 
     func stop() {
@@ -1017,10 +974,7 @@ final class AudioPlayer {
         awaitingRateSettle = false
         stopNode()
         stopStream()
-        files?.stop()
-        files?.setPaused(false)
         upcoming = nil
-        cancelledNext = nil
         if var c = current { c.startFrame = c.trackStart; current = c }
         clockBase = 0
         clockStart = nil
@@ -1034,34 +988,97 @@ final class AudioPlayer {
             p.seek(to: CMTime(seconds: max(0, min(seconds, duration)), preferredTimescale: 600))
             return
         }
-        guard !isStreaming, var c = current, let r = files else { return }   // live radio can't seek
+        guard !isStreaming, var c = current else { return }   // live radio can't seek
+        awaitingRateSettle = false
+        let wasPaused = state == .paused
         let frame = c.trackStart + AVAudioFramePosition((Sane.offset(min(seconds, duration)) ?? 0) * c.sampleRate)
+        stopNode()
+        // A queued gapless track went with the schedule: have it queued again (near the end, gapless stays).
+        if upcoming != nil || pendingNext != nil { upcoming = nil; pendingNext = nil; onPreloadDropped?() }
         c.startFrame = min(frame, max(c.trackStart, c.trackEnd - 1))
         current = c
-        // The queued track goes too: have it queued again (near the end, gapless stays).
-        cancelledNext = nil
-        if upcoming != nil || pendingNext != nil { upcoming = nil; pendingNext = nil; onPreloadDropped?() }
-        // Paused stays paused: the position shows the new place and resume() plays from there.
-        r.start(renderItem(c))
-        if state == .playing, !awaitingRateSettle { beginPlayback() }
+        clockStart = nil
+        scheduleCurrent()
+        if wasPaused {
+            // Stay paused: the clock shows the new place and resume() plays from there. (Playing and pausing
+            // again flickered the state, could leak a moment of audio and woke an idle engine.)
+            clockBase = Double(c.startFrame - c.trackStart) / c.sampleRate
+            return
+        }
+        startEngineIfNeeded()
+        guard playNode() else { return }
+        startClock()
+        state = .playing
+    }
+
+    // MARK: Scheduling
+
+    private func scheduleCurrent() {
+        guard let c = current, c.frames > 0 else { return }
+        generation += 1
+        schedule(c, gen: generation)
+    }
+
+    /// Queue an item on the node. A segment's length is 32-bit (4.29e9 frames: 27 h at 44.1 kHz, 6 h at
+    /// 192 kHz), so a longer track goes in back-to-back pieces (sample-contiguous, like gapless tracks);
+    /// only the last one reports the end.
+    private func schedule(_ item: Item, gen: Int) {
+        let pieces = Self.segments(from: item.startFrame, count: item.frames)
+        let id = item.id
+        for (i, p) in pieces.enumerated() {
+            let last = i == pieces.count - 1
+            node.scheduleSegment(item.file, startingFrame: p.start, frameCount: p.frames, at: nil,
+                                 completionCallbackType: .dataPlayedBack,
+                                 completionHandler: last ? { [weak self] _ in
+                                     DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
+                                 } : nil)
+        }
+    }
+
+    /// `count` frames from `start`, in pieces a segment can hold (at most `limit` frames each).
+    static func segments(from start: AVAudioFramePosition, count: AVAudioFramePosition,
+                         limit: AVAudioFramePosition = AVAudioFramePosition(AVAudioFrameCount.max))
+        -> [(start: AVAudioFramePosition, frames: AVAudioFrameCount)] {
+        var out: [(start: AVAudioFramePosition, frames: AVAudioFrameCount)] = []
+        var at = start, left = max(0, count)
+        repeat {
+            let n = min(left, limit)
+            out.append((at, AVAudioFrameCount(n)))
+            at += n
+            left -= n
+        } while left > 0
+        return out
+    }
+
+    /// A scheduled segment finished playing out of the speakers.
+    private func segmentFinished(gen: Int, id: Int) {
+        guard gen == generation, state == .playing, current?.id == id else { return }
+        // The engine stopping (device change, reconfiguration) also completes the schedule: that's not the end
+        // of the track unless we really are there.
+        guard engine.isRunning || currentTime >= duration - 1 else { return }
+        if let next = upcoming {
+            current = next
+            upcoming = nil
+            clockBase = 0
+            clockStart = CACurrentMediaTime()   // the previous track just finished playing out
+            onGaplessAdvance?()
+        } else {
+            state = .stopped
+            onTrackFinished?()
+            if state == .stopped { scheduleIdleStop() }
+        }
     }
 
     private func connect(format: AVAudioFormat) {
-        // Radio player → converter (input 0; files come in on 1) in the station's format.
+        // Player → converter in the file's own format; the converter resamples/upmixes only if needed.
         engine.disconnectNodeOutput(node)
-        engine.connect(node, to: converter, fromBus: 0, toBus: 0, format: format)
+        engine.connect(node, to: converter, format: format)
     }
 
     /// Start the player, but only on a running engine: AVAudioPlayerNode throws (crashes the app) otherwise.
     /// If the output can't start (another app holds the device exclusively, it was unplugged…), stop and say why.
     @discardableResult
     private func playNode() -> Bool {
-        guard outputRunning() else { return false }
-        node.play()
-        return true
-    }
-
-    private func outputRunning() -> Bool {
         guard engine.isRunning else {
             NSLog("OmniAmp: the audio output isn't running, stopping")
             stop()
@@ -1069,10 +1086,12 @@ final class AudioPlayer {
             onStreamChange?()
             return false
         }
+        node.play()
         return true
     }
 
     private func stopNode() {
+        generation += 1 // invalidate pending completions
         node.stop()
     }
 

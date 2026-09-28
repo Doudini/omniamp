@@ -612,8 +612,7 @@ final class PlayerController {
         preloadAttempted = true
         guard let t = nextTarget(), t != currentIndex, !store.tracks[t].isRemote else { return }
         let track = store.tracks[t]
-        // Its own level from its first sample (tags are usually loaded by now; if not, it plays at 1.0 until they are).
-        player.queueNext(url: track.url, range: track.cueRange, gain: replayGainFactor(for: track), tag: track.key) { [weak self] ok in
+        player.queueNext(url: track.url, range: track.cueRange, tag: track.key) { [weak self] ok in
             if ok { self?.preloaded = (t, track.key) }
         }
     }
