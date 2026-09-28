@@ -161,6 +161,8 @@ final class RowListChart: StatsChart {
         var color: NSColor? = nil
         var tip: String = ""
         var action: (() -> Void)? = nil
+        /// The marker as an outline: something you don't have.
+        var hollow = false
     }
     var rows: [Row] = [] { didSet { invalidateIntrinsicContentSize(); needsLayout = true; needsDisplay = true } }
     var empty = "Nothing."
@@ -186,8 +188,15 @@ final class RowListChart: StatsChart {
             }
             var x: CGFloat = 8
             if let c = r.color {
-                c.setFill()
-                NSBezierPath(roundedRect: NSRect(x: x, y: y + 10, width: 8, height: 8), xRadius: 2, yRadius: 2).fill()
+                if r.hollow {
+                    c.setStroke()
+                    let box = NSBezierPath(roundedRect: NSRect(x: x + 0.5, y: y + 10.5, width: 7, height: 7), xRadius: 2, yRadius: 2)
+                    box.lineWidth = 1
+                    box.stroke()
+                } else {
+                    c.setFill()
+                    NSBezierPath(roundedRect: NSRect(x: x, y: y + 10, width: 8, height: 8), xRadius: 2, yRadius: 2).fill()
+                }
                 x += 16
             }
             let lead = Self.text(r.lead, 11, Dash.text3, bold: true)

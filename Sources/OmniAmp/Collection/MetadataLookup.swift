@@ -65,7 +65,7 @@ final class MetadataLookup: @unchecked Sendable {
 
     // MARK: Sources
 
-    private func get(_ url: URL, musicBrainz: Bool = false) async -> Any? {
+    func get(_ url: URL, musicBrainz: Bool = false) async -> Any? {
         // MusicBrainz sheds load with 503 "currently busy" now and then: that request, a few seconds later, works.
         for attempt in 0..<(musicBrainz ? 4 : 1) {
             if musicBrainz { await mbGate.wait() }
@@ -88,14 +88,14 @@ final class MetadataLookup: @unchecked Sendable {
         return nil
     }
 
-    private static func url(_ base: String, _ query: [String: String]) -> URL {
+    static func url(_ base: String, _ query: [String: String]) -> URL {
         var c = URLComponents(string: base)!
         c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         return c.url!
     }
 
     /// Lucene query text: quotes and backslashes escaped.
-    private static func lucene(_ s: String) -> String {
+    static func lucene(_ s: String) -> String {
         "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 

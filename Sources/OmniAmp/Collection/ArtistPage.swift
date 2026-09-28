@@ -201,13 +201,16 @@ final class ArtistPage: NSScrollView {
             let db = try? CollectionDB()
             let d = (try? db?.artistDashboard(key)) ?? ArtistDashboard(key: key)
             let cached: CollectionDB.CachedInfo = (db.flatMap { try? $0.artistInfo(key) }) ?? .unknown
+            let disco = (db.flatMap { try? $0.discography(key) }) ?? (nil, true)
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.dash = d
+                self.discography = disco.0
                 if case .found(let i) = cached { self.info = i }
                 self.build()
                 self.scrollToTop()
                 self.loadInfo(key: key, name: d.name, cached: cached, gen: gen)
+                self.loadDiscography(key: key, name: d.name, stale: disco.1, gen: gen)
             }
         }
     }
@@ -273,6 +276,101 @@ final class ArtistPage: NSScrollView {
 
     @objc private func openWikipedia() {
         if let u = info?.pageURL { NSWorkspace.shared.open(u) }
+    }
+
+    // MARK: Discography and bootlegs (MusicBrainz)
+
+    private var discography: ArtistDiscography?
+    private var discographyLoading = false
+    private let discoSlot = NSStackView()
+
+    /// Looked up when the page opens and the kept one is a month old (or there is none); never in the background.
+    private func loadDiscography(key: String, name: String, stale: Bool, gen: Int) {
+        let online = UserDefaults.standard.object(forKey: Pref.libraryOnlineLookups) as? Bool ?? true
+        guard stale, online, !name.isEmpty, !["unknown artist", "various artists", ""].contains(key) else { return }
+        let known = discography?.mbid
+        let album = dash.releases.first { $0.kind == .album }?.title ?? dash.releases.first?.title
+        discographyLoading = discography == nil
+        fillDiscography()
+        Task { @MainActor [weak self] in
+            var mbid = known
+            if mbid == nil { mbid = await Task.detached { try? CollectionDB().artistMBID(key) }.value ?? nil }
+            if mbid == nil { mbid = await MetadataLookup.shared.artistPlace(name: name, mbid: nil, album: album).mbid }
+            var found: ArtistDiscography?
+            if let mbid, let d = await MetadataLookup.shared.discography(mbid: mbid, artist: name) {
+                _ = await Task.detached { try? CollectionDB().saveDiscography(key, d) }.value
+                found = d
+            }
+            guard let self, gen == self.generation else { return }
+            self.discographyLoading = false
+            if let found { self.discography = found }
+            self.fillDiscography()
+        }
+    }
+
+    private func fillDiscography() {
+        discoSlot.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        guard let d = discography else {
+            if discographyLoading {
+                let wait = RowListChart()
+                wait.empty = "Looking up their releases on MusicBrainz…"
+                let card = StatsPanel("Discography", wait, note: "and known bootlegs")
+                discoSlot.addArrangedSubview(card)
+                card.widthAnchor.constraint(equalTo: discoSlot.widthAnchor).isActive = true
+            }
+            Dash.relaxWidth(discoSlot)
+            return
+        }
+        let owned = dash.releases
+        let listed = d.listed(owned: owned)
+        let open: (URL) -> Void = { NSWorkspace.shared.open($0) }
+        let official = RowListChart()
+        official.rows = listed.map { r, o in
+            let kind = r.isLive ? "Live" : r.isCompilation ? "Compilation" : r.type
+            return .init(lead: r.year.map(String.init) ?? "–", main: r.title, detail: kind + (o == nil ? " · missing" : ""),
+                         color: o.map { Theme.kind($0.kind) } ?? Dash.text3,
+                         tip: o == nil ? "Not in your library · click to see it on MusicBrainz" : "In your library · click to open it",
+                         action: { [weak self] in if let o { self?.onRelease?(o) } else { open(r.url) } }, hollow: o == nil)
+        }
+        official.empty = "MusicBrainz lists no albums for them."
+        let have = listed.filter { $0.owned != nil }.count
+        let studio = listed.filter { $0.release.isStudio && $0.release.type == "Album" }
+        var note = "you have \(have) of \(listed.count)"
+        if !studio.isEmpty { note += " · \(studio.filter { $0.owned != nil }.count) of \(studio.count) studio albums" }
+        var cards: [(NSView, Int)] = [(StatsPanel("Discography (\(listed.count))", official, note: note + " · outlined: missing"), 1)]
+
+        // Bootlegs: the ones you don't have yet (the ones you have are under Shows), by date.
+        // (Not by an official album you have: a bootleg can share its title.)
+        let officialKeys = Set(d.official.compactMap { ArtistDiscography.owned($0, in: owned)?.key })
+        let unofficial = owned.filter { !officialKeys.contains($0.key) }
+        let mine = d.bootlegs.filter { ArtistDiscography.owned($0, in: unofficial) != nil }.count
+        let missing = d.bootlegs.filter { ArtistDiscography.owned($0, in: unofficial) == nil }
+        let shown = missing.prefix(25)
+        let boots = RowListChart()
+        boots.rows = shown.map { r in
+            .init(lead: r.showDate ?? r.year.map(String.init) ?? "–", main: ArtistDiscography.withoutDate(r.title, r.showDate), detail: "",
+                  color: Dash.text3, tip: "Not in your library · click to see it on MusicBrainz", action: { open(r.url) }, hollow: true)
+        }
+        if missing.count > shown.count {
+            boots.rows.append(.init(lead: "", main: "All \(d.bootlegTotal.formatted()) on MusicBrainz ↗", detail: "\((missing.count - shown.count).formatted()) more you don't have",
+                                    tip: "Their releases on MusicBrainz, bootlegs included",
+                                    action: { open(d.artistURL.appendingPathComponent("releases")) }))
+        }
+        if let n = d.liveArchive, n > 0 {
+            boots.rows.append(.init(lead: "", main: "Live Music Archive ↗", detail: "\(n.formatted()) recording\(n == 1 ? "" : "s"), free to stream",
+                                    tip: "Their concerts on archive.org (taping-friendly artists)",
+                                    action: { open(MetadataLookup.liveArchiveURL(self.dash.name)) }))
+        }
+        if !boots.rows.isEmpty {
+            let lead = d.bootlegTotal == 0 ? "tapes on archive.org" : "you have \(mine) · the ones you don't, by date"
+            cards.append((StatsPanel("Known bootlegs (\(d.bootlegTotal.formatted()))", boots, note: lead), 1))
+        } else {
+            cards[0].1 = 2
+        }
+        let grid = dashGrid(cards, columns: 2)
+        discoSlot.addArrangedSubview(grid)
+        grid.widthAnchor.constraint(equalTo: discoSlot.widthAnchor).isActive = true
+        Dash.relaxWidth(discoSlot)
     }
 
     private func button(_ glyph: String, _ label: String, _ action: Selector, tip: String, prominent: Bool = false) -> Pill {
@@ -431,6 +529,10 @@ final class ArtistPage: NSScrollView {
         }
         if last.count == 1 { last[0].1 = 3 }
         if !last.isEmpty { add(dashGrid(last)) }
+        discoSlot.orientation = .vertical
+        discoSlot.translatesAutoresizingMaskIntoConstraints = false
+        add(discoSlot)
+        fillDiscography()
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .vertical)
