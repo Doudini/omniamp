@@ -9,6 +9,11 @@ Ideas we want but have deferred. Roughly ordered by value within each group.
 - **Menu-bar mini player**: play/pause/next and the current track from the menu bar.
 - **Podcasts, next steps**: download episodes for offline listening, playback speed (1.25×/1.5×/2×), chapters.
 
+## Music library
+- **Own play history**: log every counted play into the library database, even without a last.fm or ListenBrainz account, so the Listening page works offline and for people who don't scrobble. Event-driven (one row written when the scrobbler counts a play; nothing in the background), a "Keep a play history" switch and a Clear button in Settings, no duplicates with last.fm imports (same timestamp and artist). Deferred: the last.fm import, the Sync button and the refresh on opening Listening (when the last sync is over 30 minutes old) cover it for now.
+- **Scrobble queue details**: Settings shows plays waiting and the oldest one's age; say when last.fm ignored plays older than its 14-day limit (it answers "ignored" and they're counted as sent today); optionally send the queue the moment the network returns (NWPathMonitor, no polling).
+- **Background cover warm-up**: prepare the library's cover thumbnails for albums not scrolled to yet.
+
 ## Classic look
 - **Shade mode**: double-click the title bar to collapse the window to a thin strip.
 - **Window snapping**: EQ and playlist windows snap to each other and to screen edges.
