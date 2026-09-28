@@ -56,9 +56,26 @@ final class ClockChart: StatsChart {
 /// Last.fm history and the world: where the music you play and own comes from, and when you listen.
 final class ListeningPage: NSScrollView, NSTextFieldDelegate {
     var onArtist: ((String) -> Void)?
+    /// A release to play (a show recorded on this day).
+    var onPlayRelease: ((LibraryAlbum) -> Void)?
     private let stack = NSStackView()
     private let history = ListeningHistory.shared
     private var stats: ListeningStats?
+    private var river = ListeningRiver()
+    private var today = OnThisDay()
+    private var playYears: [Int] = []
+
+    /// Which plays "Most played artists" counts.
+    enum Period: Equatable {
+        case days(Int)
+        case year(Int)
+        case all
+    }
+    private var period: Period = .all
+    private let topChart = BarListChart()
+    private var periodPills: [(Pill, Period)] = []
+    private let yearMenu = NSPopUpButton()
+    private let periodNote = NSTextField(labelWithString: "")
     private var showOwned = false
     private var country: (iso: String, name: String)?
     private let map = WorldMapView()
@@ -132,10 +149,17 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         let gen = generation
         updateStatus()
         DispatchQueue.global(qos: .userInitiated).async {
-            let s = try? CollectionDB().listeningStats()
+            let db = try? CollectionDB()
+            let s = try? db?.listeningStats()
+            let river = (try? db?.river()) ?? ListeningRiver()
+            let today = (try? db?.onThisDay()) ?? OnThisDay()
+            let years = (try? db?.playYears()) ?? []
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation, let s else { return }
                 self.stats = s
+                self.river = river
+                self.today = today
+                self.playYears = years
                 self.build()
             }
         }
@@ -302,6 +326,8 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
                      tip: s.pendingArtists > 0 ? "\(s.pendingArtists) artists still to place on the map" : String(format: "%.0f%% of plays on the map", placed * 100)),
         ]))
 
+        rows.append(onThisDayCard())
+
         // Plays over the years, and how much of it you own.
         let area = AreaChart()
         area.points = s.years.map { .init(x: Double($0.year), y: Double($0.releases), label: String($0.year)) }
@@ -313,6 +339,12 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         owned.unit = "plays"
         rows.append(dashRow([panel("Plays per year", area, note: "hover for the figures"),
                              panel("What you play, do you own it?", owned, note: "by artist")], weights: [1.6, 1]))
+
+        let riverChart = RiverChart()
+        riverChart.river = river
+        riverChart.onArtist = { [weak self] in self?.onArtist?($0) }
+        rows.append(panel("Your top artists through the years", riverChart,
+                          note: "plays per year of your \(river.series.count) most played artists · hover for figures, click for the artist"))
 
         // The map, with the country's artists under it.
         map.values = showOwned ? s.ownedByCountry : s.playsByCountry
@@ -342,10 +374,7 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         loadCountry()
 
         // Who, and when.
-        let top = BarListChart()
-        top.bars = s.topArtists
-        top.tip = { "\($0.label): \(Int($0.value).formatted()) plays · \($0.detail) · click for the artist page" }
-        top.onClick = { [weak self] b in self?.onArtist?(b.id) }
+        let top = mostPlayedCard()
         let clock = ClockChart()
         clock.clock = s.clock
         let weekend = s.clock.enumerated().filter { $0.offset == 0 || $0.offset == 6 }.reduce(0) { $0 + $1.element.reduce(0, +) }
@@ -359,7 +388,7 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         when.orientation = .vertical
         when.spacing = 12
         for v in when.arrangedSubviews { v.widthAnchor.constraint(equalTo: when.widthAnchor).isActive = true }
-        rows.append(dashRow([panel("Most played artists", top, note: "plays"), when]))
+        rows.append(dashRow([top, when]))
 
         let notOwned = BarListChart()
         notOwned.bars = s.notOwned
@@ -374,6 +403,116 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         rows.append(dashRow([panel("Played a lot, not in your library", notOwned, note: "plays"),
                              panel("In your library, never played", never, note: "tracks")]))
         finish(rows)
+    }
+
+    // MARK: Most played, by period
+
+    private static func periodTitle(_ p: Period) -> String {
+        switch p {
+        case .days(7): "the last 7 days"
+        case .days(30): "the last month"
+        case .days(182): "the last 6 months"
+        case .days(365): "the last year"
+        case .days(let n): "the last \(n) days"
+        case .year(let y): String(y)
+        case .all: "all time"
+        }
+    }
+
+    private func mostPlayedCard() -> NSView {
+        periodPills = [("7 days", Period.days(7)), ("Month", .days(30)), ("6 months", .days(182)), ("Year", .days(365)), ("All time", .all)]
+            .map { label, p in (Pill(label, target: self, action: #selector(periodClicked(_:))), p) }
+        yearMenu.removeAllItems()
+        yearMenu.addItem(withTitle: "Year…")
+        yearMenu.addItems(withTitles: playYears.map(String.init))
+        yearMenu.font = Dash.font(12)
+        yearMenu.target = self
+        yearMenu.action = #selector(yearChosen)
+        yearMenu.toolTip = "Your most played artists of one year"
+        let controls = NSStackView(views: periodPills.map(\.0) + [yearMenu])
+        controls.spacing = 6
+        topChart.tip = { "\($0.label): \(Int($0.value).formatted()) plays · \($0.detail) · click for the artist page" }
+        topChart.onClick = { [weak self] b in self?.onArtist?(b.id) }
+        periodNote.font = Dash.font(11)
+        periodNote.textColor = Dash.text3
+        let body = NSStackView(views: [controls, periodNote, topChart])
+        body.orientation = .vertical
+        body.alignment = .leading
+        body.spacing = 8
+        topChart.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
+        updatePeriodControls()
+        loadTop()
+        return StatsPanel("Most played artists", body)
+    }
+
+    private func updatePeriodControls() {
+        for (pill, p) in periodPills { pill.isOn = p == period }
+        if case .year(let y) = period { yearMenu.selectItem(withTitle: String(y)) } else { yearMenu.selectItem(at: 0) }
+    }
+
+    @objc private func periodClicked(_ sender: Pill) {
+        guard let p = periodPills.first(where: { $0.0 === sender })?.1 else { return }
+        period = p
+        updatePeriodControls()
+        loadTop()
+    }
+
+    @objc private func yearChosen() {
+        guard let y = Int(yearMenu.titleOfSelectedItem ?? "") else { period = .days(365); updatePeriodControls(); loadTop(); return }
+        period = .year(y)
+        updatePeriodControls()
+        loadTop()
+    }
+
+    /// The chosen period's top artists, read off the main thread; the card keeps its place.
+    private func loadTop() {
+        let p = period
+        var from: Int?, to: Int?
+        let now = Date()
+        switch p {
+        case .days(let n): from = Int(now.timeIntervalSince1970) - n * 86400
+        case .year(let y):
+            let c = Calendar.current
+            from = c.date(from: DateComponents(year: y, month: 1, day: 1)).map { Int($0.timeIntervalSince1970) }
+            to = c.date(from: DateComponents(year: y + 1, month: 1, day: 1)).map { Int($0.timeIntervalSince1970) }
+        case .all: break
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let bars = (try? CollectionDB().topArtists(from: from, to: to)) ?? []
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.period == p else { return }
+                let total = bars.reduce(0) { $0 + Int($1.value) }
+                self.periodNote.stringValue = bars.isEmpty ? "No plays in \(Self.periodTitle(p))."
+                    : "Top \(bars.count) of \(Self.periodTitle(p)) · \(total.formatted()) plays between them"
+                self.topChart.bars = bars
+            }
+        }
+    }
+
+    // MARK: On this day
+
+    private func onThisDayCard() -> NSView {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate("d MMMM")
+        let dateName = Calendar.current.date(from: DateComponents(year: 2000, month: today.month, day: today.day)).map(f.string) ?? ""
+        let shows = RowListChart()
+        shows.empty = "No show in your library was recorded on \(dateName)."
+        shows.rows = today.shows.prefix(8).map { a in
+            let year = a.showDate.map { String($0.prefix(4)) } ?? ""
+            return .init(lead: year, main: a.artist, detail: a.venue ?? a.title, color: Theme.kind(.show),
+                         tip: "\(a.artist) · \(a.showDate ?? "") \(a.venue ?? "") · click to play",
+                         action: { [weak self] in self?.onPlayRelease?(a) })
+        }
+        let days = RowListChart()
+        days.empty = "No plays on \(dateName) in other years."
+        days.rows = today.days.prefix(8).map { d in
+            .init(lead: String(d.year), main: d.artist, detail: "\(d.title)\(d.plays > 1 ? " · \(d.plays) plays that day" : "")",
+                  tip: "\(d.year): \(d.plays) plays, most of them \(d.artist) · click for the artist page",
+                  action: { [weak self] in self?.onArtist?(d.artistKey) })
+        }
+        let left = StatsPanel("Shows recorded on \(dateName)", shows, note: today.shows.isEmpty ? nil : "click to play")
+        let right = StatsPanel("You on \(dateName)", days, note: today.days.isEmpty ? nil : "your most played artist each year")
+        return dashRow([left, right])
     }
 
     private func note(_ text: String) -> NSView {

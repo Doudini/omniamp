@@ -362,6 +362,11 @@ final class CollectionDB {
         a.show_date, a.venue, a.unplayable, a.unplayable_format
         """
 
+    /// Albums matching a condition on `a` (the albums table), in an order.
+    func albumsWhere(_ condition: String, _ args: [SQLValue?], order: String) throws -> [LibraryAlbum] {
+        try albums("SELECT \(Self.albumColumns) FROM albums a WHERE \(condition) ORDER BY \(order)", args)
+    }
+
     private func albums(_ sql: String, _ args: [SQLValue?]) throws -> [LibraryAlbum] {
         var out: [LibraryAlbum] = []
         try db.query(sql, args) { s in

@@ -199,3 +199,108 @@ extension CollectionDB {
         return out
     }
 }
+
+/// Your top artists over the years, for the river chart: the most played overall, the rest as "other".
+struct ListeningRiver: Sendable {
+    struct Series: Sendable {
+        let key: String
+        let name: String
+        let plays: [Int]   // per year, in `years` order
+    }
+    var years: [Int] = []
+    var series: [Series] = []
+    var other: [Int] = []
+}
+
+/// What happened on this date in other years: shows you own recorded then, and what you played.
+struct OnThisDay: Sendable {
+    struct Day: Sendable {
+        let year: Int
+        let plays: Int
+        let artist: String
+        let artistKey: String
+        let title: String
+    }
+    var month = 1, day = 1
+    var shows: [LibraryAlbum] = []
+    var days: [Day] = []
+}
+
+extension CollectionDB {
+    /// Most played artists between two times (nil: no limit), with whether they're in the library.
+    func topArtists(from: Int?, to: Int?, limit: Int = 15) throws -> [LibraryStats.Bar] {
+        var owned: [String: Int] = [:]
+        try db.query("SELECT artist_key, sum(tracks) FROM albums GROUP BY artist_key") { owned[$0.text(0)] = $0.int(1) }
+        var out: [LibraryStats.Bar] = []
+        try db.query("""
+            SELECT artist_key, min(artist), count(*) AS n FROM scrobbles WHERE ts >= ? AND ts < ?
+            GROUP BY artist_key ORDER BY n DESC LIMIT ?
+            """, [from ?? 0, to ?? Int.max, limit]) { r in
+            out.append(.init(id: r.text(0), label: r.text(1), value: Double(r.int(2)),
+                             detail: owned[r.text(0)].map { "\($0.formatted()) owned" } ?? "not in library"))
+        }
+        return out
+    }
+
+    /// The years with plays, newest first (for the year menu).
+    func playYears() throws -> [Int] {
+        var out: [Int] = []
+        try db.query("SELECT DISTINCT CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER) AS y FROM scrobbles ORDER BY y DESC") {
+            out.append($0.int(0))
+        }
+        return out
+    }
+
+    /// Plays per year of the `top` most played artists overall, and of everyone else.
+    func river(top: Int = 8) throws -> ListeningRiver {
+        var r = ListeningRiver()
+        r.years = try playYears().reversed()
+        guard !r.years.isEmpty else { return r }
+        let index = Dictionary(uniqueKeysWithValues: r.years.enumerated().map { ($1, $0) })
+        var keys: [(String, String)] = []
+        try db.query("SELECT artist_key, min(artist), count(*) AS n FROM scrobbles GROUP BY artist_key ORDER BY n DESC LIMIT ?", [top]) {
+            keys.append(($0.text(0), $0.text(1)))
+        }
+        var perArtist: [String: [Int]] = [:]
+        var totals = Array(repeating: 0, count: r.years.count)
+        try db.query("""
+            SELECT artist_key, CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER), count(*) FROM scrobbles GROUP BY 1, 2
+            """) { row in
+            guard let i = index[row.int(1)] else { return }
+            totals[i] += row.int(2)
+            if keys.contains(where: { $0.0 == row.text(0) }) {
+                perArtist[row.text(0), default: Array(repeating: 0, count: r.years.count)][i] += row.int(2)
+            }
+        }
+        r.series = keys.map { .init(key: $0.0, name: $0.1, plays: perArtist[$0.0] ?? Array(repeating: 0, count: r.years.count)) }
+        r.other = totals.indices.map { i in totals[i] - r.series.reduce(0) { $0 + $1.plays[i] } }
+        return r
+    }
+
+    /// This month and day in other years (local time).
+    func onThisDay(_ date: Date = Date()) throws -> OnThisDay {
+        let c = Calendar.current.dateComponents([.month, .day, .year], from: date)
+        var o = OnThisDay(month: c.month ?? 1, day: c.day ?? 1)
+        let md = String(format: "%02d-%02d", o.month, o.day)
+        o.shows = try albumsWhere("a.kind = \(ReleaseKind.show.rawValue) AND substr(a.show_date, 6, 5) = ?", [md], order: "a.show_date")
+        var best: [Int: (plays: Int, artists: [String: (String, Int)], titles: [String: Int])] = [:]
+        try db.query("""
+            SELECT CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER), artist_key, artist, title FROM scrobbles
+            WHERE strftime('%m-%d', ts, 'unixepoch', 'localtime') = ?
+            """, [md]) { r in
+            let y = r.int(0)
+            guard y != c.year else { return }   // today isn't history yet
+            var e = best[y] ?? (0, [:], [:])
+            e.plays += 1
+            e.artists[r.text(1)] = (r.text(2), (e.artists[r.text(1)]?.1 ?? 0) + 1)
+            e.titles[r.text(1) + "\u{1}" + r.text(3), default: 0] += 1
+            best[y] = e
+        }
+        o.days = best.sorted { $0.key > $1.key }.map { y, e in
+            let top = e.artists.max { $0.value.1 < $1.value.1 }!
+            let song = e.titles.filter { $0.key.hasPrefix(top.key + "\u{1}") }.max { $0.value < $1.value }?.key.components(separatedBy: "\u{1}").last ?? ""
+            return .init(year: y, plays: e.plays, artist: top.value.0, artistKey: top.key, title: song)
+        }
+        return o
+    }
+}

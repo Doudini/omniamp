@@ -229,6 +229,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             self.searchChanged()
         }
         listeningPage.onArtist = { [weak self] a in self?.push(.artist(a)) }
+        listeningPage.onPlayRelease = { [weak self] album in
+            guard let self, let db = self.db else { return }
+            self.play((try? db.tracks(album: album.key)) ?? [])
+        }
         statsPage.onSong = { [weak self] a, t in self?.showSong(artist: a, titleKey: t) }
         songPage.onBack = { [weak self] in self?.back() }
         songPage.onArtist = { [weak self] a in self?.push(.artist(a)) }

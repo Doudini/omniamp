@@ -103,4 +103,42 @@ final class ListeningTests: XCTestCase {
         XCTAssertEqual(WorldMapView.step(100, max: 100), 4)
         XCTAssertEqual(WorldMapView.step(1, max: 100_000), 0, "one play is still lit")
     }
+
+    func testPeriodsRiverAndOnThisDay() throws {
+        let d = try db()
+        let c = Calendar.current
+        func ts(_ y: Int, _ m: Int, _ day: Int, _ h: Int = 12) -> Int {
+            Int(c.date(from: DateComponents(year: y, month: m, day: day, hour: h))!.timeIntervalSince1970)
+        }
+        var plays: [LastFM.Play] = []
+        for i in 0..<6 { plays.append(.init(ts: ts(2008, 3, 1 + i), artist: "Nirvana", album: "Bleach", title: "Swap Meet", artistMBID: nil)) }
+        for i in 0..<3 { plays.append(.init(ts: ts(2008, 5, 1 + i), artist: "Björk", album: "Homogenic", title: "Jóga", artistMBID: nil)) }
+        for i in 0..<4 { plays.append(.init(ts: ts(2019, 6, 1 + i), artist: "Björk", album: "Homogenic", title: "Hunter", artistMBID: nil)) }
+        plays.append(.init(ts: ts(2019, 9, 28), artist: "Low", album: "", title: "Lullaby", artistMBID: nil))
+        plays.append(.init(ts: ts(2019, 9, 28, 13), artist: "Low", album: "", title: "Lullaby", artistMBID: nil))
+        plays.append(.init(ts: ts(2012, 9, 28), artist: "Nirvana", album: "", title: "Polly", artistMBID: nil))
+        try d.addPlays(plays)
+
+        // A year: 2008's top artists.
+        let y2008 = try d.topArtists(from: ts(2008, 1, 1, 0), to: ts(2009, 1, 1, 0))
+        XCTAssertEqual(y2008.map(\.label), ["Nirvana", "Björk"])
+        XCTAssertEqual(y2008.map(\.value), [6, 3])
+        XCTAssertEqual(try d.topArtists(from: nil, to: nil).prefix(2).map(\.value), [7, 7], "all time: Björk and Nirvana, 7 each")
+        XCTAssertEqual(try d.playYears(), [2019, 2012, 2008])
+
+        // River: the top 2 and everyone else, per year.
+        let r = try d.river(top: 2)
+        XCTAssertEqual(r.years, [2008, 2012, 2019])
+        XCTAssertEqual(r.series.map(\.name), ["Björk", "Nirvana"])
+        XCTAssertEqual(r.series[0].plays, [3, 0, 4])
+        XCTAssertEqual(r.series[1].plays, [6, 1, 0])
+        XCTAssertEqual(r.other, [0, 0, 2])
+
+        // On this day: 28 September in other years.
+        let o = try d.onThisDay(c.date(from: DateComponents(year: 2026, month: 9, day: 28))!)
+        XCTAssertEqual(o.days.map(\.year), [2019, 2012])
+        XCTAssertEqual(o.days.first?.artist, "Low")
+        XCTAssertEqual(o.days.first?.plays, 2)
+        XCTAssertEqual(o.days.first?.title, "Lullaby")
+    }
 }
