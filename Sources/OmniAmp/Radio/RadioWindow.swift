@@ -72,13 +72,6 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
 
     // MARK: Layout
 
-    private func column(_ id: String, _ width: CGFloat, flexible: Bool = false) -> NSTableColumn {
-        let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
-        c.width = width
-        c.resizingMask = flexible ? .autoresizingMask : []
-        return c
-    }
-
     private func build() {
         window?.backgroundColor = Theme.background
         let title = NSTextField(labelWithString: "INTERNET RADIO")
@@ -104,8 +97,8 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
         for p in [genre, country] { p.target = self; p.action = #selector(filterChanged); p.font = Fonts.hack(11) }
 
         if table.tableColumns.isEmpty {
-            for c in [column("logo", 26), column("fav", 22), column("name", 260, flexible: true),
-                      column("genre", 160), column("country", 110), column("format", 70)] { table.addTableColumn(c) }
+            for c in [ListLook.column("logo", 26), ListLook.column("fav", 22), ListLook.column("name", 260, flexible: true),
+                      ListLook.column("genre", 160), ListLook.column("country", 110), ListLook.column("format", 70)] { table.addTableColumn(c) }
             table.headerView = nil
             table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
             table.dataSource = self
@@ -117,23 +110,8 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             let menu = NSMenu()
             menu.delegate = self   // filled for the clicked row
             table.menu = menu
-            table.rowHeight = 26
-            table.intercellSpacing = NSSize(width: 8, height: 0)
-            table.style = .plain
-            table.gridStyleMask = []
         }
-        table.backgroundColor = Theme.lcd
-        scroll.documentView = table
-        scroll.hasVerticalScroller = true
-        scroll.scrollerStyle = .overlay
-        scroll.automaticallyAdjustsContentInsets = false   // the transparent title bar mustn't push rows under the top edge
-        scroll.contentInsets = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
-        scroll.drawsBackground = true
-        scroll.backgroundColor = Theme.lcd
-        scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = 4
-        scroll.layer?.borderWidth = 1
-        scroll.layer?.borderColor = NSColor.black.cgColor
+        ListLook.apply(table, in: scroll, rowHeight: 26)   // again on a theme change: the colors
 
         status.font = Fonts.hack(10)
         status.textColor = Theme.phosphorDim.blended(withFraction: 0.4, of: Theme.phosphor)
@@ -233,7 +211,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
         case 53: window?.performClose(nil); return true
         case 48: focusSearch(); return true   // Tab / ⇧Tab: list ⇄ search
         default:
-            guard let c = e.characters, c.count == 1, c.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) else { return false }
+            guard let c = ListLook.typedText(e) else { return false }
             window?.makeFirstResponder(search)
             search.currentEditor()?.insertText(c)
             return true

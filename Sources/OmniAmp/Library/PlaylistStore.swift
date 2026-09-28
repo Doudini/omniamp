@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 protocol PlaylistStoreDelegate: AnyObject {
     /// Whole list changed (add/remove/clear).
     func playlistDidReload()
@@ -8,6 +9,7 @@ protocol PlaylistStoreDelegate: AnyObject {
 }
 
 /// Owns the track list. All public API is main-thread only.
+@MainActor
 final class PlaylistStore {
     weak var delegate: PlaylistStoreDelegate?
 
@@ -16,8 +18,9 @@ final class PlaylistStore {
     private var nextID = 1
     private var indexByID: [Int: Int]?          // lazily rebuilt after removals
 
-    private let pendingLock = NSLock()
-    private var pending: [(id: Int, info: TagInfo)] = []
+    // Filled by the tag reader threads, taken by flush() on main: only touched under the lock.
+    nonisolated private let pendingLock = NSLock()
+    nonisolated(unsafe) private var pending: [(id: Int, info: TagInfo)] = []
     private var flushTimer: Timer?
     private var activeLoads = 0
     /// Tracks whose tags are being read right now (so bursts of inserts don't read them twice).
@@ -57,25 +60,11 @@ final class PlaylistStore {
         scansInProgress += 1
         if loadAllStart == nil { loadAllStart = t0 }
         onScanProgress?()
-        var next = position   // where the next batch goes when inserting in the middle
-        var total = 0
-        var first = true
+        let scan = ScanState(next: position)
 
-        func deliver(_ found: [Track]) {
-            DispatchQueue.main.async {
-                let at = min(max(0, next ?? self.tracks.count), self.tracks.count)
-                self.tracks.insert(contentsOf: found, at: at)
-                self.ids.insert(contentsOf: found.map { _ in self.allocID() }, at: at)
-                self.indexByID = nil
-                if next != nil { next = at + found.count }
-                total += found.count
-                self.scannedSoFar += found.count
-                if first { NSLog("OmniAmp: first rows after %.3fs", Date().timeIntervalSince(t0)); first = false }
-                self.delegate?.playlistDidReload()
-                onBatch?(at, found.count)
-                self.onScanProgress?()
-                self.loadMissingTags()
-            }
+        // Handed to the main thread, where the rows go in (the scan state is only touched there).
+        let deliver: @Sendable ([Track]) -> Void = { found in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.insertScanned(found, scan, onBatch: onBatch, since: t0) } }
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
@@ -96,15 +85,39 @@ final class PlaylistStore {
             }
             if !buffer.isEmpty { deliver(buffer) }
             let scanTime = Date().timeIntervalSince(t0)
-            DispatchQueue.main.async {
-                NSLog("OmniAmp: scanned %d files in %.3fs", total, scanTime)
+            DispatchQueue.main.async { MainActor.assumeIsolated {
+                NSLog("OmniAmp: scanned %d files in %.3fs", scan.total, scanTime)
                 self.scansInProgress -= 1
                 if self.scansInProgress == 0 { self.scannedSoFar = 0 }
                 self.onScanProgress?()
-                done?(total)
+                done?(scan.total)
                 self.logIfAllLoaded()
-            }
+            } }
         }
+    }
+
+    /// One folder scan's progress. Created on main and only ever touched there (the scan thread just
+    /// passes it along), hence "unchecked".
+    private final class ScanState: @unchecked Sendable {
+        var next: Int?        // where the next batch goes when inserting in the middle (nil: append)
+        var total = 0
+        var first = true
+        init(next: Int?) { self.next = next }
+    }
+
+    private func insertScanned(_ found: [Track], _ scan: ScanState, onBatch: ((Int, Int) -> Void)?, since t0: Date) {
+        let at = min(max(0, scan.next ?? tracks.count), tracks.count)
+        tracks.insert(contentsOf: found, at: at)
+        ids.insert(contentsOf: found.map { _ in allocID() }, at: at)
+        indexByID = nil
+        if scan.next != nil { scan.next = at + found.count }
+        scan.total += found.count
+        scannedSoFar += found.count
+        if scan.first { NSLog("OmniAmp: first rows after %.3fs", Date().timeIntervalSince(t0)); scan.first = false }
+        delegate?.playlistDidReload()
+        onBatch?(at, found.count)
+        onScanProgress?()
+        loadMissingTags()
     }
 
     /// When every scan and tag read has finished: one line for measuring whole loads.
@@ -294,7 +307,7 @@ final class PlaylistStore {
                     group.leave()
                 }
             }
-            group.notify(queue: .main) {
+            group.notify(queue: .main) { MainActor.assumeIsolated {
                 self.activeLoads -= 1
                 self.flush()
                 if self.activeLoads == 0 {
@@ -305,27 +318,27 @@ final class PlaylistStore {
                     self.logIfAllLoaded()
                     MemoryTrim.soon()
                 }
-            }
+            } }
         }
     }
 
-    private static func tagQueue(_ name: String, width: Int) -> OperationQueue {
+    nonisolated private static func tagQueue(_ name: String, width: Int) -> OperationQueue {
         let q = OperationQueue()
         q.name = name
         q.qualityOfService = .utility
         q.maxConcurrentOperationCount = width
         return q
     }
-    private static let localTagQueue = tagQueue("omniamp.tags.local", width: ProcessInfo.processInfo.activeProcessorCount)
-    private static let remoteTagQueue = tagQueue("omniamp.tags.remote", width: 24)
+    nonisolated private static let localTagQueue = tagQueue("omniamp.tags.local", width: ProcessInfo.processInfo.activeProcessorCount)
+    nonisolated private static let remoteTagQueue = tagQueue("omniamp.tags.remote", width: 24)
 
-    static func isNetworkVolume(_ path: String) -> Bool {
+    nonisolated static func isNetworkVolume(_ path: String) -> Bool {
         (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal == false
     }
 
     private func startFlushTimer() {
         guard flushTimer == nil else { return }
-        let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.flush() }
+        let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.flush() } }
         RunLoop.main.add(t, forMode: .common)
         flushTimer = t
     }

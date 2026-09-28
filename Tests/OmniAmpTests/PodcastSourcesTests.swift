@@ -1,6 +1,7 @@
 import XCTest
 @testable import OmniAmp
 
+@MainActor
 final class PodcastSourcesTests: XCTestCase {
     func testReadsOPMLFromOtherApps() {
         let opml = """
@@ -109,7 +110,7 @@ final class PodcastSourcesTests: XCTestCase {
         let net = CountingDirectory()
         let dir = PodcastDirectory()
         dir.transport = net
-        let cc = "Z\(Int.random(in: 100...999))"   // a country no other test uses
+        let cc = "Z" + UUID().uuidString.prefix(8)   // a country no other test (or earlier run's saved chart) uses
         XCTAssertNil(dir.cachedTop(country: cc))
         let first = try await dir.top(country: cc)
         XCTAssertEqual(first.map(\.title), ["Chart Show"])
@@ -124,6 +125,7 @@ final class PodcastSourcesTests: XCTestCase {
     }
 }
 
+@MainActor
 final class FeedRobustnessTests: XCTestCase {
     func testRepairMakesSloppyFeedsParse() {
         let xml = """

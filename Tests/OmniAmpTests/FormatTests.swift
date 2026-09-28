@@ -17,7 +17,7 @@ final class FormatTests: XCTestCase {
 
     private func info(_ url: URL) -> TagInfo {
         let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
-        return TagReader.read(path: url.path, fileSize: size ?? 0)
+        return TagReader.read(path: url.path, fileSize: size)
     }
 
     private func convert(_ name: String, _ args: [String]) throws -> URL {

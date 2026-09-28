@@ -1,7 +1,7 @@
 import AppKit
-import MediaPlayer
 
 /// What a look (modern or classic skin) must implement to follow the player.
+@MainActor
 protocol PlayerUI: AnyObject {
     func playlistDidReload()
     func playlistRowsDidUpdate(_ trackIndices: IndexSet)
@@ -19,6 +19,7 @@ protocol PlayerUI: AnyObject {
 }
 
 /// Playback + playlist logic shared by every look. Main-thread only.
+@MainActor
 final class PlayerController {
     let store = PlaylistStore()
     let player = AudioPlayer()
@@ -74,12 +75,6 @@ final class PlayerController {
             MainActor.assumeIsolated { self?.episodesMoved(moved) }
         }
         restore()
-        let d = UserDefaults.standard
-        player.setOutputDevice(uid: d.string(forKey: "outputDeviceUID"))
-        player.setBitPerfect(d.bool(forKey: "bitPerfect"), exclusive: d.bool(forKey: "exclusiveAccess"))
-        folders.catchUp()   // pick up changes made while the app was closed
-        setupRemoteCommands()
-        Scrobbler.shared.flushAll()   // send anything queued while offline / closed
         player.onStateChange = { [weak self] in
             guard let self else { return }
             switch self.player.state {
@@ -93,12 +88,23 @@ final class PlayerController {
         }
     }
 
+    /// What the app needs beyond the playlist: the audio device, watched folders, media keys, the scrobble
+    /// queue. Called once by the app (tests make controllers without touching any of it).
+    func startServices() {
+        let d = UserDefaults.standard
+        player.setOutputDevice(uid: d.string(forKey: Pref.outputDeviceUID))
+        player.setBitPerfect(d.bool(forKey: Pref.bitPerfect), exclusive: d.bool(forKey: Pref.exclusiveAccess))
+        folders.catchUp()   // pick up changes made while the app was closed
+        nowPlaying.setupRemoteCommands()
+        Scrobbler.shared.flushAll()   // send anything queued while offline / closed
+    }
+
     /// No polling: arm a single timer for the moment the next track should be preloaded.
     private func schedulePreloadCheck() {
         preloadTimer?.invalidate()
         preloadTimer = nil
         guard player.state == .playing, !preloadAttempted, player.duration > 0 else { return }
-        let t = Timer(timeInterval: max(0.05, player.remaining - 7.5), repeats: false) { [weak self] _ in self?.maybePreloadNext() }
+        let t = Timer(timeInterval: max(0.05, player.remaining - 7.5), repeats: false) { [weak self] _ in MainActor.assumeIsolated { self?.maybePreloadNext() } }
         t.tolerance = 0.5
         RunLoop.main.add(t, forMode: .common)
         preloadTimer = t
@@ -461,7 +467,18 @@ final class PlayerController {
             updateNowPlaying()
             return
         }
-        let ok = player.play(url: store.tracks[index].url, from: resumePosition(for: store.tracks[index]), range: store.tracks[index].cueRange)
+        // The row shows as playing at once; the file opens in the background (a network share can be slow).
+        let t = store.tracks[index]
+        player.play(url: t.url, from: resumePosition(for: t), range: t.cueRange) { [weak self] ok in
+            self?.trackOpened(ok, index: index)
+        }
+        ui?.currentTrackDidChange(old: old, new: index)
+        updateNowPlaying()
+    }
+
+    /// The file for `play(index:)` opened (or couldn't be).
+    private func trackOpened(_ ok: Bool, index: Int) {
+        guard currentIndex == index, index < store.tracks.count else { return }   // moved on meanwhile
         if ok {
             Scrobbler.shared.trackStarted(store.tracks[index], duration: store.tracks[index].duration ?? player.duration)
             failedInARow = 0
@@ -470,7 +487,8 @@ final class PlayerController {
             failedInARow += 1
         }
         schedulePreloadCheck()
-        ui?.currentTrackDidChange(old: old, new: index)
+        prepareNext()
+        ui?.playlistRowsDidUpdate([index])   // now its format and length are known
         updateNowPlaying()
         if !ok {
             // Skip unplayable files, but not forever: when every track has failed in a row (a drive that's gone,
@@ -573,6 +591,14 @@ final class PlayerController {
         return order[0]
     }
 
+    /// Open the track Next would play in the background, so pressing it (or reaching the end) starts it at
+    /// once. Not in shuffle mode: the next pick is only made when it's needed.
+    private func prepareNext() {
+        guard !shuffle, player.state != .stopped, let n = nextTarget(), n != currentIndex, n < store.tracks.count,
+              !store.tracks[n].isRemote else { player.prepare(nil); return }
+        player.prepare(store.tracks[n].url)
+    }
+
     private func advance() {
         if let t = nextTarget() { play(index: t) } else { player.stop(); updateNowPlaying() }
     }
@@ -587,8 +613,8 @@ final class PlayerController {
         guard let t = nextTarget(), t != currentIndex, !store.tracks[t].isRemote else { return }
         let track = store.tracks[t]
         // Its own level from its first sample (tags are usually loaded by now; if not, it plays at 1.0 until they are).
-        if player.queueNext(url: track.url, range: track.cueRange, gain: replayGainFactor(for: track), tag: track.key) {
-            preloaded = (t, track.key)
+        player.queueNext(url: track.url, range: track.cueRange, gain: replayGainFactor(for: track), tag: track.key) { [weak self] ok in
+            if ok { self?.preloaded = (t, track.key) }
         }
     }
 
@@ -616,6 +642,7 @@ final class PlayerController {
         applyReplayGain()
         Scrobbler.shared.trackStarted(currentTrack, duration: currentTrack?.duration ?? player.duration)
         schedulePreloadCheck()
+        prepareNext()
         NSLog("OmniAmp: gapless advance to #%d", (new ?? -2) + 1)
         ui?.currentTrackDidChange(old: old, new: new)
         updateNowPlaying()
@@ -682,20 +709,20 @@ final class PlayerController {
 
     /// nil = system default.
     func setOutputDevice(uid: String?) {
-        UserDefaults.standard.set(uid, forKey: "outputDeviceUID")
+        UserDefaults.standard.set(uid, forKey: Pref.outputDeviceUID)
         player.setOutputDevice(uid: uid)
         ui?.optionsDidChange()
     }
 
     func setBitPerfect(_ on: Bool) {
-        UserDefaults.standard.set(on, forKey: "bitPerfect")
+        UserDefaults.standard.set(on, forKey: Pref.bitPerfect)
         invalidatePreload()
         player.setBitPerfect(on, exclusive: player.exclusive)
         ui?.optionsDidChange()
     }
 
     func setExclusive(_ on: Bool) {
-        UserDefaults.standard.set(on, forKey: "exclusiveAccess")
+        UserDefaults.standard.set(on, forKey: Pref.exclusiveAccess)
         player.setBitPerfect(player.bitPerfect, exclusive: on)
         ui?.optionsDidChange()
     }
@@ -721,7 +748,8 @@ final class PlayerController {
     func shutdown() {
         rememberPosition()
         saveNow()
-        PodcastLibrary.writes.sync {}   // podcast state saved in the background: let it land before quitting
+        PodcastLibrary.writes.sync {}   // podcast state and positions are saved in the background: let them land
+        ResumeStore.flush()
         player.shutdown()
     }
 
@@ -761,7 +789,7 @@ final class PlayerController {
         player.fadeGain = 1
         sleepAt = minutes.map { Date().addingTimeInterval(TimeInterval($0 * 60)) }
         if let at = sleepAt {
-            let t = Timer(fire: at.addingTimeInterval(-8), interval: 0.1, repeats: true) { [weak self] _ in self?.sleepTick() }
+            let t = Timer(fire: at.addingTimeInterval(-8), interval: 0.1, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.sleepTick() } }
             RunLoop.main.add(t, forMode: .common)
             sleepTimer = t
         }
@@ -787,8 +815,8 @@ final class PlayerController {
 
     /// Speed per show (web files share one), remembered between launches.
     private var showSpeeds: [String: Float] {
-        get { (UserDefaults.standard.dictionary(forKey: "podcastSpeeds") as? [String: Double])?.mapValues { Float($0) } ?? [:] }
-        set { UserDefaults.standard.set(newValue.mapValues { Double($0) }, forKey: "podcastSpeeds") }
+        get { (UserDefaults.standard.dictionary(forKey: Pref.podcastSpeeds) as? [String: Double])?.mapValues { Float($0) } ?? [:] }
+        set { UserDefaults.standard.set(newValue.mapValues { Double($0) }, forKey: Pref.podcastSpeeds) }
     }
 
     private func speedKey(_ t: Track) -> String { t.isWebFile ? "\u{0}web" : (t.podcast ?? "") }
@@ -814,8 +842,8 @@ final class PlayerController {
 
     /// Long files resume where they were left (≥ 10 minutes, or any .m4b audiobook).
     var resumeLongTracks: Bool {
-        get { UserDefaults.standard.object(forKey: "resumeLongTracks") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "resumeLongTracks") }
+        get { UserDefaults.standard.object(forKey: Pref.resumeLongTracks) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Pref.resumeLongTracks) }
     }
 
     /// Uses the player's duration when the tags aren't read yet.
@@ -825,20 +853,12 @@ final class PlayerController {
         return d >= 600 || (t.path as NSString).pathExtension.lowercased() == "m4b"
     }
 
-    /// Kept in memory too: the podcast window asks for every episode row it draws.
-    private lazy var resumeCache = UserDefaults.standard.dictionary(forKey: "resumePositions") as? [String: Double] ?? [:]
-    private var resumePositions: [String: Double] {
-        get { resumeCache }
-        set { resumeCache = newValue; UserDefaults.standard.set(newValue, forKey: "resumePositions") }
-    }
-    /// When each position was saved: the list is trimmed oldest first (never the one just saved).
-    private lazy var resumeDates = UserDefaults.standard.dictionary(forKey: "resumeDates") as? [String: Double] ?? [:]
-    private static let maxResumePositions = 1000
+    private let resume = ResumeStore()
 
     private func resumePosition(for t: Track) -> Double {
         // Only long tracks are ever stored, so a stored position is enough (the duration may not be known yet).
         // Podcasts always continue where you left off; the setting is about long music files.
-        guard resumeLongTracks || t.isEpisode, let p = resumePositions[t.key] else { return 0 }
+        guard resumeLongTracks || t.isEpisode, let p = resume[t.key] else { return 0 }
         return max(0, p - 3)   // a few seconds back, for context
     }
 
@@ -846,22 +866,13 @@ final class PlayerController {
     private func rememberPosition() {
         guard let t = currentTrack, resumeLongTracks || t.isEpisode, isLong(t), player.state != .stopped else { return }
         let pos = player.currentTime, length = player.duration
-        var all = resumePositions
         if pos > 30, length <= 0 || pos < length - 30 {
-            all[t.key] = pos
-            resumeDates[t.key] = Date().timeIntervalSince1970
+            resume.set(t.key, pos)
         } else if length > 60, pos >= length - 30 {
-            all.removeValue(forKey: t.key)          // heard to the end
-            resumeDates.removeValue(forKey: t.key)
+            resume.remove(t.key)          // heard to the end
         }
         // Otherwise (the first 30 s, or still loading: an episode reads 0 until it plays) the saved place stays:
         // leaving before playback really started must not erase it.
-        if all.count > Self.maxResumePositions {
-            let oldest = all.keys.sorted { (resumeDates[$0] ?? 0) < (resumeDates[$1] ?? 0) }.prefix(all.count - Self.maxResumePositions)
-            for k in oldest { all.removeValue(forKey: k); resumeDates.removeValue(forKey: k) }
-        }
-        UserDefaults.standard.set(resumeDates, forKey: "resumeDates")
-        resumePositions = all
         if t.isEpisode {
             PodcastLibrary.shared.noteListened(t.path, track: t)
             NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil)
@@ -870,24 +881,14 @@ final class PlayerController {
 
     /// A feed changed some episodes' audio addresses (same guid): positions and playlist entries follow.
     private func episodesMoved(_ moved: [String: String]) {
-        var all = resumePositions
-        for (was, now) in moved {
-            if let p = all.removeValue(forKey: was) { all[now] = p }
-            if let d = resumeDates.removeValue(forKey: was) { resumeDates[now] = d }
-        }
-        UserDefaults.standard.set(resumeDates, forKey: "resumeDates")
-        resumePositions = all
+        resume.rename(moved)
         store.moveEpisodes(moved)
         scheduleSave()
     }
 
     private func forgetPosition(_ path: String?) {
-        guard let p = path, resumePositions[p] != nil else { return }
-        var all = resumePositions
-        all.removeValue(forKey: p)
-        resumeDates.removeValue(forKey: p)
-        UserDefaults.standard.set(resumeDates, forKey: "resumeDates")
-        resumePositions = all
+        guard let p = path, resume[p] != nil else { return }
+        resume.remove(p)
         NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil)
     }
 
@@ -895,7 +896,7 @@ final class PlayerController {
     /// position (saved on pause, stop, track change and quit), plus the one playing now once it's past 30 s.
     /// (The live position is read, not saved: no extra writes while playing.)
     var startedEpisodeURLs: [String] {
-        var urls = resumePositions.keys.filter { $0.hasPrefix("http") }
+        var urls = resume.positions.keys.filter { $0.hasPrefix("http") }
         if let t = currentTrack, t.isEpisode, player.isPlayingEpisode, player.currentTime > 30, !urls.contains(t.path) { urls.append(t.path) }
         return urls
     }
@@ -906,7 +907,7 @@ final class PlayerController {
         if let t = currentTrack, t.isEpisode, t.path == url, player.isPlayingEpisode, player.currentTime > 0 {
             return (player.currentTime, player.duration > 0 ? player.duration : nil)
         }
-        return resumePositions[url].map { ($0, nil) }
+        return resume[url].map { ($0, nil) }
     }
 
     // MARK: ReplayGain
@@ -917,8 +918,8 @@ final class PlayerController {
     }
 
     var replayGainMode: ReplayGainMode {
-        get { ReplayGainMode(rawValue: UserDefaults.standard.string(forKey: "replayGain") ?? "") ?? .off }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "replayGain"); applyReplayGain(); ui?.optionsDidChange() }
+        get { ReplayGainMode(rawValue: UserDefaults.standard.string(forKey: Pref.replayGain) ?? "") ?? .off }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Pref.replayGain); applyReplayGain(); ui?.optionsDidChange() }
     }
 
     /// Gain for the playing track: album gain (falls back to track), clipped so peaks stay ≤ 1.0.
@@ -970,235 +971,16 @@ final class PlayerController {
         ui?.optionsDidChange()
     }
 
-    // MARK: Display text
-
-    func title(for index: Int) -> String {
-        let t = store.tracks[index]
-        if t.isStream {
-            // "3. Groove Salad — Artist - Title", plus BUFFERING while it fills up.
-            var s = "\(index + 1). \(t.title ?? player.streamInfo?.name ?? t.path)"
-            if index == currentIndex, player.isStreaming {
-                if player.isBuffering { s += " · BUFFERING…" } else if let st = player.streamTitle { s += " — \(st)" }
-            } else if index == currentIndex, let err = player.streamError {
-                s += " · couldn't connect: \(err)"
-            }
-            return s
-        }
-        let d = t.duration.map { " (\(TimeFormat.mmss($0)))" } ?? ""
-        if t.isEpisode, index == currentIndex {
-            if player.isPlayingEpisode, player.isBuffering { return "\(index + 1). \(t.displayTitle) · BUFFERING…" }
-            if let err = player.streamError { return "\(index + 1). \(t.displayTitle) · couldn't load: \(err)" }
-        }
-        return "\(index + 1). \(t.displayTitle)\(d)"
-    }
-
-    /// Bitrate in kbps for display (FLAC: computed from size/duration).
-    var currentKbps: Int? {
-        guard let t = currentTrack else { return nil }
-        if t.isStream { return player.streamInfo?.bitrate }
-        if t.isEpisode { return t.bitrate }
-        if let b = t.bitrate { return b }
-        if let k = Sane.kbps(bytes: t.size, seconds: t.duration) { return k }
-        return nil
-    }
-
-    var currentKHz: Int? {
-        let sr = currentTrack?.sampleRate ?? Int(player.sampleRate)
-        return sr > 0 ? Int((Double(sr) / 1000).rounded()) : nil
-    }
-
-    /// Human readable format, e.g. "FLAC 24-bit / 96 kHz" or "MP3 320 kbps · 44.1 kHz".
-    var formatDescription: String { currentIndex.map { formatDescription(for: $0) } ?? "" }
-
-    /// Format line for any track; the playing one also gets live info (actual rate, channels).
-    func formatDescription(for index: Int) -> String {
-        let l = formatLines(for: index)
-        return [l.0, l.1].filter { !$0.isEmpty }.joined(separator: " · ")
-    }
-
-    /// The format split in two, for narrow layouts: ("FLAC 16-bit / 44.1 kHz", "801 kbps · stereo").
-    func formatLines(for index: Int) -> (String, String) {
-        guard index < store.tracks.count else { return ("", "") }
-        let t = store.tracks[index]
-        if t.isStream {
-            guard index == currentIndex, let i = player.streamInfo else { return ("Internet radio", "") }
-            let khz = i.sampleRate > 0 ? String(format: i.sampleRate.truncatingRemainder(dividingBy: 1000) == 0 ? "%.0f kHz" : "%.1f kHz", i.sampleRate / 1000) : ""
-            let ch = i.channels == 1 ? "mono" : (i.channels == 2 ? "stereo" : "")
-            return (["RADIO", i.codec, i.bitrate.map { "\($0) kbps" }].compactMap { $0 }.joined(separator: " "),
-                    [khz, ch].filter { !$0.isEmpty }.joined(separator: " · "))
-        }
-        if t.isEpisode {
-            // "PODCAST MP3" · "12 Mar 2026"
-            let ext = (t.url.path as NSString).pathExtension.uppercased()
-            let codec = ["MP3", "M4A", "AAC", "MP4", "OGG", "OPUS", "WAV"].contains(ext) ? (ext == "M4A" || ext == "MP4" ? "AAC" : ext) : ""
-            let date = t.published.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .omitted) } ?? ""
-            let sp = speed(for: t)
-            let speedTag = sp == 1 ? "" : String(format: "%g×", sp)
-            return ([t.isWebFile ? "WEB" : "PODCAST", codec, speedTag].filter { !$0.isEmpty }.joined(separator: " "), date)
-        }
-        let playing = index == currentIndex && player.state != .stopped
-        let ext = (t.path as NSString).pathExtension.lowercased()
-        let lossless = t.bitDepth != nil
-        let codec: String
-        switch ext {
-        case "flac": codec = "FLAC"
-        case "mp3": codec = "MP3"
-        case "wav", "wave": codec = "WAV"
-        case "aif", "aiff", "aifc": codec = "AIFF"
-        case "m4a", "m4b", "mp4", "alac": codec = lossless ? "ALAC" : "AAC"
-        case "aac": codec = "AAC"
-        default: codec = ext.uppercased()
-        }
-        let sr = t.sampleRate ?? (playing ? Int(player.sampleRate) : 0)
-        let khz = sr > 0 ? (sr % 1000 == 0 ? "\(sr / 1000) kHz" : String(format: "%.1f kHz", Double(sr) / 1000)) : ""
-        let channels = playing ? player.channelCount : 0
-        let ch = channels == 1 ? "mono" : (channels == 2 ? "stereo" : (channels > 2 ? "\(channels) ch" : ""))
-        let kbps = t.bitrate ?? Sane.kbps(bytes: t.size, seconds: t.duration)
-        func join(_ p: [String]) -> String {
-            p.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " · ")
-        }
-        if lossless, let bits = t.bitDepth {
-            return (join(["\(codec) \(bits)-bit / \(khz)"]), join([kbps.map { "\($0) kbps" } ?? "", ch]))
-        }
-        return (join(["\(codec) \(kbps.map { "\($0) kbps" } ?? "")"]), join([khz, ch]))
-    }
-
-    /// Tracks of the same album in the playlist (same album tag, and same folder or artist).
-    func albumSummary(for index: Int) -> (count: Int, duration: Double)? {
-        guard index < store.tracks.count, let album = store.tracks[index].album, !album.isEmpty else { return nil }
-        let t = store.tracks[index]
-        let dir = (t.path as NSString).deletingLastPathComponent
-        var n = 0, d = 0.0
-        for o in store.tracks where o.album == album && ((o.path as NSString).deletingLastPathComponent == dir || o.artist == t.artist) {
-            n += 1
-            d += o.duration ?? 0
-        }
-        return (n, d)
-    }
-
     /// Files that couldn't be opened one after another (reset by the first that plays).
     private var failedInARow = 0
     /// Why playback stopped by itself, shown in the status line until something plays.
     private(set) var playbackProblem: String?
 
-    var statusText: String {
-        if let p = playbackProblem { return p }
-        let total = store.tracks.count
-        // While a folder is being added: how far along it is.
-        if store.scansInProgress > 0 {
-            return "Adding… \(store.scannedSoFar.formatted()) files"
-        }
-        var s = visible == nil ? "\(total) tracks" : "\(rowCount)/\(total) tracks"
-        let dur = store.totalDuration
-        if dur > 0 { s += "  \(TimeFormat.mmss(dur))" }
-        if store.isLoadingTags { s += "  …" }
-        if stopAfterCurrent { s = "⏹ after this · " + s }
-        if let at = sleepAt { s = "☾ \(max(1, Int(ceil(at.timeIntervalSinceNow / 60))))m · " + s }
-        return s
-    }
-
     // MARK: Media keys / Now Playing
 
-    private func setupRemoteCommands() {
-        let cc = MPRemoteCommandCenter.shared()
-        // Headsets often send "play" when they reconnect: while playing that must not restart the track.
-        cc.playCommand.addTarget { [weak self] _ in
-            guard let self else { return .success }
-            if self.player.state != .playing { self.playOrResume() }
-            return .success
-        }
-        cc.pauseCommand.addTarget { [weak self] _ in
-            guard let self, self.player.state == .playing else { return .success }
-            self.player.pause()
-            self.rememberPosition()   // like every other pause
-            self.updateNowPlaying()
-            return .success
-        }
-        cc.togglePlayPauseCommand.addTarget { [weak self] _ in self?.togglePlayPause(); return .success }
-        cc.stopCommand.addTarget { [weak self] _ in self?.stop(); return .success }
-        cc.nextTrackCommand.addTarget { [weak self] _ in self?.next(); return .success }
-        cc.previousTrackCommand.addTarget { [weak self] _ in self?.previous(); return .success }
-        cc.changePlaybackPositionCommand.addTarget { [weak self] e in
-            guard let self, let e = e as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            self.seek(to: e.positionTime)
-            return .success
-        }
-        // Podcasts: 15 s back / 30 s forward instead of previous / next (switched per track in updateNowPlaying).
-        cc.skipBackwardCommand.preferredIntervals = [15]
-        cc.skipForwardCommand.preferredIntervals = [30]
-        cc.skipBackwardCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            self.seek(to: max(0, self.player.currentTime - 15))
-            return .success
-        }
-        cc.skipForwardCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            self.seek(to: min(self.player.duration, self.player.currentTime + 30))
-            return .success
-        }
-        cc.skipBackwardCommand.isEnabled = false
-        cc.skipForwardCommand.isEnabled = false
-    }
+    private lazy var nowPlaying = NowPlaying(controller: self)
 
-    /// Cover for Now Playing: album art, station logo or show artwork, loaded once per track in the background.
-    private var nowPlayingArt: (key: String, art: MPMediaItemArtwork)?
-    private var nowPlayingArtRequest: String?
-
-    private func nowPlayingArtwork(for t: Track) -> MPMediaItemArtwork? {
-        if let a = nowPlayingArt, a.key == t.key { return a.art }
-        guard nowPlayingArtRequest != t.key else { return nil }
-        nowPlayingArtRequest = t.key
-        let key = t.key
-        let deliver: (CGImage?) -> Void = { [weak self] img in
-            guard let self, let img, self.currentTrack?.key == key else { return }
-            let image = NSImage(cgImage: img, size: NSSize(width: img.width, height: img.height))
-            self.nowPlayingArt = (key, MPMediaItemArtwork(boundsSize: image.size) { _ in image })
-            self.updateNowPlaying()
-        }
-        if t.isRemote { LogoStore.shared.load(t.logo, completion: deliver) } else { ArtworkStore.shared.load(t.path) { deliver($0.thumb) } }
-        return nil
-    }
-
-    func updateNowPlaying() {
-        let center = MPNowPlayingInfoCenter.default()
-        guard let t = currentTrack, player.state != .stopped else {
-            center.nowPlayingInfo = nil
-            center.playbackState = .stopped
-            return
-        }
-        // Podcasts get skip buttons; music and radio get previous / next.
-        let cc = MPRemoteCommandCenter.shared()
-        let skips = t.isEpisode
-        cc.skipBackwardCommand.isEnabled = skips
-        cc.skipForwardCommand.isEnabled = skips
-        cc.previousTrackCommand.isEnabled = !skips
-        cc.nextTrackCommand.isEnabled = !skips
-        let art = nowPlayingArtwork(for: t)
-        var info: [String: Any]
-        if t.isStream {
-            info = [
-                MPMediaItemPropertyTitle: player.streamTitle ?? t.title ?? "Internet radio",
-                MPMediaItemPropertyArtist: t.title ?? player.streamInfo?.name ?? "",
-                MPNowPlayingInfoPropertyIsLiveStream: true,
-                MPNowPlayingInfoPropertyPlaybackRate: player.state == .playing ? 1.0 : 0.0,
-            ]
-        } else {
-            info = [
-                MPMediaItemPropertyTitle: t.title ?? t.fileStem,
-                MPMediaItemPropertyArtist: t.artist ?? "",
-                MPMediaItemPropertyAlbumTitle: t.album ?? "",
-                MPMediaItemPropertyPlaybackDuration: player.duration,
-                MPNowPlayingInfoPropertyElapsedPlaybackTime: player.currentTime,
-                MPNowPlayingInfoPropertyPlaybackRate: player.state == .playing ? Double(player.rate) : 0.0,
-                MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
-            ]
-            if t.isEpisode, let show = t.podcast, !show.isEmpty { info[MPMediaItemPropertyPodcastTitle] = show }
-        }
-        info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
-        if let art { info[MPMediaItemPropertyArtwork] = art }
-        center.nowPlayingInfo = info
-        center.playbackState = player.state == .playing ? .playing : .paused
-    }
+    func updateNowPlaying() { nowPlaying.update() }
 
 }
 

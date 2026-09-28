@@ -1,6 +1,7 @@
 import XCTest
 @testable import OmniAmp
 
+@MainActor
 final class QuickWinsTests: XCTestCase {
     private var cacheDir: URL!
 

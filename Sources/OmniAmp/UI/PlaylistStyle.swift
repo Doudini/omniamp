@@ -16,13 +16,13 @@ enum PlaylistStyle {
     static let changed = Notification.Name("OmniAmpPlaylistStyleChanged")
 
     static var font: Font {
-        get { Font(rawValue: UserDefaults.standard.string(forKey: "playlistFont") ?? "") ?? .hack }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "playlistFont"); post() }
+        get { Font(rawValue: UserDefaults.standard.string(forKey: Pref.playlistFont) ?? "") ?? .hack }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Pref.playlistFont); post() }
     }
 
     static var showNumbers: Bool {
-        get { UserDefaults.standard.object(forKey: "playlistNumbers") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "playlistNumbers"); post() }
+        get { UserDefaults.standard.object(forKey: Pref.playlistNumbers) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Pref.playlistNumbers); post() }
     }
 
     private static func post() { NotificationCenter.default.post(name: changed, object: nil) }

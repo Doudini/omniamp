@@ -232,8 +232,8 @@ final class ModernPanelView: NSView {
     private let sourceLabel = NSTextField(labelWithString: "")
     /// "REM" while the counter shows remaining time; "LIVE" for radio, which has no length.
     private let remainTag = NSTextField(labelWithString: "REM")
-    private var showRemaining = UserDefaults.standard.bool(forKey: "modernRemaining") {
-        didSet { UserDefaults.standard.set(showRemaining, forKey: "modernRemaining") }
+    private var showRemaining = UserDefaults.standard.bool(forKey: Pref.modernRemaining) {
+        didSet { UserDefaults.standard.set(showRemaining, forKey: Pref.modernRemaining) }
     }
     let time = LCDTimeView()
     let spectrum = SpectrumView()

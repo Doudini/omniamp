@@ -20,11 +20,11 @@ enum Analyzer {
 
     static var mode: Mode {
         get {
-            if let m = Mode(rawValue: UserDefaults.standard.string(forKey: "analyzerMode") ?? "") { return m }
-            return UserDefaults.standard.object(forKey: "analyzerOn") as? Bool == false ? .off : .spectrum
+            if let m = Mode(rawValue: UserDefaults.standard.string(forKey: Pref.analyzerMode) ?? "") { return m }
+            return UserDefaults.standard.object(forKey: Pref.analyzerOn) as? Bool == false ? .off : .spectrum
         }
         set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: "analyzerMode")
+            UserDefaults.standard.set(newValue.rawValue, forKey: Pref.analyzerMode)
             NotificationCenter.default.post(name: changed, object: nil)
         }
     }

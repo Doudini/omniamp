@@ -457,6 +457,7 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
 
 // MARK: - Library: subscriptions, cached feeds, played episodes
 
+@MainActor
 final class PodcastLibrary {
     static let shared = PodcastLibrary()
     /// An episode was marked played, or its resume position was saved or cleared.
@@ -629,14 +630,13 @@ final class PodcastLibrary {
 
     /// Downloads the feed (unless it was fetched in the last `maxAge` seconds) and returns its episodes, newest first.
     /// Main-actor isolated: the library's state is only ever touched on main (refreshes run several of these at once).
-    @MainActor
     func episodes(_ show: PodcastShow, maxAge: Double = 600) async throws -> [PodcastEpisode] {
         knownShows[show.feedURL] = show
         _ = cachedEpisodes(show)   // loads the disk cache
         if let c = feeds[show.feedURL], Date().timeIntervalSince1970 - c.fetched < maxAge { return c.episodes }
         // Opening the window refreshes subscriptions while the show you click loads too: one download per feed.
         if let running = fetching[show.feedURL] { return try await running.value }
-        let task = Task { @MainActor in try await self.fetch(show, fresh: maxAge <= 0) }
+        let task = Task { try await self.fetch(show, fresh: maxAge <= 0) }
         fetching[show.feedURL] = task
         defer { fetching[show.feedURL] = nil }
         return try await task.value
@@ -646,7 +646,6 @@ final class PodcastLibrary {
     /// Feed caches are written here, one after the other (tests wait on it with `writes.sync {}`).
     static let writes = DispatchQueue(label: "omniamp.podcast.writes", qos: .utility)
 
-    @MainActor
     private func fetch(_ show: PodcastShow, fresh: Bool) async throws -> [PodcastEpisode] {
         guard let url = URL(string: show.feedURL) else { return [] }
         var req = URLRequest(url: url)

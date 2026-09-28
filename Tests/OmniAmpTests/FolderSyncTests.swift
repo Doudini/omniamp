@@ -1,6 +1,7 @@
 import XCTest
 @testable import OmniAmp
 
+@MainActor
 final class FolderSyncTests: XCTestCase {
     func testCanonicalMapsPrivateVarSpellings() {
         let roots = ["/var/folders/x/T/music"]

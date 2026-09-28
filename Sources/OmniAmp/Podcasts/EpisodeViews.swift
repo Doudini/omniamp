@@ -51,27 +51,6 @@ final class EpisodeMarkView: NSView {
     }
 }
 
-/// A table that first offers every key to its owner (which checks modifiers itself); what it doesn't
-/// take works as usual (arrows, page keys, ⇧-selection…).
-final class KeyTableView: NSTableView {
-    var onKey: ((NSEvent) -> Bool)?
-    override func keyDown(with event: NSEvent) {
-        // ⌃Return: the row's right-click menu, from the keyboard.
-        if event.modifierFlags.intersection([.command, .control, .option]) == .control, event.keyCode == 36 || event.keyCode == 76 {
-            showRowMenu()
-            return
-        }
-        if onKey?(event) == true || handleJumpKey(event) { return }   // same fast jumps as the playlist
-        super.keyDown(with: event)
-    }
-
-    func showRowMenu() {
-        guard let menu, selectedRow >= 0 else { NSSound.beep(); return }
-        let r = rect(ofRow: selectedRow)
-        menu.popUp(positioning: nil, at: NSPoint(x: r.minX + 40, y: r.maxY), in: self)
-    }
-}
-
 /// A row's small cover: the episode's own image, or the show's.
 final class EpisodeArtCell: NSView {
     private let art = ArtView()

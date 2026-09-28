@@ -1,6 +1,7 @@
 import XCTest
 @testable import OmniAmp
 
+@MainActor
 final class PodcastDownloadTests: XCTestCase {
     private var dir: URL!
 
@@ -30,7 +31,7 @@ final class PodcastDownloadTests: XCTestCase {
         try Data(repeating: 3, count: 2000).write(to: source)
         let ep = PodcastEpisode(title: "Episode 9", url: source.absoluteString, published: nil, duration: nil, summary: nil)
         let d = PodcastDownloads(directory: dir.appendingPathComponent("a"))
-        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in d.state(ep.url) == .done }
+        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in MainActor.assumeIsolated { d.state(ep.url) == .done } }
         d.download(ep, show: show)
         wait(for: [done], timeout: 10)
         XCTAssertEqual(d.localFile(ep.url)?.lastPathComponent, "Llama Radio Hour - Episode 9.mp3")
@@ -76,7 +77,7 @@ final class PodcastDownloadTests: XCTestCase {
         let d = PodcastDownloads(directory: store)
         XCTAssertEqual(d.state(ep.url), .none)
 
-        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in d.state(ep.url) == .done }
+        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in MainActor.assumeIsolated { d.state(ep.url) == .done } }
         d.download(ep, show: show)
         XCTAssertNotEqual(d.state(ep.url), .none, "queued or running at once")
         wait(for: [done], timeout: 10)
@@ -116,7 +117,7 @@ final class PodcastDownloadTests: XCTestCase {
         let ep = PodcastEpisode(title: "E", url: source.absoluteString, published: nil, duration: nil, summary: nil)
         let store = dir.appendingPathComponent("store2")
         let d = PodcastDownloads(directory: store)
-        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in d.state(ep.url) == .done }
+        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in MainActor.assumeIsolated { d.state(ep.url) == .done } }
         d.download(ep, show: show)
         wait(for: [done], timeout: 10)
         try FileManager.default.removeItem(at: XCTUnwrap(d.localFile(ep.url)))   // deleted behind our back
@@ -128,7 +129,7 @@ final class PodcastDownloadTests: XCTestCase {
         try "<html><body>Please log in</body></html>".write(to: page, atomically: true, encoding: .utf8)
         let ep = PodcastEpisode(title: "Paywalled", url: page.absoluteString, published: nil, duration: nil, summary: nil)
         let d = PodcastDownloads(directory: dir.appendingPathComponent("store4"))
-        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in d.state(ep.url) == .none && d.failure(ep.url) != nil }
+        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in MainActor.assumeIsolated { d.state(ep.url) == .none && d.failure(ep.url) != nil } }
         d.download(ep, show: show)
         wait(for: [done], timeout: 10)
         XCTAssertNil(d.localFile(ep.url))

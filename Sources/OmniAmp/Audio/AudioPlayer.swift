@@ -21,8 +21,11 @@ final class AudioPlayer {
     /// A track being played: a whole file, or a slice of one (CUE sheet track).
     private struct Item {
         let id: Int
-        let file: AVAudioFile
         let url: URL
+        /// The decoded format (what the renderer plays) and the file's own rate and channels.
+        let format: AVAudioFormat
+        let fileRate: Double
+        let fileChannels: Int
         /// The caller's name for it (the playlist entry): tells which one a gapless change went to.
         var tag: String?
         /// The track's range in the file (whole file unless it is a CUE track).
@@ -31,12 +34,14 @@ final class AudioPlayer {
         /// Frame where playback of this item began (≥ trackStart; later after a seek or resume).
         var startFrame: AVAudioFramePosition
         var frames: AVAudioFramePosition { trackEnd - startFrame }
-        var sampleRate: Double { file.processingFormat.sampleRate }
+        var sampleRate: Double { format.sampleRate }
 
         init(id: Int, file: AVAudioFile, url: URL, range: (start: Double, end: Double?)?, offset: Double) {
             self.id = id
-            self.file = file
             self.url = url
+            format = file.processingFormat
+            fileRate = file.fileFormat.sampleRate
+            fileChannels = Int(file.fileFormat.channelCount)
             let sr = file.processingFormat.sampleRate
             let len = file.length
             // Times come from CUE sheets and playlists: only believable ones become frame positions.
@@ -153,9 +158,10 @@ final class AudioPlayer {
     var currentURL: URL? { current?.url }
     /// The tag given to `queueNext` for the playing item (nil for one started with `play`).
     var currentTag: String? { current?.tag }
-    var hasQueuedNext: Bool { upcoming != nil }
-    var sampleRate: Double { stream != nil ? mainStreamInfo.sampleRate : current?.file.fileFormat.sampleRate ?? 0 }
-    var channelCount: Int { stream != nil ? mainStreamInfo.channels : Int(current?.file.fileFormat.channelCount ?? 0) }
+    /// A track is queued behind the current one (or its file is still being opened for that).
+    var hasQueuedNext: Bool { upcoming != nil || pendingNext != nil }
+    var sampleRate: Double { stream != nil ? mainStreamInfo.sampleRate : current?.fileRate ?? 0 }
+    var channelCount: Int { stream != nil ? mainStreamInfo.channels : current?.fileChannels ?? 0 }
 
     // MARK: Internet radio
 
@@ -168,7 +174,7 @@ final class AudioPlayer {
     private var connectionPlayingSince: CFTimeInterval?
     /// True while waiting for enough audio (start, or after the connection stalled).
     private(set) var isBuffering = false { didSet { if isBuffering != oldValue { onStreamChange?() } } }
-    var isStreaming: Bool { stream != nil || systemPlayer != nil }
+    var isStreaming: Bool { stream != nil || system != nil }
     var streamInfo: StreamSource.Info? { stream != nil ? mainStreamInfo : systemInfo }
     /// Latest "Artist - Title" from the station.
     private(set) var streamTitle: String?
@@ -195,15 +201,59 @@ final class AudioPlayer {
         if StreamSource.isSystemPlayerURL(url) { openSystemStream(url, codec: nil) } else { openStream(url) }
     }
 
-    // MARK: System player (HLS, Ogg/Opus)
+    // MARK: System player (HLS and Ogg/Opus radio, podcast episodes)
 
-    private var systemPlayer: AVPlayer?
-    private var systemObservers: [NSKeyValueObservation] = []
+    /// An AVPlayer with what every use of it needs: failure, playing/buffering and end-of-item reports
+    /// (on the main thread), and one teardown.
+    private final class SystemPlayback {
+        let player: AVPlayer
+        private var observers: [NSKeyValueObservation] = []
+        private var endObserver: NSObjectProtocol?
+
+        init(item: AVPlayerItem, deviceUID: String?, onFailed: @escaping (Error?) -> Void,
+             onStatus: @escaping (AVPlayer.TimeControlStatus) -> Void, onEnd: (() -> Void)? = nil) {
+            player = AVPlayer(playerItem: item)
+            player.audioOutputDeviceUniqueID = deviceUID
+            observers = [
+                item.observe(\.status, options: [.new]) { [weak self] it, _ in
+                    DispatchQueue.main.async {
+                        guard self != nil, it.status == .failed else { return }
+                        onFailed(it.error)
+                    }
+                },
+                player.observe(\.timeControlStatus, options: [.new]) { [weak self] pl, _ in
+                    DispatchQueue.main.async {
+                        guard self != nil else { return }
+                        onStatus(pl.timeControlStatus)
+                    }
+                },
+            ]
+            if let onEnd {
+                endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
+                                                                     object: item, queue: .main) { [weak self] _ in
+                    if self != nil { onEnd() }
+                }
+            }
+        }
+
+        /// After this nothing is reported any more.
+        func stop() {
+            observers.removeAll()
+            endObserver.map(NotificationCenter.default.removeObserver)
+            endObserver = nil
+            player.pause()
+        }
+    }
+
+    private var deviceUID: String? { AudioDevices.device(id: deviceID)?.uid }
+
+    private var system: SystemPlayback?
+    private var systemPlayer: AVPlayer? { system?.player }
     private var systemMetadata: AVPlayerItemMetadataOutput?
     private let systemMetaDelegate = SystemMetadataDelegate()
     private var systemInfo: StreamSource.Info?
     /// True while a station plays through the system player (EQ and visualizer don't apply).
-    var usesSystemPlayer: Bool { systemPlayer != nil }
+    var usesSystemPlayer: Bool { system != nil }
 
     private func openSystemStream(_ url: URL, codec: String?) {
         stream?.stop()
@@ -220,34 +270,26 @@ final class AudioPlayer {
         out.setDelegate(systemMetaDelegate, queue: .main)
         item.add(out)
         systemMetadata = out
-        let p = AVPlayer(playerItem: item)
-        p.audioOutputDeviceUniqueID = AudioDevices.device(id: deviceID)?.uid
-        systemPlayer = p
+        var playback: SystemPlayback?
+        playback = SystemPlayback(item: item, deviceUID: deviceUID, onFailed: { [weak self] error in
+            guard let self, self.system === playback else { return }
+            self.stop()
+            self.streamError = Self.friendly(error)
+            self.onStreamChange?()
+        }, onStatus: { [weak self] status in
+            guard let self, self.system === playback else { return }
+            let playing = status == .playing
+            if playing, self.clockStart == nil { self.clockStart = CACurrentMediaTime() }
+            self.isBuffering = !playing && self.state == .playing
+        })
+        system = playback
         var info = StreamSource.Info()
         let path = url.path.lowercased()
         info.codec = codec ?? (path.hasSuffix(".m3u8") || (codec ?? "").contains("mpegurl") ? "HLS" : (path.contains("opus") ? "OPUS" : "OGG"))
         systemInfo = info
         applyGainStage()
         isBuffering = true
-        systemObservers = [
-            item.observe(\.status, options: [.new]) { [weak self] it, _ in
-                DispatchQueue.main.async {
-                    guard let self, self.systemPlayer?.currentItem === it, it.status == .failed else { return }
-                    self.stop()
-                    self.streamError = Self.friendly(it.error)
-                    self.onStreamChange?()
-                }
-            },
-            p.observe(\.timeControlStatus, options: [.new]) { [weak self] pl, _ in
-                DispatchQueue.main.async {
-                    guard let self, self.systemPlayer === pl else { return }
-                    let playing = pl.timeControlStatus == .playing
-                    if playing, self.clockStart == nil { self.clockStart = CACurrentMediaTime() }
-                    self.isBuffering = !playing && self.state == .playing
-                }
-            },
-        ]
-        p.play()
+        playback?.player.play()
         scheduleIdleStop()
         onStreamChange?()
     }
@@ -256,12 +298,11 @@ final class AudioPlayer {
 
     // Episodes are ordinary audio files on the web. The system player streams them with seeking and a known
     // length; like HLS radio they bypass our engine (no EQ or visualizer).
-    private var episodePlayer: AVPlayer?
-    private var episodeObservers: [NSKeyValueObservation] = []
-    private var episodeEnd: NSObjectProtocol?
+    private var episode: SystemPlayback?
+    private var episodePlayer: AVPlayer? { episode?.player }
     private var episodeDurationHint: Double = 0
     /// True while a podcast episode is loaded (playing or paused).
-    var isPlayingEpisode: Bool { episodePlayer != nil }
+    var isPlayingEpisode: Bool { episode != nil }
 
     /// Playback speed for episodes and web files (1 = normal; pitch is kept). Music always plays at 1×.
     var rate: Float = 1 {
@@ -283,37 +324,28 @@ final class AudioPlayer {
         _ = AudioDevices.setHog(deviceID, false)
         let item = AVPlayerItem(url: url)
         item.audioTimePitchAlgorithm = .spectral   // faster speech without chipmunk voices
-        let p = AVPlayer(playerItem: item)
-        p.audioOutputDeviceUniqueID = AudioDevices.device(id: deviceID)?.uid
-        p.defaultRate = rate                        // play() uses it
-        episodePlayer = p
-        episodeDurationHint = duration ?? 0
-        applyGainStage()
-        isBuffering = true
-        episodeObservers = [
-            item.observe(\.status, options: [.new]) { [weak self] it, _ in
-                DispatchQueue.main.async {
-                    guard let self, self.episodePlayer?.currentItem === it, it.status == .failed else { return }
-                    let err = Self.friendly(it.error)
-                    self.stop()
-                    self.streamError = err
-                    self.onStreamChange?()
-                }
-            },
-            p.observe(\.timeControlStatus, options: [.new]) { [weak self] pl, _ in
-                DispatchQueue.main.async {
-                    guard let self, self.episodePlayer === pl else { return }
-                    self.isBuffering = pl.timeControlStatus == .waitingToPlayAtSpecifiedRate
-                }
-            },
-        ]
-        episodeEnd = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification, object: item,
-                                                            queue: .main) { [weak self] _ in
-            guard let self, self.episodePlayer?.currentItem === item else { return }
+        var playback: SystemPlayback?
+        playback = SystemPlayback(item: item, deviceUID: deviceUID, onFailed: { [weak self] error in
+            guard let self, self.episode === playback else { return }
+            let err = Self.friendly(error)
+            self.stop()
+            self.streamError = err
+            self.onStreamChange?()
+        }, onStatus: { [weak self] status in
+            guard let self, self.episode === playback else { return }
+            self.isBuffering = status == .waitingToPlayAtSpecifiedRate
+        }, onEnd: { [weak self] in
+            guard let self, self.episode === playback else { return }
             self.stopEpisode()
             self.state = .stopped
             self.onTrackFinished?()
-        }
+        })
+        guard let p = playback?.player else { return }
+        p.defaultRate = rate                        // play() uses it
+        episode = playback
+        episodeDurationHint = duration ?? 0
+        applyGainStage()
+        isBuffering = true
         if start > 0 { p.seek(to: CMTime(seconds: start, preferredTimescale: 600)) }
         p.play()
         state = .playing
@@ -322,18 +354,14 @@ final class AudioPlayer {
     }
 
     private func stopEpisode() {
-        episodeObservers.removeAll()
-        episodeEnd.map(NotificationCenter.default.removeObserver)
-        episodeEnd = nil
-        episodePlayer?.pause()
-        episodePlayer = nil
+        episode?.stop()
+        episode = nil
         episodeDurationHint = 0
     }
 
     private func stopSystemStream() {
-        systemObservers.removeAll()
-        systemPlayer?.pause()
-        systemPlayer = nil
+        system?.stop()
+        system = nil
         systemMetadata = nil
         systemInfo = nil
     }
@@ -627,7 +655,6 @@ final class AudioPlayer {
         deviceID = target
         restart(at: t, wasState: wasState, matchRate: bitPerfect)
         // The system players (HLS/Opus radio, podcast episodes) play outside the engine: move them too.
-        let deviceUID = AudioDevices.device(id: deviceID)?.uid
         systemPlayer?.audioOutputDeviceUniqueID = deviceUID
         episodePlayer?.audioOutputDeviceUniqueID = deviceUID
         onOutputChange?()
@@ -703,23 +730,74 @@ final class AudioPlayer {
 
     // MARK: Transport
 
-    /// Play a file, optionally starting at `start` seconds (resume position).
-    @discardableResult
-    /// `range`: the track's slice of the file in seconds (CUE tracks); `start`: offset within the track.
-    func play(url: URL, from start: Double = 0, range: (start: Double, end: Double?)? = nil) -> Bool {
+    /// Files are opened off the main thread: over a network share (or for a long MP3, which is scanned) that
+    /// takes up to a second, and the app must not stall meanwhile. A new `play` or `stop` makes a pending
+    /// open moot. The same opened file is handed to the renderer, so it's opened once.
+    private static let opener = DispatchQueue(label: "omniamp.open", qos: .userInitiated)
+    private var openToken = 0
+    /// A file for `play` is being opened (Play/Pause still work meanwhile).
+    private var opening = false
+    /// A file opened ahead of time for what will probably play next (Next, the end of the track): starting it
+    /// then needs no open, which over a network share is most of the wait.
+    private var prepared: (url: URL, file: AVAudioFile)?
+    private var preparing: URL?
+
+    /// Open `url` in the background so a following `play(url:)` starts without waiting for it.
+    func prepare(_ url: URL?) {
+        guard let url, url.isFileURL else { prepared = nil; preparing = nil; return }
+        guard prepared?.url != url, preparing != url else { return }
+        prepared = nil
+        preparing = url
+        Self.opener.async { [weak self] in
+            let file = try? AVAudioFile(forReading: url)
+            DispatchQueue.main.async {
+                guard let self, self.preparing == url else { return }
+                self.preparing = nil
+                if let file { self.prepared = (url, file) }
+            }
+        }
+    }
+
+    /// Play a file, optionally starting at `start` seconds (resume position). `range`: the track's slice of
+    /// the file in seconds (CUE tracks). The old track stops at once; `opened` says (on the main thread)
+    /// whether the new one could be played.
+    func play(url: URL, from start: Double = 0, range: (start: Double, end: Double?)? = nil,
+              opened: @escaping (Bool) -> Void = { _ in }) {
         stopNode()
         stopStream()
         upcoming = nil
+        cancelledNext = nil
+        pendingNext = nil
         awaitingRateSettle = false   // a new track: any earlier wait is over (a new one starts below if needed)
-        let file: AVAudioFile
-        do {
-            file = try AVAudioFile(forReading: url)
-        } catch {
-            NSLog("OmniAmp: cannot open %@: %@", url.path, error.localizedDescription)
-            current = nil
-            state = .stopped
-            return false
+        current = nil
+        files?.stop()
+        state = .playing
+        openToken += 1
+        let token = openToken
+        if let p = prepared, p.url == url {
+            prepared = nil   // opened ahead of time: start right away
+            opening = false
+            opened(self.start(p.file, url: url, from: start, range: range))
+            return
         }
+        opening = true
+        Self.opener.async { [weak self] in
+            let file: AVAudioFile?
+            do { file = try AVAudioFile(forReading: url) } catch {
+                NSLog("OmniAmp: cannot open %@: %@", url.path, error.localizedDescription)
+                file = nil
+            }
+            DispatchQueue.main.async {
+                guard let self, token == self.openToken else { return }   // another track (or stop) came since
+                self.opening = false
+                guard let file else { self.state = .stopped; opened(false); return }
+                opened(self.start(file, url: url, from: start, range: range))
+            }
+        }
+    }
+
+    /// The file is open: set the device up for it and hand it to the renderer.
+    private func start(_ file: AVAudioFile, url: URL, from start: Double, range: (start: Double, end: Double?)?) -> Bool {
         var settle = false
         if bitPerfect, AudioDevices.bestRate(for: file.fileFormat.sampleRate, supported: AudioDevices.availableRates(deviceID)) != graphRate {
             engine.stop()
@@ -734,21 +812,20 @@ final class AudioPlayer {
         nextItemID += 1
         guard let r = renderer(for: file.processingFormat) else {
             NSLog("OmniAmp: cannot play %@ (format %@)", url.path, file.processingFormat.description)
-            current = nil
             state = .stopped
             return false
         }
         current = item
-        cancelledNext = nil
-        r.start(renderItem(item))
-        r.setPaused(false)
-        state = .playing
-        if settle { awaitSettle() } else { beginPlayback() }
+        r.start(renderItem(item, file: file))
+        // Paused while it opened: stay paused, ready to go.
+        r.setPaused(state != .playing)
+        if state == .playing { if settle { awaitSettle() } else { beginPlayback() } }
         return true
     }
 
-    private func renderItem(_ i: Item, gain: Float? = nil) -> FileRenderer.Item {
-        FileRenderer.Item(id: i.id, url: i.url, start: i.startFrame, end: i.trackEnd, gain: gain ?? itemGain)
+    /// `file`: already open (handed over, the renderer reads it from then on); nil: the renderer opens it.
+    private func renderItem(_ i: Item, gain: Float? = nil, file: AVAudioFile? = nil) -> FileRenderer.Item {
+        FileRenderer.Item(id: i.id, url: i.url, start: i.startFrame, end: i.trackEnd, gain: gain ?? itemGain, file: file)
     }
 
     /// The renderer for files of this format (a new one when the format changes: gapless needs the same format).
@@ -824,26 +901,44 @@ final class AudioPlayer {
         onOutputChange?()
     }
 
-    /// Schedule `url` to start exactly when the current track ends. Returns false if it can't be gapless
-    /// (different sample rate / channel count, unreadable), in which case the normal end-of-track path is used.
-    @discardableResult
-    /// `gain`: the next track's ReplayGain, applied from its first sample.
-    func queueNext(url: URL, range: (start: Double, end: Double?)? = nil, gain: Float = 1, tag: String? = nil) -> Bool {
-        guard let c = current, upcoming == nil, state != .stopped, let r = files else { return false }
-        guard let file = try? AVAudioFile(forReading: url) else { return false }
-        let a = file.processingFormat, b = c.file.processingFormat
-        guard a.sampleRate == b.sampleRate, a.channelCount == b.channelCount, a.commonFormat == b.commonFormat else { return false }
-        var item = Item(id: nextItemID, file: file, url: url, range: range, offset: 0)
-        item.tag = tag
-        nextItemID += 1
-        upcoming = item
-        r.enqueue(renderItem(item, gain: bitPerfect ? 1 : gain))
-        return true
+    /// The queued track's file being opened (a token: cancelling or playing something else drops it).
+    private var pendingNext: Int?
+    private var nextToken = 0
+
+    /// Queue `url` to start exactly when the current track ends. `queued` says (on the main thread) whether
+    /// it could: not if it's unreadable or in another format (the normal end-of-track path plays it then).
+    /// `gain`: its ReplayGain, applied from its first sample; `tag`: the caller's name for it.
+    func queueNext(url: URL, range: (start: Double, end: Double?)? = nil, gain: Float = 1, tag: String? = nil,
+                   queued: @escaping (Bool) -> Void) {
+        guard current != nil, upcoming == nil, pendingNext == nil, state != .stopped, files != nil else { queued(false); return }
+        nextToken += 1
+        let token = nextToken, playing = openToken
+        pendingNext = token
+        Self.opener.async { [weak self] in
+            let file = try? AVAudioFile(forReading: url)
+            DispatchQueue.main.async {
+                guard let self, self.pendingNext == token, self.openToken == playing else { return }   // taken back meanwhile
+                self.pendingNext = nil
+                guard let file, let c = self.current, let r = self.files else { queued(false); return }
+                let a = file.processingFormat, b = c.format
+                guard a.sampleRate == b.sampleRate, a.channelCount == b.channelCount, a.commonFormat == b.commonFormat else {
+                    queued(false)
+                    return
+                }
+                var item = Item(id: self.nextItemID, file: file, url: url, range: range, offset: 0)
+                item.tag = tag
+                self.nextItemID += 1
+                self.upcoming = item
+                r.enqueue(self.renderItem(item, gain: self.bitPerfect ? 1 : gain, file: file))
+                queued(true)
+            }
+        }
     }
 
     /// Drop a queued track (e.g. the playlist order changed).
     /// The current track plays on untouched; if the queued one had already begun, it simply continues.
     func cancelQueuedNext() {
+        pendingNext = nil   // still opening: it will never be queued
         guard let u = upcoming else { return }
         cancelledNext = u
         upcoming = nil
@@ -857,7 +952,7 @@ final class AudioPlayer {
         idleStop?.cancel()
         let w = DispatchWorkItem { [weak self] in
             guard let self, self.engine.isRunning, !self.awaitingRateSettle,
-                  self.state != .playing || self.episodePlayer != nil || self.systemPlayer != nil else { return }
+                  self.state != .playing || self.episode != nil || self.system != nil else { return }
             dlog("idle: stopping the engine")
             self.idled = true
             self.engine.stop()
@@ -895,11 +990,14 @@ final class AudioPlayer {
         guard state == .paused else { return }
         if let p = episodePlayer { p.play(); state = .playing; return }
         if let u = streamURL, !isStreaming { playStream(url: u); return }
-        guard let c = current else { return }
+        guard let c = current else {
+            if opening { state = .playing }   // resumed while the file opens: it starts when it's ready
+            return
+        }
         state = .playing
         // The renderer kept its place, also if the engine idled out meanwhile. Bit-perfect: while idle another
         // app may have changed the device rate: match the file again first.
-        let fileRate = c.file.fileFormat.sampleRate
+        let fileRate = c.fileRate
         if !engine.isRunning, bitPerfect,
            AudioDevices.bestRate(for: fileRate, supported: AudioDevices.availableRates(deviceID)) != graphRate {
             bindOutputUnit()
@@ -913,6 +1011,9 @@ final class AudioPlayer {
     }
 
     func stop() {
+        openToken += 1   // a file still being opened won't start
+        opening = false
+        pendingNext = nil
         awaitingRateSettle = false
         stopNode()
         stopStream()
@@ -939,7 +1040,7 @@ final class AudioPlayer {
         current = c
         // The queued track goes too: have it queued again (near the end, gapless stays).
         cancelledNext = nil
-        if upcoming != nil { upcoming = nil; onPreloadDropped?() }
+        if upcoming != nil || pendingNext != nil { upcoming = nil; pendingNext = nil; onPreloadDropped?() }
         // Paused stays paused: the position shows the new place and resume() plays from there.
         r.start(renderItem(c))
         if state == .playing, !awaitingRateSettle { beginPlayback() }

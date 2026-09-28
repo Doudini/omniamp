@@ -271,7 +271,7 @@ final class UpdateUI {
         Task { @MainActor in
             defer { busy = false }
             do {
-                let app = try await Updater.download(r) { [weak self] f in self?.bar.doubleValue = f }
+                let app = try await Updater.download(r) { f in self.bar.doubleValue = f }
                 label.stringValue = "Installing…"
                 bar.isIndeterminate = true
                 bar.startAnimation(nil)

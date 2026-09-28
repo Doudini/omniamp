@@ -2,6 +2,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 /// A look the app can show: the modern window or the classic skinned windows.
+@MainActor
 protocol LookController: PlayerUI {
     func show()
     func dismantle()
@@ -22,23 +23,25 @@ extension ModernWindowController: LookController {
     func owns(_ window: NSWindow) -> Bool { window === self.window }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var controller: PlayerController!
     private var look: LookController?
-    private var keyMonitor: Any?
+    private var winampKeys: WinampKeys?
     private var signalSources: [DispatchSourceSignal] = []
     private var viewMenu: NSMenu!
 
     enum Mode: String { case modern, classic }
 
     private var mode: Mode {
-        get { Mode(rawValue: UserDefaults.standard.string(forKey: "uiMode") ?? "") ?? .modern }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "uiMode") }
+        get { Mode(rawValue: UserDefaults.standard.string(forKey: Pref.uiMode) ?? "") ?? .modern }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Pref.uiMode) }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Fonts.registerBundled()
         controller = PlayerController()
+        controller.startServices()
         buildMenu()
         // OMNIAMP_MODE (tests) picks a look for this run only; it must not overwrite the user's choice.
         if let forced = ProcessInfo.processInfo.environment["OMNIAMP_MODE"].flatMap(Mode.init(rawValue:)) {
@@ -56,7 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if ProcessInfo.processInfo.environment["OMNIAMP_HIDE"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.hide(nil) }
         }
-        installKeyMonitor()
+        winampKeys = WinampKeys(controller: controller, look: { [weak self] in self?.look },
+                                queueSelected: { [weak self] in self?.queueSelected(nil) })
         // Quit cleanly on SIGTERM/SIGINT too, so the audio device gets its sample rate and access back.
         for sig in [SIGTERM, SIGINT] {
             signal(sig, SIG_IGN)
@@ -83,13 +87,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func application(_ application: NSApplication, open urls: [URL]) {
         guard controller != nil, viewMenu != nil else { openedBeforeLaunch += urls; return }
+        open(urls)
+    }
+
+    /// Every way files arrive (Finder, the command line, drops on either look) ends here: skins load,
+    /// OPML subscriptions go to Podcasts, everything else joins the playlist (at `position` for a drop).
+    func open(_ urls: [URL], at position: Int? = nil) {
         if let s = urls.first(where: { $0.pathExtension.lowercased() == "wsz" }) { loadSkin(s) }
         for o in urls where o.pathExtension.lowercased() == "opml" {   // podcast subscriptions from another app
             showPodcasts(nil)
             podcasts?.importOPML(o)
         }
         let media = urls.filter { !["wsz", "opml"].contains($0.pathExtension.lowercased()) }
-        if !media.isEmpty { controller.add(media) }
+        if !media.isEmpty { controller.add(media, at: position) }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -113,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             w.onRadio = { [weak self] in self?.showRadio(nil) }
             w.onPodcasts = { [weak self] in self?.showPodcasts(nil) }
             w.addMenuProvider = { [weak self] in self?.makeAddMenu() ?? NSMenu() }
+            w.onOpenFiles = { [weak self] urls, row in self?.open(urls, at: row) }
             look = w
         case .classic:
             look = makeClassicLook()
@@ -134,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         SkinLibrary.current = url
         let look = ClassicLookController(controller: controller, skin: skin, scale: SkinLibrary.scale)
         look.menuProvider = { [weak self] in self?.makeOptionsMenu() ?? NSMenu() }
-        look.onSkinDropped = { [weak self] u in self?.loadSkin(u) }
+        look.onOpenFiles = { [weak self] urls in self?.open(urls) }
         look.setPlaylistMenus(add: { [weak self] in self?.makeAddMenu() ?? NSMenu() },
                               context: { [weak self] in self?.makePlaylistContextMenu() ?? NSMenu() },
                               misc: { [weak self] in self?.makeSortMenu() ?? NSMenu() },
@@ -221,7 +232,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if !wasOpen { podcasts?.focusList() }   // already open: keep your place (search, episodes…)
     }
 
-    @objc private func favoriteStation(_ sender: Any?) {
+    /// ⌘D keeps the selected thing: a station as a favorite (Radio), an episode as a download (Podcasts).
+    /// The menu item's title follows the window in front (validateMenuItem).
+    @objc private func keepSelection(_ sender: Any?) {
         if let p = podcasts, NSApp.keyWindow === p.window { p.downloadFromMenu() } else { radio?.toggleFavoriteFromMenu() }
     }
     @objc private func toggleEpisodeNotes(_ sender: Any?) { podcasts?.toggleNotesFromMenu() }
@@ -265,8 +278,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // MARK: Quick wins
 
     private var alwaysOnTop: Bool {
-        get { UserDefaults.standard.bool(forKey: "alwaysOnTop") }
-        set { UserDefaults.standard.set(newValue, forKey: "alwaysOnTop") }
+        get { UserDefaults.standard.bool(forKey: Pref.alwaysOnTop) }
+        set { UserDefaults.standard.set(newValue, forKey: Pref.alwaysOnTop) }
     }
 
     @objc private func toggleOnTop(_ sender: Any?) {
@@ -324,6 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         m.addItem(eqMenuItem())
         let outItem = NSMenuItem(title: "Output", action: nil, keyEquivalent: "")
         let outMenu = NSMenu(title: "Output")
+        outMenu.identifier = MenuID.output
         fillOutputMenu(outMenu)
         outItem.submenu = outMenu
         m.addItem(outItem)
@@ -406,7 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func showClassic(_ sender: Any?) { if mode != .classic || look == nil { showLook(.classic) } }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        if item.action == #selector(favoriteStation(_:)) {
+        if item.action == #selector(keepSelection(_:)) {
             if let p = podcasts, NSApp.keyWindow === p.window {
                 item.title = "Download Episode"
                 return p.canDownloadSelection
@@ -416,7 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return r.canToggleFavorite
         }
         if item.action == #selector(toggleEpisodeNotes(_:)) || item.action == #selector(toggleUnplayedOnly(_:)) {
-            if item.action == #selector(toggleUnplayedOnly(_:)) { item.state = UserDefaults.standard.bool(forKey: "podcastUnplayedOnly") ? .on : .off }
+            if item.action == #selector(toggleUnplayedOnly(_:)) { item.state = UserDefaults.standard.bool(forKey: Pref.podcastUnplayedOnly) ? .on : .off }
             return podcasts != nil && NSApp.keyWindow === podcasts?.window
         }
         if item.action == #selector(switchView(_:)) {
@@ -425,7 +439,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         if item.action == #selector(showModern(_:)) { item.state = mode == .modern ? .on : .off }
         if item.action == #selector(showClassic(_:)) { item.state = mode == .classic ? .on : .off }
-        if item.action == #selector(toggleEQ(_:)) { item.state = controller.eqSettings.enabled ? .on : .off }
         if item.action == #selector(toggleOnTop(_:)) { item.state = alwaysOnTop ? .on : .off }
         if item.action == #selector(toggleStopAfter(_:)) { item.state = controller.stopAfterCurrent ? .on : .off }
         if item.action == #selector(toggleResume(_:)) { item.state = controller.resumeLongTracks ? .on : .off }
@@ -454,71 +467,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return true
     }
 
-    /// Winamp keys, in the player's own windows (not the radio/podcast lists or open panels), unless a text
-    /// field is being edited. Held transport keys don't repeat; arrows and page keys do.
-    private func installKeyMonitor() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
-            guard let self, let c = self.controller, let w = ev.window, self.look?.owns(w) == true else { return ev }
-            if w.firstResponder is NSText { return ev } // typing in the filter
-            // Holding a transport key shouldn't fire it again and again (holding B skipped many tracks); list
-            // navigation (arrows, page keys) and seeking must repeat, so only these keys are held back.
-            let key = Self.winampKey(ev)
-            if ev.isARepeat, let k = key, ["z", "x", "c", "v", "b", "q", "j", " ", "s", "r", "i", "e", "l"].contains(k) { return nil }
-            let mods = ev.modifierFlags.intersection([.command, .control, .option])
-            guard mods.isEmpty else { return ev }
-            switch key {
-            case "z": c.previous()
-            case "x": c.playOrResume()
-            case "c": c.pause()
-            case "v":
-                if ev.modifierFlags.contains(.shift) { c.stopAfterCurrent.toggle() } else { c.stop() }
-            case "b": c.next()
-            case "j": self.look?.focusFilter()
-            case "q": self.queueSelected(nil)
-            case " ": c.togglePlayPause()
-            case "s": c.toggleShuffle()
-            case "r": c.toggleRepeat()
-            case "l": self.look?.showCurrentTrack()
-            case "i": self.look?.toggleInfo()
-            case "e": self.look?.toggleEQ()
-            case "+", "=": c.changeVolume(by: 0.05)   // = is + without Shift on most layouts
-            case "-", "_": c.changeVolume(by: -0.05)
-            default:
-                let shift = ev.modifierFlags.contains(.shift)
-                switch ev.keyCode {
-                case 123: c.seek(by: shift ? -30 : -5)   // ← / ⇧←
-                case 124: c.seek(by: shift ? 30 : 5)     // → / ⇧→
-                case 69: c.changeVolume(by: 0.05)        // keypad +
-                case 78: c.changeVolume(by: -0.05)       // keypad −
-                default: return ev
-                }
-            }
-            return nil
-        }
-    }
-
-    /// The typed letter; on a non-Latin layout (Cyrillic, Greek…) the letter at that key's US position, so
-    /// Z X C V B and the rest still work where Winamp users expect them.
-    private static func winampKey(_ ev: NSEvent) -> String? {
-        let typed = ev.charactersIgnoringModifiers?.lowercased()
-        if let t = typed, t.unicodeScalars.allSatisfy({ $0.isASCII }) { return t }
-        let us: [UInt16: String] = [6: "z", 7: "x", 8: "c", 9: "v", 11: "b", 12: "q", 38: "j", 1: "s", 15: "r", 37: "l", 34: "i", 14: "e"]
-        return us[ev.keyCode] ?? typed
-    }
-
     // MARK: Playlists
 
     private func addPlaylistItems(to m: NSMenu) {
-        let isMain = m.title == "File"
+        let isMain = m.identifier == MenuID.file
         m.addItem(withTitle: "Open Playlist…", action: #selector(openPlaylist(_:)), keyEquivalent: isMain ? "O" : "").target = self
         m.addItem(withTitle: "Save Playlist As…", action: #selector(savePlaylist(_:)), keyEquivalent: isMain ? "s" : "").target = self
         let item = NSMenuItem(title: "Saved Playlists", action: nil, keyEquivalent: "")
         let sub = NSMenu(title: "Saved Playlists")
+        sub.identifier = MenuID.savedPlaylists
         sub.delegate = self // rebuilt each time it opens
         item.submenu = sub
         m.addItem(item)
         let wItem = NSMenuItem(title: "Watched Folders", action: nil, keyEquivalent: "")
         let wMenu = NSMenu(title: "Watched Folders")
+        wMenu.identifier = MenuID.watched
         wMenu.delegate = self
         wItem.submenu = wMenu
         m.addItem(wItem)
@@ -720,26 +683,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func eqMenuItem() -> NSMenuItem {
         let item = NSMenuItem(title: "Equalizer", action: nil, keyEquivalent: "")
-        let m = NSMenu(title: "Equalizer")
-        m.addItem(withTitle: "Equalizer On", action: #selector(toggleEQ(_:)), keyEquivalent: "").target = self
-        m.addItem(.separator())
-        for p in Equalizer.presets {
-            let it = m.addItem(withTitle: p.name, action: #selector(pickEQPreset(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = p.name
-        }
-        item.submenu = m
+        item.submenu = EQMenu.make(controller)
         return item
-    }
-
-    @objc private func toggleEQ(_ sender: Any?) {
-        var s = controller.eqSettings
-        s.enabled.toggle()
-        controller.setEQ(s)
-    }
-
-    @objc private func pickEQPreset(_ sender: NSMenuItem) {
-        if let p = Equalizer.presets.first(where: { $0.name == sender.representedObject as? String }) { controller.applyPreset(p) }
     }
 
     // MARK: Menu
@@ -830,6 +775,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let fileItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
+        fileMenu.identifier = MenuID.file
         fileMenu.addItem(withTitle: "Add Files or Folder…", action: #selector(openDoc(_:)), keyEquivalent: "o").target = self
         fileMenu.addItem(withTitle: "Add URL…", action: #selector(addURL(_:)), keyEquivalent: "l").target = self
         let radio = fileMenu.addItem(withTitle: "Internet Radio…", action: #selector(showRadio(_:)), keyEquivalent: "r")
@@ -837,7 +783,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         radio.target = self
         // A menu item, so it works from the station list and while typing in the Radio search alike.
         // ⌘D is "keep this": favorite in Radio, download in Podcasts (the title follows the window in front).
-        fileMenu.addItem(withTitle: "Favorite Station", action: #selector(favoriteStation(_:)), keyEquivalent: "d").target = self
+        fileMenu.addItem(withTitle: "Favorite Station", action: #selector(keepSelection(_:)), keyEquivalent: "d").target = self
         fileMenu.addItem(withTitle: "Show Episode Notes", action: #selector(toggleEpisodeNotes(_:)), keyEquivalent: "i").target = self
         let unplayed = fileMenu.addItem(withTitle: "Unplayed Episodes Only", action: #selector(toggleUnplayedOnly(_:)), keyEquivalent: "u")
         unplayed.keyEquivalentModifierMask = [.command, .shift]
@@ -876,12 +822,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let plItem = NSMenuItem()
         let plMenu = NSMenu(title: "Playlist")
+        plMenu.identifier = MenuID.playlist
         plMenu.delegate = self // rebuilt when opened
         plItem.submenu = plMenu
         bar.addItem(plItem)
 
         let outItem = NSMenuItem()
         let outMenu = NSMenu(title: "Output")
+        outMenu.identifier = MenuID.output
         outMenu.delegate = self
         outItem.submenu = outMenu
         bar.addItem(outItem)
@@ -960,6 +908,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 }
 
+/// The menus the app fills or answers for itself (by identity, not by their titles).
+enum MenuID {
+    static let file = NSUserInterfaceItemIdentifier("omniamp.file")
+    static let playlist = NSUserInterfaceItemIdentifier("omniamp.playlist")
+    static let output = NSUserInterfaceItemIdentifier("omniamp.output")
+    static let savedPlaylists = NSUserInterfaceItemIdentifier("omniamp.savedPlaylists")
+    static let watched = NSUserInterfaceItemIdentifier("omniamp.watched")
+}
+
 extension AppDelegate: NSMenuDelegate {
     /// Asked on every shortcut press, before AppKit would rebuild each of these menus just to search them
     /// (the device list comes from Core Audio, the playlist menus from disk). Answer without rebuilding:
@@ -968,7 +925,7 @@ extension AppDelegate: NSMenuDelegate {
                               action: UnsafeMutablePointer<Selector?>) -> Bool {
         // Only ⌘ (Caps Lock or fn don't matter), and only for the player's playlist: Podcasts has its own
         // Show in Finder for downloads.
-        guard menu.title == "Playlist", event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+        guard menu.identifier == MenuID.playlist, event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
               event.charactersIgnoringModifiers?.lowercased() == "r",
               let k = NSApp.keyWindow, look?.owns(k) == true else { return false }
         target.pointee = self
@@ -978,20 +935,20 @@ extension AppDelegate: NSMenuDelegate {
 
     /// Fills "Saved Playlists" with the files in the playlists folder.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        if menu.title == "Watched Folders" {
+        if menu.identifier == MenuID.watched {
             fillWatchedMenu(menu)
             return
         }
-        if menu.title == "Output" {
+        if menu.identifier == MenuID.output {
             fillOutputMenu(menu)
             return
         }
-        if menu.title == "Playlist" {
+        if menu.identifier == MenuID.playlist {
             menu.removeAllItems()
             fillTrackItems(menu, withKeys: true)
             return
         }
-        guard menu.title == "Saved Playlists" else { return }
+        guard menu.identifier == MenuID.savedPlaylists else { return }
         menu.removeAllItems()
         let saved = PlaylistFile.saved
         if saved.isEmpty {

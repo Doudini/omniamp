@@ -21,8 +21,10 @@ final class FileRenderer {
         let url: URL
         let start: AVAudioFramePosition
         let end: AVAudioFramePosition
-        /// ReplayGain × fade: applied from the item's first frame.
+        /// ReplayGain: applied from the item's first frame.
         let gain: Float
+        /// Already open (the player opened it to learn its format): read from here on, not opened again.
+        var file: AVAudioFile? = nil
     }
 
     let format: AVAudioFormat
@@ -217,7 +219,18 @@ final class FileRenderer {
             lock.lock()
             if !alive { lock.unlock(); break }
             let requested = load(.requested)
-            if requested != handled { beginSession(requested) }
+            if requested != handled {
+                var file = pendingStart?.file
+                if let item = pendingStart, file == nil {
+                    // A seek: open the file again, without the lock (a network share can take a while, and the
+                    // main thread asks for the position many times a second).
+                    lock.unlock()
+                    file = open(item)
+                    lock.lock()
+                    if load(.requested) != requested { lock.unlock(); continue }   // a newer start came meanwhile
+                }
+                beginSession(requested, file: file)
+            }
             if cancelRequested { cancelRequested = false; lock.unlock(); takeBackMark(); lock.lock() }
             // Something queued at the last moment goes in before "the end" is announced.
             if reading == nil { startNextIfAny() }
@@ -229,7 +242,7 @@ final class FileRenderer {
     }
 
     /// A start/seek/stop: new data goes after what's in the ring; the render thread jumps there.
-    private func beginSession(_ requested: Int64) {
+    private func beginSession(_ requested: Int64, file: AVAudioFile?) {
         handled = requested
         reading = nil
         markPos = nil
@@ -240,7 +253,7 @@ final class FileRenderer {
         let item = pendingStart
         pendingStart = nil
         placed.removeAll()
-        if let item, let f = open(item) {
+        if let item, let f = file, matches(f) {
             reading = (item, f, item.start)
             placed = [(w, item.id, item.start)]
             endPos = nil
@@ -252,13 +265,26 @@ final class FileRenderer {
             store(.jumpSerial, -1)
         }
         store(.jumpPos, w)
-        store(.published, requested)
+        // With something to play, the render thread is told only once its first audio is in the ring: then
+        // the very next callback plays it (instead of one of silence while it's read).
+        if reading != nil { unpublished = requested } else { store(.published, requested) }
+    }
+
+    /// A start whose first audio is still being read (the render thread plays silence meanwhile).
+    private var unpublished: Int64?
+    private func publishIfWaiting() {
+        guard let u = unpublished else { return }
+        unpublished = nil
+        if load(.requested) == u { store(.published, u) }
     }
 
     private func open(_ item: Item) -> AVAudioFile? {
-        guard let f = try? AVAudioFile(forReading: item.url), f.processingFormat.sampleRate == format.sampleRate,
-              f.processingFormat.channelCount == format.channelCount else { return nil }
+        guard let f = try? AVAudioFile(forReading: item.url), matches(f) else { return nil }
         return f
+    }
+
+    private func matches(_ f: AVAudioFile) -> Bool {
+        f.processingFormat.sampleRate == format.sampleRate && f.processingFormat.channelCount == format.channelCount
     }
 
     /// Report a queued item once it is heard, and the end once everything played out.
@@ -282,9 +308,12 @@ final class FileRenderer {
         if reading == nil { startNextIfAny() }
         guard var rd = reading, let buf = scratch else { return false }
         let w = load(.write), r = load(.read)
-        let free = capacity - (w - r)
+        // One chunk of the ring is kept free while playing: a new start's first chunk goes there, safely
+        // after everything the render thread may still be reading, and can play at the next callback.
+        let reserve = unpublished == nil ? Int64(Self.chunk) : 0
+        let free = capacity - (w - r) - reserve
         let n = min(Int64(Self.chunk), free, rd.item.end - rd.pos)
-        guard n > 0 || rd.pos >= rd.item.end else { return false }
+        guard n > 0 || rd.pos >= rd.item.end else { publishIfWaiting(); return false }   // no room: never leave a start waiting
         var got: Int64 = 0
         if n > 0 {
             if rd.file.framePosition != rd.pos { rd.file.framePosition = rd.pos }
@@ -305,6 +334,7 @@ final class FileRenderer {
                 rd.pos += got
             }
         }
+        publishIfWaiting()
         if got == 0 || rd.pos >= rd.item.end {
             reading = nil   // done with this item (or the file ended early / became unreadable)
             startNextIfAny()
@@ -319,7 +349,16 @@ final class FileRenderer {
         guard reading == nil, !placed.isEmpty else { return }
         if markPos == nil, !queue.isEmpty {
             let next = queue.removeFirst()
-            guard let f = open(next) else { return startNextIfAny() }
+            var file = next.file
+            if file == nil {
+                // Not opened by the player: open it here, without the lock.
+                let session = handled
+                lock.unlock()
+                file = open(next)
+                lock.lock()
+                guard load(.requested) == session, reading == nil, markPos == nil else { return }   // things moved on
+            }
+            guard let f = file, matches(f) else { return startNextIfAny() }
             let w = load(.write)
             reading = (next, f, next.start)
             placed.append((w, next.id, next.start))

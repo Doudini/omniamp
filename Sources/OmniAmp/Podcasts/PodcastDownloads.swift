@@ -3,6 +3,7 @@ import Foundation
 /// Episodes saved for offline listening, as "Show - Episode.mp3" in a folder the user can pick in Settings
 /// (default ~/Music/OmniAmp Podcasts). Two download at a time, the rest wait their turn. A downloaded episode
 /// plays from disk (also from the playlist) and is deleted once it has been played to the end. Main-thread only.
+@MainActor
 final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     static let shared = PodcastDownloads()
     /// Something was queued, progressed, finished, failed or was removed. `object`: the episode URL.
@@ -242,53 +243,59 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
         }
     }
 
-    // MARK: URLSessionDownloadDelegate (main queue)
+    // MARK: URLSessionDownloadDelegate (the session delivers on the main queue)
 
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
+    nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
                     totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        guard let url = downloadTask.taskDescription, var a = active[url], totalBytesExpectedToWrite > 0 else { return }
-        let p = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-        guard p - a.progress >= 0.01 || p >= 1 else { return }   // redraw every percent, not every packet
-        a.progress = p
-        active[url] = a
-        changed(url)
+        MainActor.assumeIsolated {
+            guard let url = downloadTask.taskDescription, var a = active[url], totalBytesExpectedToWrite > 0 else { return }
+            let p = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+            guard p - a.progress >= 0.01 || p >= 1 else { return }   // redraw every percent, not every packet
+            a.progress = p
+            active[url] = a
+            changed(url)
+        }
     }
 
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        // The temporary file is gone after this returns: move it now.
-        guard let url = downloadTask.taskDescription, let a = active[url] else { return }
-        if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            failures[url] = "the server answered \(http.statusCode)"
-            return
+    nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        MainActor.assumeIsolated {
+            // The temporary file is gone after this returns: move it now.
+            guard let url = downloadTask.taskDescription, let a = active[url] else { return }
+            if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                failures[url] = "the server answered \(http.statusCode)"
+                return
+            }
+            // A paywall, a login or an expired private link can answer 200 with a web page: not an episode.
+            if let mime = downloadTask.response?.mimeType?.lowercased(), mime.hasPrefix("text/") {
+                failures[url] = "the server sent a web page, not audio (a login or an expired link?)"
+                return
+            }
+            ensureFolder()
+            let name = uniqueName(Self.fileName(for: a.episode, show: a.show, ext: Self.fileExtension(for: url, response: downloadTask.response)))
+            let dest = dir.appendingPathComponent(name)
+            do {
+                try FileManager.default.moveItem(at: location, to: dest)
+            } catch {
+                failures[url] = error.localizedDescription
+                return
+            }
+            let bytes = (try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 }.map(Int64.init) ?? 0
+            entries[url] = Entry(episode: a.episode, show: a.show, file: name, bytes: bytes, date: Date().timeIntervalSince1970)
+            save()
         }
-        // A paywall, a login or an expired private link can answer 200 with a web page: not an episode.
-        if let mime = downloadTask.response?.mimeType?.lowercased(), mime.hasPrefix("text/") {
-            failures[url] = "the server sent a web page, not audio (a login or an expired link?)"
-            return
-        }
-        ensureFolder()
-        let name = uniqueName(Self.fileName(for: a.episode, show: a.show, ext: Self.fileExtension(for: url, response: downloadTask.response)))
-        let dest = dir.appendingPathComponent(name)
-        do {
-            try FileManager.default.moveItem(at: location, to: dest)
-        } catch {
-            failures[url] = error.localizedDescription
-            return
-        }
-        let bytes = (try? dest.resourceValues(forKeys: [.fileSizeKey]).fileSize).flatMap { $0 }.map(Int64.init) ?? 0
-        entries[url] = Entry(episode: a.episode, show: a.show, file: name, bytes: bytes, date: Date().timeIntervalSince1970)
-        save()
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let url = task.taskDescription, active.removeValue(forKey: url) != nil else { return }
-        activeOrder.removeAll { $0 == url }
-        if let error, (error as? URLError)?.code != .cancelled {
-            failures[url] = AudioPlayer.friendly(error)
-            NSLog("OmniAmp: episode download failed: %@", error.localizedDescription)
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        MainActor.assumeIsolated {
+            guard let url = task.taskDescription, active.removeValue(forKey: url) != nil else { return }
+            activeOrder.removeAll { $0 == url }
+            if let error, (error as? URLError)?.code != .cancelled {
+                failures[url] = AudioPlayer.friendly(error)
+                NSLog("OmniAmp: episode download failed: %@", error.localizedDescription)
+            }
+            changed(url)
+            startNext()
         }
-        changed(url)
-        startNext()
     }
 
     /// "Show - Episode.ext", safe for any file system and not too long.

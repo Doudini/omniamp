@@ -67,6 +67,7 @@ enum ScrobbleError: Error, LocalizedError {
 /// half its length or 4 minutes, whichever comes first. Listening time is accumulated from play/pause
 /// events with a single one-shot timer — no polling. Main-thread only (like PlayerController); network
 /// results hop back to the main actor.
+@MainActor
 final class Scrobbler {
     static let shared = Scrobbler()
 
@@ -157,7 +158,7 @@ final class Scrobbler {
         timer?.invalidate()
         let left = threshold - listened
         let t = Timer(timeInterval: max(0.5, left), repeats: false) { [weak self] _ in
-            self?.thresholdReached()
+            MainActor.assumeIsolated { self?.thresholdReached() }   // a main run loop timer
         }
         t.tolerance = 2
         RunLoop.main.add(t, forMode: .common)
@@ -189,7 +190,7 @@ final class Scrobbler {
         flushing.insert(svc.id)
         // After a rejected batch, go one at a time to find the scrobble the service refuses.
         let batch = Array(q.prefix(oneByOne.contains(svc.id) ? 1 : svc.maxBatch))
-        Task { @MainActor in
+        Task {
             do {
                 let n = try await svc.submit(batch)
                 // Remove exactly what was sent (the queue may have been trimmed at the front meanwhile).

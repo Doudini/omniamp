@@ -10,6 +10,7 @@ final class ShowNotesEntityTests: XCTestCase {
     }
 }
 
+@MainActor
 final class EpisodeGuidTests: XCTestCase {
     private func feed(_ items: [(guid: String, url: String)]) -> Data {
         let body = items.map { "<item><title>\($0.url)</title><guid>\($0.guid)</guid><enclosure url=\"\($0.url)\" type=\"audio/mpeg\"/></item>" }

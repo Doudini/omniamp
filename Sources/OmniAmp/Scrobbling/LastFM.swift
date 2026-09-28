@@ -28,7 +28,7 @@ final class LastFM: ScrobbleService {
     // MARK: API key: the user's own, or the one built into the app
 
     /// The user's own API key (Settings), used instead of the built-in one when both key and secret are set.
-    var customKey: String? { UserDefaults.standard.string(forKey: "lastfmCustomKey").flatMap { $0.isEmpty ? nil : $0 } }
+    var customKey: String? { UserDefaults.standard.string(forKey: Pref.lastfmCustomKey).flatMap { $0.isEmpty ? nil : $0 } }
     /// Read through Keychain's own (locked) cache: this is used from background tasks too.
     private var customSecret: String? { customKey == nil ? nil : Keychain.get("lastfm.customSecret") }
     var usesCustomKey: Bool { fixedKey == nil && customKey != nil && customSecret != nil }
@@ -43,7 +43,7 @@ final class LastFM: ScrobbleService {
         let k = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let s = secret?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let on = !k.isEmpty && !s.isEmpty
-        UserDefaults.standard.set(on ? k : nil, forKey: "lastfmCustomKey")
+        UserDefaults.standard.set(on ? k : nil, forKey: Pref.lastfmCustomKey)
         Keychain.set("lastfm.customSecret", on ? s : nil)
         // A session belongs to its key: reconnect with the new one. Plays wait in the queue meanwhile.
         let was = isConnected || needsReconnect
@@ -54,7 +54,7 @@ final class LastFM: ScrobbleService {
     /// There's an API key to use (otherwise Last.fm can't be offered).
     var isAvailable: Bool { apiKey != nil && secret != nil }
     var sessionKey: String? { Keychain.get("lastfm.session") }
-    var username: String? { UserDefaults.standard.string(forKey: "lastfmUser") }
+    var username: String? { UserDefaults.standard.string(forKey: Pref.lastfmUser) }
     var isConnected: Bool { isAvailable && sessionKey != nil }
     var needsReconnect: Bool { !isConnected && ReconnectMark.get(id) }
 
@@ -124,13 +124,13 @@ final class LastFM: ScrobbleService {
         }
         Keychain.set("lastfm.session", key)
         ReconnectMark.set(id, false)
-        UserDefaults.standard.set(session["name"] as? String, forKey: "lastfmUser")
+        UserDefaults.standard.set(session["name"] as? String, forKey: Pref.lastfmUser)
     }
 
     func disconnect() {
         Keychain.set("lastfm.session", nil)
         ReconnectMark.set(id, false)
-        UserDefaults.standard.removeObject(forKey: "lastfmUser")
+        UserDefaults.standard.removeObject(forKey: Pref.lastfmUser)
     }
 
     // MARK: Scrobbling

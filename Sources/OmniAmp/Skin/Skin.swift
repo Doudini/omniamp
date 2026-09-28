@@ -227,9 +227,9 @@ enum SkinLibrary {
     static var active: URL? { current ?? bundled ?? installed.first }
 
     static var current: URL? {
-        get { UserDefaults.standard.string(forKey: "skinPath").map { URL(fileURLWithPath: $0) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } }
+        get { UserDefaults.standard.string(forKey: Pref.skinPath).map { URL(fileURLWithPath: $0) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } }
         // The built-in skin is stored as "no choice", so a moved app bundle still finds it.
-        set { UserDefaults.standard.set(newValue.flatMap { isBundled($0) ? nil : $0.path }, forKey: "skinPath") }
+        set { UserDefaults.standard.set(newValue.flatMap { isBundled($0) ? nil : $0.path }, forKey: Pref.skinPath) }
     }
 
     static var installed: [URL] {
@@ -250,7 +250,7 @@ enum SkinLibrary {
     }
 
     static var scale: CGFloat {
-        get { let v = UserDefaults.standard.double(forKey: "classicScale"); return v >= 1 ? v : 2 }
-        set { UserDefaults.standard.set(Double(newValue), forKey: "classicScale") }
+        get { let v = UserDefaults.standard.double(forKey: Pref.classicScale); return v >= 1 ? v : 2 }
+        set { UserDefaults.standard.set(Double(newValue), forKey: Pref.classicScale) }
     }
 }

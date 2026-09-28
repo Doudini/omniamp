@@ -1,6 +1,7 @@
 import XCTest
 @testable import OmniAmp
 
+@MainActor
 final class CueTests: XCTestCase {
     private var dir: URL!
 

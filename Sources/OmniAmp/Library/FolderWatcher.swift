@@ -51,6 +51,7 @@ final class FolderWatcher {
 /// Playlist-based: watched folders feed the playlist but never own it. New files are added next to their
 /// folder-mates, deleted files are removed, edited files are re-tagged. OmniAmp remembers which files it has
 /// already seen, so tracks the user removed by hand are not re-added on the next scan.
+@MainActor
 final class FolderSync {
     /// Weak: a scan finishing after the controller is gone (tests, quitting) just does nothing.
     private weak var controllerRef: PlayerController?
@@ -62,11 +63,11 @@ final class FolderSync {
     private var flushWork: DispatchWorkItem?
     var onSynced: ((_ added: Int, _ removed: Int, _ updated: Int) -> Void)?
 
-    private static var stateURL: URL { LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("watched.plist") }
+    nonisolated private static var stateURL: URL { LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("watched.plist") }
 
     init(controller: PlayerController) {
         self.controllerRef = controller
-        roots = UserDefaults.standard.stringArray(forKey: "watchedFolders") ?? []
+        roots = UserDefaults.standard.stringArray(forKey: Pref.watchedFolders) ?? []
         if let d = try? Data(contentsOf: Self.stateURL),
            let s = try? PropertyListDecoder().decode([String: [String]].self, from: d) {
             seen = s.mapValues(Set.init)
@@ -148,7 +149,7 @@ final class FolderSync {
     func rescanAll() { rescan(roots, through: FSEventsGetCurrentEventId()) }
 
     private func persistRoots() {
-        UserDefaults.standard.set(roots, forKey: "watchedFolders")
+        UserDefaults.standard.set(roots, forKey: Pref.watchedFolders)
         watcher.watch(roots)
     }
 
@@ -159,14 +160,14 @@ final class FolderSync {
     /// A missing path only counts as deleted while its watched root is still there. With the root missing
     /// too, the drive or share is unmounted (or the folder moved away): keep its tracks and seen files
     /// rather than wiping them; they come back on remount.
-    static func deletionIsReal(_ path: String, roots: [String]) -> Bool {
+    nonisolated static func deletionIsReal(_ path: String, roots: [String]) -> Bool {
         guard let r = roots.first(where: { path == $0 || path.hasPrefix($0 + "/") }) else { return false }
         return FileManager.default.fileExists(atPath: r)
     }
 
     /// Rewrite a path into its root's stored spelling. The file system hands out several spellings of
     /// the same folder (e.g. /var/… vs /private/var/… from the enumerator and FSEvents).
-    static func canonical(_ path: String, roots: [String]) -> String {
+    nonisolated static func canonical(_ path: String, roots: [String]) -> String {
         for r in roots {
             var forms = [r, r.hasPrefix("/private/") ? String(r.dropFirst(8)) : "/private" + r]
             let resolved = URL(fileURLWithPath: r).resolvingSymlinksInPath().path

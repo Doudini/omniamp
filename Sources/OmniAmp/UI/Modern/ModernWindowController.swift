@@ -13,10 +13,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     private enum Drawer: String { case none, eq, info }
     private var drawer: Drawer {
         get {
-            if let s = UserDefaults.standard.string(forKey: "modernDrawer"), let d = Drawer(rawValue: s) { return d }
-            return UserDefaults.standard.bool(forKey: "modernEQVisible") ? .eq : .none
+            if let s = UserDefaults.standard.string(forKey: Pref.modernDrawer), let d = Drawer(rawValue: s) { return d }
+            return UserDefaults.standard.bool(forKey: Pref.modernEQVisible) ? .eq : .none
         }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "modernDrawer") }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Pref.modernDrawer) }
     }
     /// Track shown in INFO when the user picked one in the playlist (stable ID); nil = follow playback.
     private var pinnedInfoID: Int?
@@ -39,6 +39,8 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     var onPodcasts: (() -> Void)?
     /// ADD opens a small menu: files, folder, URL.
     var addMenuProvider: (() -> NSMenu)?
+    /// Files dropped on the playlist (music, playlists, skins, OPML): the app decides what they are.
+    var onOpenFiles: (([URL], Int?) -> Void)?
     private var tick = 0
     var onClose: (() -> Void)?
     /// Right-click menu for the playlist (built by the app delegate).
@@ -638,7 +640,8 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
         }
         let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
         guard !urls.isEmpty else { return false }
-        controller.add(urls, at: row >= 0 && controller.visible == nil ? row : nil)
+        let at = row >= 0 && controller.visible == nil ? row : nil
+        if let open = onOpenFiles { open(urls, at) } else { controller.add(urls, at: at) }
         return true
     }
 }

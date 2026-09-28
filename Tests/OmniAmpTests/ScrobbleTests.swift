@@ -39,6 +39,7 @@ final class FakeService: ScrobbleService {
     }
 }
 
+@MainActor
 final class ScrobbleTests: XCTestCase {
     private var dir: URL!
 

@@ -153,7 +153,7 @@ final class ClassicMainView: SkinCanvasView {
     private var pressedInside = false
     private var seekDrag: Double?
     private var volumeDrag = false
-    private var showRemaining = UserDefaults.standard.bool(forKey: "classicRemaining")
+    private var showRemaining = UserDefaults.standard.bool(forKey: Pref.classicRemaining)
     private var marqueeOffset = 0
     private var marqueeStart = animationTime
     private var tick = 0
@@ -544,7 +544,7 @@ final class ClassicMainView: SkinCanvasView {
             for i in 0..<19 { levels[i] = 0; peaks[i] = 0 }
         case .time:
             showRemaining.toggle()
-            UserDefaults.standard.set(showRemaining, forKey: "classicRemaining")
+            UserDefaults.standard.set(showRemaining, forKey: Pref.classicRemaining)
         case .options:
             onMenu?(event, self)
             return

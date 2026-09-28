@@ -10,7 +10,7 @@ final class ListenBrainz: ScrobbleService {
     private let api = "https://api.listenbrainz.org/1/"
 
     var token: String? { Keychain.get("listenbrainz.token") }
-    var username: String? { UserDefaults.standard.string(forKey: "listenbrainzUser") }
+    var username: String? { UserDefaults.standard.string(forKey: Pref.listenbrainzUser) }
     var isConnected: Bool { token != nil }
     var needsReconnect: Bool { !isConnected && ReconnectMark.get(id) }
 
@@ -43,13 +43,13 @@ final class ListenBrainz: ScrobbleService {
         }
         Keychain.set("listenbrainz.token", token)
         ReconnectMark.set(id, false)
-        UserDefaults.standard.set(user, forKey: "listenbrainzUser")
+        UserDefaults.standard.set(user, forKey: Pref.listenbrainzUser)
     }
 
     func disconnect() {
         Keychain.set("listenbrainz.token", nil)
         ReconnectMark.set(id, false)
-        UserDefaults.standard.removeObject(forKey: "listenbrainzUser")
+        UserDefaults.standard.removeObject(forKey: Pref.listenbrainzUser)
     }
 
     static func payload(_ s: Scrobble, withTime: Bool) -> [String: Any] {

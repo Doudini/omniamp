@@ -138,7 +138,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// nothing runs when the window is closed).
     private func startProgressTimer() {
         guard progressTimer == nil else { return }
-        let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in MainActor.assumeIsolated {
             guard let self, self.window?.occlusionState.contains(.visible) == true,
                   self.controller.player.isPlayingEpisode, self.controller.player.state == .playing,
                   let url = self.controller.currentTrack?.path else { return }
@@ -149,7 +149,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             guard let row = self.episodes.firstIndex(where: { $0.url == url }) else { return }
             self.episodesTable.reloadData(forRowIndexes: [row], columnIndexes: [0])
             if self.episodesTable.selectedRow == row { self.updateNotes() }
-        }
+        } }
         RunLoop.main.add(t, forMode: .common)
         progressTimer = t
     }
@@ -157,34 +157,15 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     // MARK: Layout
 
     private func column(_ id: String, _ width: CGFloat, flexible: Bool = false) -> NSTableColumn {
-        let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
-        c.width = width
-        c.resizingMask = flexible ? .autoresizingMask : []
-        return c
+        ListLook.column(id, width, flexible: flexible)
     }
 
     private func style(_ table: NSTableView, _ scroll: NSScrollView, rowHeight: CGFloat) {
-        table.headerView = nil
         table.columnAutoresizingStyle = .noColumnAutoresizing   // fitColumns() sizes the flexible one
         table.dataSource = self
         table.delegate = self
         table.target = self
-        table.rowHeight = rowHeight
-        table.intercellSpacing = NSSize(width: 8, height: 0)
-        table.style = .plain
-        table.gridStyleMask = []
-        table.backgroundColor = Theme.lcd
-        scroll.documentView = table
-        scroll.hasVerticalScroller = true
-        scroll.scrollerStyle = .overlay
-        scroll.automaticallyAdjustsContentInsets = false
-        scroll.contentInsets = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
-        scroll.drawsBackground = true
-        scroll.backgroundColor = Theme.lcd
-        scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = 4
-        scroll.layer?.borderWidth = 1
-        scroll.layer?.borderColor = NSColor.black.cgColor
+        ListLook.apply(table, in: scroll, rowHeight: rowHeight)
     }
 
     private func build() {
@@ -471,7 +452,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             return true
         default:
             // Letters and digits start a directory search (or filter the subscriptions).
-            guard let c = e.characters, c.count == 1, c.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) else { return false }
+            guard let c = ListLook.typedText(e) else { return false }
             window?.makeFirstResponder(search)
             search.currentEditor()?.insertText(c)
             return true
@@ -491,7 +472,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         case Key.space: controller.togglePlayPause(); return true
         default:
             // Letters and digits start the episode filter.
-            guard let c = e.characters, c.count == 1, c.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) else { return false }
+            guard let c = ListLook.typedText(e) else { return false }
             focusEpisodeFilter(typing: c)
             return true
         }

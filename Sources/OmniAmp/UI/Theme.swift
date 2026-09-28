@@ -56,14 +56,14 @@ enum Theme {
     static let changed = Notification.Name("OmniAmpThemeChanged")
 
     static var palette: ThemePalette = {
-        let id = UserDefaults.standard.string(forKey: "modernTheme") ?? "green"
+        let id = UserDefaults.standard.string(forKey: Pref.modernTheme) ?? "green"
         return ThemePalette.all.first { $0.id == id } ?? ThemePalette.all[0]
     }()
 
     static func select(_ id: String) {
         guard let p = ThemePalette.all.first(where: { $0.id == id }) else { return }
         palette = p
-        UserDefaults.standard.set(id, forKey: "modernTheme")
+        UserDefaults.standard.set(id, forKey: Pref.modernTheme)
         NotificationCenter.default.post(name: changed, object: nil)
     }
 

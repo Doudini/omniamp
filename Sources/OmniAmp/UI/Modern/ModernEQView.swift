@@ -183,18 +183,9 @@ final class ModernEQView: NSView {
     @objc private func toggleOn() { changed { $0.enabled.toggle() } }
 
     @objc private func showPresets() {
-        let m = NSMenu()
-        for p in Equalizer.presets {
-            let it = m.addItem(withTitle: p.name, action: #selector(pickPreset(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = p.name
-        }
-        m.popUp(positioning: nil, at: NSPoint(x: 0, y: presetButton.bounds.height + 2), in: presetButton)
-    }
-
-    @objc private func pickPreset(_ sender: NSMenuItem) {
-        guard let p = Equalizer.presets.first(where: { $0.name == sender.representedObject as? String }) else { return }
-        controller?.applyPreset(p)
+        guard let c = controller else { return }
+        EQMenu.make(c, withOnSwitch: false)   // the drawer has its own ON button
+            .popUp(positioning: nil, at: NSPoint(x: 0, y: presetButton.bounds.height + 2), in: presetButton)
     }
 }
 

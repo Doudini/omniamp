@@ -1,6 +1,7 @@
 import XCTest
 @testable import OmniAmp
 
+@MainActor
 final class PlaylistEditingTests: XCTestCase {
     private var cacheDir: URL!
 
@@ -122,6 +123,7 @@ final class PlaylistEditingTests: XCTestCase {
     }
 }
 
+@MainActor
 final class UnplayableLoopTests: XCTestCase {
     func testAPlaylistOfMissingFilesStopsAfterOneRound() {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-unplayable-\(UUID().uuidString)")
@@ -157,7 +159,11 @@ final class PausedSeekTests: XCTestCase {
         try wav.write(to: file)
 
         let p = AudioPlayer()
-        guard p.play(url: file) else { throw XCTSkip("no audio output here") }
+        var ok = false
+        let opened = expectation(description: "opened")
+        p.play(url: file) { ok = $0; opened.fulfill() }   // files open in the background
+        wait(for: [opened], timeout: 5)
+        guard ok else { throw XCTSkip("no audio output here") }
         p.pause()
         var states: [AudioPlayer.State] = []
         p.onStateChange = { states.append(p.state) }

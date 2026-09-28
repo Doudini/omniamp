@@ -1,6 +1,7 @@
 import AppKit
 
 /// Classic Winamp look: skinned main window with the EQ and playlist docked underneath.
+@MainActor
 final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
     private let controller: PlayerController
     private(set) var skin: Skin
@@ -18,17 +19,17 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
 
     /// Builds the options/right-click menu (owned by the app delegate).
     var menuProvider: (() -> NSMenu)?
-    /// Called with dropped .wsz files.
-    var onSkinDropped: ((URL) -> Void)?
+    /// Files dropped on any of the windows (skins, playlists, music): the app decides what they are.
+    var onOpenFiles: (([URL]) -> Void)?
 
     private var eqVisible: Bool {
-        get { UserDefaults.standard.bool(forKey: "classicEQVisible") }
-        set { UserDefaults.standard.set(newValue, forKey: "classicEQVisible") }
+        get { UserDefaults.standard.bool(forKey: Pref.classicEQVisible) }
+        set { UserDefaults.standard.set(newValue, forKey: Pref.classicEQVisible) }
     }
 
     private var playlistVisible: Bool {
-        get { UserDefaults.standard.object(forKey: "classicPlaylistVisible") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "classicPlaylistVisible") }
+        get { UserDefaults.standard.object(forKey: Pref.classicPlaylistVisible) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Pref.classicPlaylistVisible) }
     }
 
     init(controller: PlayerController, skin: Skin, scale: CGFloat) {
@@ -39,8 +40,8 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
         playlistView = ClassicPlaylistView(skin: skin, scale: scale)
         eqView = ClassicEQView(skin: skin, scale: scale)
         eqWindow = ClassicWindow(size: eqView.intrinsicContentSize)
-        let savedH = UserDefaults.standard.double(forKey: "classicPlaylistHeight")
-        let savedW = UserDefaults.standard.double(forKey: "classicPlaylistWidth")
+        let savedH = UserDefaults.standard.double(forKey: Pref.classicPlaylistHeight)
+        let savedW = UserDefaults.standard.double(forKey: Pref.classicPlaylistWidth)
         playlistView.skinSize = CGSize(width: savedW >= 275 ? savedW : 275, height: savedH >= 116 ? savedH : 232)
         mainWindow = ClassicWindow(size: mainView.intrinsicContentSize)
         playlistWindow = ClassicWindow(size: playlistView.intrinsicContentSize)
@@ -198,42 +199,18 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
         if eqVisible { attach(eqWindow) } else { detach(eqWindow) }
     }
 
-    private func presetsMenu() -> NSMenu {
-        let m = NSMenu()
-        let on = m.addItem(withTitle: "Equalizer On", action: #selector(toggleEQEnabled), keyEquivalent: "")
-        on.target = self
-        on.state = controller.eqSettings.enabled ? .on : .off
-        m.addItem(.separator())
-        for p in Equalizer.presets {
-            let it = m.addItem(withTitle: p.name, action: #selector(pickPreset(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = p.name
-        }
-        return m
-    }
-
-    @objc private func toggleEQEnabled() {
-        var s = controller.eqSettings
-        s.enabled.toggle()
-        controller.setEQ(s)
-    }
-
-    @objc private func pickPreset(_ sender: NSMenuItem) {
-        if let p = Equalizer.presets.first(where: { $0.name == sender.representedObject as? String }) { controller.applyPreset(p) }
-    }
+    private func presetsMenu() -> NSMenu { EQMenu.make(controller) }
 
     private func playlistResized(_ size: CGSize) {
-        UserDefaults.standard.set(Double(size.width), forKey: "classicPlaylistWidth")
-        UserDefaults.standard.set(Double(size.height), forKey: "classicPlaylistHeight")
+        UserDefaults.standard.set(Double(size.width), forKey: Pref.classicPlaylistWidth)
+        UserDefaults.standard.set(Double(size.height), forKey: Pref.classicPlaylistHeight)
         let top = playlistWindow.frame.maxY
         let px = playlistView.intrinsicContentSize
         playlistWindow.setFrame(NSRect(x: playlistWindow.frame.minX, y: top - px.height, width: px.width, height: px.height), display: true)
     }
 
     private func handleDrop(_ urls: [URL]) {
-        if let s = urls.first(where: { $0.pathExtension.lowercased() == "wsz" }) { onSkinDropped?(s) }
-        let media = urls.filter { $0.pathExtension.lowercased() != "wsz" }
-        if !media.isEmpty { controller.add(media) }
+        if let open = onOpenFiles { open(urls) } else { controller.add(urls) }
     }
 
     private func popMenu(_ event: NSEvent, in view: NSView) {
@@ -309,9 +286,11 @@ extension ClassicLookController: PlayerUI {
             p.isReleasedWhenClosed = false
             // Closed with its X button: drop the filter too (it would stay on with nothing showing it).
             NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: p, queue: .main) { [weak self] _ in
-                guard let self, !self.controller.filterQuery.isEmpty else { return }
-                self.jumpField?.stringValue = ""
-                self.controller.setFilter("")
+                MainActor.assumeIsolated {
+                    guard let self, !self.controller.filterQuery.isEmpty else { return }
+                    self.jumpField?.stringValue = ""
+                    self.controller.setFilter("")
+                }
             }
             jumpPanel = p
             jumpField = f

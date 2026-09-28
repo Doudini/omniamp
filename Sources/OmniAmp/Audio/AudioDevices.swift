@@ -21,7 +21,7 @@ enum AudioDevices {
         AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
     }
 
-    private static func get<T>(_ id: AudioObjectID, _ addr: AudioObjectPropertyAddress, _ initial: T) -> T? {
+    private static func get<T: BitwiseCopyable>(_ id: AudioObjectID, _ addr: AudioObjectPropertyAddress, _ initial: T) -> T? {
         var a = addr
         var value = initial
         var size = UInt32(MemoryLayout<T>.size)

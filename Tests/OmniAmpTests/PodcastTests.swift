@@ -1,6 +1,7 @@
 import XCTest
 @testable import OmniAmp
 
+@MainActor
 final class PodcastTests: XCTestCase {
     private let feed = """
     <?xml version="1.0" encoding="UTF-8"?>
@@ -192,6 +193,7 @@ final class PodcastTests: XCTestCase {
     }
 }
 
+@MainActor
 final class PlayedPruningTests: XCTestCase {
     func testOldestMarksGoFirstAndNewOnesStay() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-played-\(UUID().uuidString)")
@@ -215,6 +217,7 @@ final class PlayedPruningTests: XCTestCase {
     }
 }
 
+@MainActor
 final class ContinueListeningMemoryTests: XCTestCase {
     func testStartedEpisodeOfAnUnsubscribedShowIsFoundAfterRelaunch() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-started-\(UUID().uuidString)")
