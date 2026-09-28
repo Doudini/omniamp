@@ -370,15 +370,16 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             v.show(s.favicon)
             return v
         }
+        if id == "fav" {
+            let star = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("fav"), owner: nil) as? GlyphCell) ?? GlyphCell("fav")
+            let on = RadioFavorites.contains(s)
+            star.glyph = on ? Fonts.Icon.starFilled : Fonts.Icon.starEmpty
+            star.color = on ? Dash.accent : Dash.text3
+            return star
+        }
         let textCell = libraryCell(tableView, id), cell = textCell.field   // centred on the row
         cell.alignment = .left
         switch id {
-        case "fav":
-            let on = RadioFavorites.contains(s)
-            cell.stringValue = on ? Fonts.Icon.starFilled : Fonts.Icon.starEmpty
-            cell.font = Theme.icon(12)
-            cell.textColor = on ? Dash.accent : Dash.text3
-            cell.alignment = .center
         case "name":
             cell.stringValue = s.name
             cell.font = Dash.font(13, .medium)

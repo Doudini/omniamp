@@ -128,6 +128,27 @@ func libraryCell(_ table: NSTableView, _ id: String) -> TextCell {
     (table.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? TextCell) ?? TextCell(id)
 }
 
+/// An icon glyph centred by its drawn shape (a font's line box puts icon glyphs off-centre).
+final class GlyphCell: NSView {
+    var glyph = "" { didSet { needsDisplay = true } }
+    var color: NSColor = Dash.text3 { didSet { needsDisplay = true } }
+    var size: CGFloat = 12 { didSet { needsDisplay = true } }
+
+    init(_ id: String) {
+        super.init(frame: .zero)
+        identifier = NSUserInterfaceItemIdentifier(id)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext, !glyph.isEmpty else { return }
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: glyph, attributes: [.font: Theme.icon(size), .foregroundColor: color]))
+        let ink = CTLineGetImageBounds(line, ctx)
+        ctx.textPosition = CGPoint(x: (bounds.midX - ink.midX).rounded(), y: (bounds.midY - ink.midY).rounded())
+        CTLineDraw(line, ctx)
+    }
+}
+
 /// A sidebar entry: icon and name, each centred on the row (one label with both fonts sat high: the icon
 /// font's taller line box moved the baseline).
 final class SidebarCell: NSTableCellView {
