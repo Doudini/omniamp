@@ -287,27 +287,11 @@ final class PlaylistStore {
         startFlushTimer()
 
         DispatchQueue.global(qos: .utility).async {   // the volume check can stall on a slow share
-            // Network shares: reads mostly wait on the server, so keep many in flight; local disks: one per core.
-            // Shared queues bound the total width however many loads overlap, and nothing blocks a thread waiting.
-            let remote = Self.isNetworkVolume(work[0].path)
-            let chunk = remote ? 8 : 64
-            let queue = remote ? Self.remoteTagQueue : Self.localTagQueue
-            let group = DispatchGroup()
-            for start in stride(from: 0, to: work.count, by: chunk) {
-                let slice = work[start..<min(start + chunk, work.count)]
-                group.enter()
-                queue.addOperation {
-                    var local: [(id: Int, info: TagInfo)] = []
-                    local.reserveCapacity(slice.count)
-                    let buffer = TagReadBuffer()
-                    for w in slice { local.append((w.id, TagReader.read(path: w.path, fileSize: w.size, buffer: buffer))) }
-                    self.pendingLock.lock()
-                    self.pending.append(contentsOf: local)
-                    self.pendingLock.unlock()
-                    group.leave()
-                }
-            }
-            group.notify(queue: .main) { MainActor.assumeIsolated {
+            TagQueue.read(work, chunk: { local in
+                self.pendingLock.lock()
+                self.pending.append(contentsOf: local)
+                self.pendingLock.unlock()
+            }, done: { MainActor.assumeIsolated {
                 self.activeLoads -= 1
                 self.flush()
                 if self.activeLoads == 0 {
@@ -318,22 +302,8 @@ final class PlaylistStore {
                     self.logIfAllLoaded()
                     MemoryTrim.soon()
                 }
-            } }
+            } })
         }
-    }
-
-    nonisolated private static func tagQueue(_ name: String, width: Int) -> OperationQueue {
-        let q = OperationQueue()
-        q.name = name
-        q.qualityOfService = .utility
-        q.maxConcurrentOperationCount = width
-        return q
-    }
-    nonisolated private static let localTagQueue = tagQueue("omniamp.tags.local", width: ProcessInfo.processInfo.activeProcessorCount)
-    nonisolated private static let remoteTagQueue = tagQueue("omniamp.tags.remote", width: 24)
-
-    nonisolated static func isNetworkVolume(_ path: String) -> Bool {
-        (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal == false
     }
 
     private func startFlushTimer() {

@@ -148,4 +148,80 @@ final class TagReaderTests: XCTestCase {
         p.waitUntilExit()
         XCTAssertEqual(p.terminationStatus, 0, "\(exe) failed")
     }
+
+    // MARK: Library fields
+
+    func testID3LibraryFields() {
+        func txxx(_ desc: String, _ value: String) -> [UInt8] {
+            let body: [UInt8] = [3] + Array(desc.utf8) + [0] + Array(value.utf8)
+            let n = body.count
+            return Array("TXXX".utf8) + [UInt8(n >> 24), UInt8((n >> 16) & 0xFF), UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF), 0, 0] + body
+        }
+        let frames = frame23("TIT2", "Song") + frame23("TPE1", "Guest") + frame23("TPE2", "Band") + frame23("TYER", "1977")
+            + frame23("TCON", "(17)") + frame23("TRCK", "3/12") + frame23("TPOS", "2/2")
+            + txxx("MusicBrainz Album Type", "album; live") + txxx("MusicBrainz Album Status", "Bootleg")
+            + txxx("MusicBrainz Artist Id", "abc-123") + txxx("ORIGINALYEAR", "1975")
+        let bytes: [UInt8] = Array("ID3".utf8) + [3, 0, 0] + synchsafe(frames.count) + frames
+        let info = TagReader.parseID3Tag(bytes)
+        XCTAssertEqual(info.albumArtist, "Band")
+        XCTAssertEqual(info.date, "1977")
+        XCTAssertEqual(info.originalDate, "1975")
+        XCTAssertEqual(info.genre, "Rock")
+        XCTAssertEqual(info.trackNumber, 3)
+        XCTAssertEqual(info.discNumber, 2)
+        XCTAssertEqual(info.releaseType, "album; live")
+        XCTAssertEqual(info.releaseStatus, "Bootleg")
+        XCTAssertEqual(info.mbArtistID, "abc-123")
+    }
+
+    func testVorbisLibraryFields() {
+        let comments = ["TITLE=Song", "ALBUMARTIST=Band", "DATE=1977-05-08", "GENRE=Rock", "GENRE=Jam", "TRACKNUMBER=07",
+                        "RELEASETYPE=live", "RELEASESTATUS=bootleg", "MUSICBRAINZ_RELEASEGROUPID=rg-1"]
+        func le32(_ n: Int) -> [UInt8] { [UInt8(n & 0xFF), UInt8((n >> 8) & 0xFF), UInt8((n >> 16) & 0xFF), UInt8((n >> 24) & 0xFF)] }
+        var body = le32(6) + Array("vendor".utf8) + le32(comments.count)
+        for c in comments { body += le32(c.utf8.count) + Array(c.utf8) }
+        let bytes: [UInt8] = Array("fLaC".utf8) + [0x84, UInt8(body.count >> 16), UInt8((body.count >> 8) & 0xFF), UInt8(body.count & 0xFF)] + body
+        let info = TagReader.parseFLAC(bytes)
+        XCTAssertEqual(info.title, "Song")
+        XCTAssertEqual(info.albumArtist, "Band")
+        XCTAssertEqual(info.date, "1977-05-08")
+        XCTAssertEqual(info.genre, "Rock; Jam")
+        XCTAssertEqual(info.trackNumber, 7)
+        XCTAssertEqual(info.releaseType, "live")
+        XCTAssertEqual(info.releaseStatus, "bootleg")
+        XCTAssertEqual(info.mbReleaseGroupID, "rg-1")
+    }
+
+    func testOggVorbis() throws {
+        func le32(_ n: Int) -> [UInt8] { [UInt8(n & 0xFF), UInt8((n >> 8) & 0xFF), UInt8((n >> 16) & 0xFF), UInt8((n >> 24) & 0xFF)] }
+        func page(_ packets: [[UInt8]], granule: Int64, seq: Int) -> [UInt8] {
+            var lacing: [UInt8] = [], body: [UInt8] = []
+            for p in packets {
+                var n = p.count
+                while n >= 255 { lacing.append(255); n -= 255 }
+                lacing.append(UInt8(n))
+                body += p
+            }
+            var h: [UInt8] = Array("OggS".utf8) + [0, 0]
+            for k in 0..<8 { h.append(UInt8((granule >> (8 * Int64(k))) & 0xFF)) }
+            return h + [1, 2, 3, 4] + le32(seq) + [0, 0, 0, 0] + [UInt8(lacing.count)] + lacing + body
+        }
+        let ident: [UInt8] = [1] + Array("vorbis".utf8) + le32(0) + [2] + le32(44100) + le32(0) + le32(128_000) + le32(0) + [0xB8, 1]
+        var comment: [UInt8] = [3] + Array("vorbis".utf8) + le32(3) + Array("abc".utf8)
+        let fields = ["TITLE=Reeling", "ARTIST=PJ Harvey", "ALBUM=The B Sides", "TRACKNUMBER=1", "DATE=1995"]
+        comment += le32(fields.count)
+        for f in fields { comment += le32(f.utf8.count) + Array(f.utf8) }
+        comment += Array(repeating: 0x41, count: 600)   // a long comment packet spans several lacing values
+        var bytes = page([ident], granule: 0, seq: 0) + page([comment], granule: 0, seq: 1)
+        bytes += page([Array(repeating: 0, count: 4000)], granule: 44100 * 180, seq: 2)
+        let url = tmp.appendingPathComponent("a.ogg")
+        try Data(bytes).write(to: url)
+        let info = TagReader.read(path: url.path, fileSize: Int64(bytes.count))
+        XCTAssertEqual(info.title, "Reeling")
+        XCTAssertEqual(info.artist, "PJ Harvey")
+        XCTAssertEqual(info.album, "The B Sides")
+        XCTAssertEqual(info.trackNumber, 1)
+        XCTAssertEqual(info.sampleRate, 44100)
+        XCTAssertEqual(info.duration ?? 0, 180, accuracy: 0.01)
+    }
 }

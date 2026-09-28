@@ -55,6 +55,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if ProcessInfo.processInfo.environment["OMNIAMP_SETTINGS"] != nil { showSettings(nil) }
         if ProcessInfo.processInfo.environment["OMNIAMP_RADIO"] != nil { showRadio(nil) }
         if ProcessInfo.processInfo.environment["OMNIAMP_PODCASTS"] != nil { showPodcasts(nil) }
+        if ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY"] != nil { showLibrary(nil) }
+        // The music library catches up in the background, once the playlist has loaded.
+        if MusicCollection.hasFolders {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { MusicCollection.shared.start() }
+        }
         // Test hook: OMNIAMP_HIDE=1 hides the app after launch (for measuring background playback).
         if ProcessInfo.processInfo.environment["OMNIAMP_HIDE"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.hide(nil) }
@@ -73,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Files passed on the command line (useful for testing: OmniAmp /path/to/folder).
         // Handled like files opened from Finder (skins, OPML subscriptions, media).
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
-        if !args.isEmpty { application(NSApp, open: args.map { URL(fileURLWithPath: $0) }) }
+        if !args.isEmpty { application(NSApp, open: args.map { URL(exactPath: $0) }) }
         if !openedBeforeLaunch.isEmpty {
             let pending = openedBeforeLaunch
             openedBeforeLaunch = []
@@ -122,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             w.playlistMenu = { [weak self] in self?.makePlaylistContextMenu() ?? NSMenu() }
             w.onRadio = { [weak self] in self?.showRadio(nil) }
             w.onPodcasts = { [weak self] in self?.showPodcasts(nil) }
+            w.onLibrary = { [weak self] in self?.showLibrary(nil) }
             w.addMenuProvider = { [weak self] in self?.makeAddMenu() ?? NSMenu() }
             w.onOpenFiles = { [weak self] urls, row in self?.open(urls, at: row) }
             look = w
@@ -217,6 +223,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private var podcasts: PodcastWindowController?
+    private var library: LibraryWindowController?
+
+    @objc private func showLibrary(_ sender: Any?) {
+        let wasOpen = library?.window?.isVisible == true
+        if library == nil {
+            library = LibraryWindowController(controller: controller)
+            // Closing frees the window and its lists (the library itself keeps watching its folders).
+            library?.onClose = { [weak self] in
+                DispatchQueue.main.async { self?.library = nil; MemoryTrim.soon() }
+            }
+        }
+        library?.showWindow(nil)
+        library?.window?.makeKeyAndOrderFront(nil)
+        if !wasOpen { library?.focusList() }
+    }
+
+    @objc private func toggleLibrary(_ sender: Any?) {
+        if let w = library?.window, w.isVisible, w.isKeyWindow { w.performClose(nil) } else { showLibrary(nil) }
+    }
 
     @objc private func showPodcasts(_ sender: Any?) {
         let wasOpen = podcasts?.window?.isVisible == true
@@ -332,6 +357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         m.addItem(withTitle: "Jump to File…", action: #selector(find(_:)), keyEquivalent: "").target = self
         m.addItem(withTitle: "Internet Radio…", action: #selector(showRadio(_:)), keyEquivalent: "").target = self
         m.addItem(withTitle: "Podcasts…", action: #selector(showPodcasts(_:)), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Music Library…", action: #selector(showLibrary(_:)), keyEquivalent: "").target = self
         m.addItem(.separator())
         addPlaylistItems(to: m)
         m.addItem(eqMenuItem())
@@ -698,6 +724,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // ⌘F searches in whichever window is in front.
         if let p = podcasts, NSApp.keyWindow === p.window { p.focusSearch(); return }
         if let r = radio, NSApp.keyWindow === r.window { r.focusSearch(); return }
+        if let l = library, NSApp.keyWindow === l.window { l.focusSearch(); return }
         // From Settings, the shortcuts list…: bring the player forward first (its field would be invisible).
         if let k = NSApp.keyWindow, look?.owns(k) != true { look?.show() }
         look?.focusFilter()
@@ -791,6 +818,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let pods = fileMenu.addItem(withTitle: "Podcasts…", action: #selector(showPodcasts(_:)), keyEquivalent: "p")
         pods.keyEquivalentModifierMask = [.command, .option]
         pods.target = self
+        let lib = fileMenu.addItem(withTitle: "Music Library…", action: #selector(showLibrary(_:)), keyEquivalent: "l")
+        lib.keyEquivalentModifierMask = [.command, .option]
+        lib.target = self
         fileMenu.addItem(withTitle: "Clear Playlist", action: #selector(clear(_:)), keyEquivalent: "").target = self
         fileMenu.addItem(.separator())
         addPlaylistItems(to: fileMenu)
@@ -882,6 +912,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // ⌘2 / ⌘3 toggle: open the window, or close it when it's the one in front.
         winMenu.addItem(withTitle: "Internet Radio", action: #selector(toggleRadio(_:)), keyEquivalent: "2").target = self
         winMenu.addItem(withTitle: "Podcasts", action: #selector(togglePodcasts(_:)), keyEquivalent: "3").target = self
+        winMenu.addItem(withTitle: "Music Library", action: #selector(toggleLibrary(_:)), keyEquivalent: "4").target = self
         let switchView = winMenu.addItem(withTitle: "Switch View", action: #selector(switchView(_:)), keyEquivalent: "\t")
         switchView.keyEquivalentModifierMask = [.control]
         switchView.target = self

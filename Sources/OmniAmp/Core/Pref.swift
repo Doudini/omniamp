@@ -32,6 +32,8 @@ enum Pref {
     static let resumeDates = "resumeDates"
     // Library
     static let watchedFolders = "watchedFolders"
+    /// The music library's folders (the Library window), separate from the playlist's watched folders.
+    static let libraryFolders = "libraryFolders"
     // Podcasts
     static let podcastSpeeds = "podcastSpeeds"
     static let podcastUnplayedOnly = "podcastUnplayedOnly"

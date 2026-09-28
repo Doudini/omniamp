@@ -34,9 +34,11 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     private var addBtn: ModernButton!
     private var radioBtn: ModernButton!
     private var podcastBtn: ModernButton!
+    private var libraryBtn: ModernButton!
     /// Opens the Internet Radio window (set by the app delegate).
     var onRadio: (() -> Void)?
     var onPodcasts: (() -> Void)?
+    var onLibrary: (() -> Void)?
     /// ADD opens a small menu: files, folder, URL.
     var addMenuProvider: (() -> NSMenu)?
     /// Files dropped on the playlist (music, playlists, skins, OPML): the app decides what they are.
@@ -70,7 +72,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         panel.controller = controller
         eqView.controller = controller
         infoView.controller = controller
-        infoView.onReveal = { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: $0)]) }
+        infoView.onReveal = { NSWorkspace.shared.activateFileViewerSelecting([URL(exactPath: $0)]) }
         panel.onToggleEQ = { [weak self] in self?.toggle(.eq) }
         panel.onToggleInfo = { [weak self] in self?.pinnedInfoID = nil; self?.toggle(.info) }
         panel.onArtClick = { [weak self] in self?.artClicked() }
@@ -192,8 +194,11 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         radioBtn.toolTip = "Internet radio (⌘⌥R)"
         podcastBtn = ModernButton(glyph: Fonts.Icon.podcast, label: "PODCASTS", target: self, action: #selector(podcastsTapped))
         podcastBtn.toolTip = "Podcasts (⌘⌥P)"
-        addBtn.glyphSize = 10; radioBtn.glyphSize = 11; podcastBtn.glyphSize = 11
-        for b in [addBtn!, radioBtn!, podcastBtn!] {
+        libraryBtn = ModernButton(glyph: LibraryWindowController.Section.artists.glyph, label: "LIBRARY", target: self,
+                                  action: #selector(libraryTapped))
+        libraryBtn.toolTip = "Music library (⌘⌥L)"
+        addBtn.glyphSize = 10; radioBtn.glyphSize = 11; podcastBtn.glyphSize = 11; libraryBtn.glyphSize = 11
+        for b in [addBtn!, radioBtn!, podcastBtn!, libraryBtn!] {
             b.keyStyle = true
             b.housing = false
             b.keyBase = Theme.background.blended(withFraction: 0.35, of: Theme.panelTop)!   // matches the darker bottom bar
@@ -202,6 +207,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         root.addSubview(podcastBtn)
         root.addSubview(addBtn)
         root.addSubview(radioBtn)
+        root.addSubview(libraryBtn)
 
         let titlebarHeight: CGFloat = 28
         drawerGrip.translatesAutoresizingMaskIntoConstraints = false
@@ -240,7 +246,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             podcastBtn.leadingAnchor.constraint(equalTo: radioBtn.trailingAnchor, constant: KeyHousing.seam),
             podcastBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
             podcastBtn.heightAnchor.constraint(equalToConstant: 22),
-            filterField.leadingAnchor.constraint(equalTo: podcastBtn.trailingAnchor, constant: 12),
+            libraryBtn.leadingAnchor.constraint(equalTo: podcastBtn.trailingAnchor, constant: KeyHousing.seam),
+            libraryBtn.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
+            libraryBtn.heightAnchor.constraint(equalToConstant: 22),
+            filterField.leadingAnchor.constraint(equalTo: libraryBtn.trailingAnchor, constant: 12),
             filterField.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
 
 
@@ -248,7 +257,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
             statusLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             statusLabel.centerYAnchor.constraint(equalTo: filterField.centerYAnchor),
         ])
-        KeyHousing.wrap([addBtn, radioBtn, podcastBtn], in: root)
+        KeyHousing.wrap([addBtn, radioBtn, podcastBtn, libraryBtn], in: root)
         filterMinWidth = filterField.widthAnchor.constraint(greaterThanOrEqualToConstant: 90)
         filterHiddenWidth = filterField.widthAnchor.constraint(equalToConstant: 0)
         setSearchVisible(false)
@@ -263,9 +272,10 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         let narrow = (window?.frame.width ?? 600) < 520
         addBtn?.compact = narrow
         // Icon-only keys are square.
-        for b in [addBtn, radioBtn, podcastBtn] { b?.iconWidth = narrow ? 22 : 34 }
+        for b in [addBtn, radioBtn, podcastBtn, libraryBtn] { b?.iconWidth = narrow ? 22 : 34 }
         radioBtn?.compact = narrow
         podcastBtn?.compact = narrow
+        libraryBtn?.compact = narrow
         infoView.compact = narrow
         if drawer == .info, drawerHeight != nil { DispatchQueue.main.async { self.resizeInfo(by: 0, done: false) } }   // a smaller window: INFO gives way
     }
@@ -450,6 +460,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 
     @objc private func radioTapped() { onRadio?() }
     @objc private func podcastsTapped() { onPodcasts?() }
+    @objc private func libraryTapped() { onLibrary?() }
     @objc private func addTapped() {
         guard let menu = addMenuProvider?() else { controller.showOpenPanel(for: window); return }
         // Opens upwards from the button, like Winamp's ADD pop-out.

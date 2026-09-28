@@ -24,7 +24,7 @@ struct TrackDetails {
 enum DetailsReader {
     static func read(path: String) -> TrackDetails {
         var d = TrackDetails()
-        guard let fh = FileHandle(forReadingAtPath: path) else { return d }
+        guard let fh = try? FileHandle(forReadingFrom: URL(exactPath: path)) else { return d }
         defer { try? fh.close() }
         let size = Int64((try? fh.seekToEnd()) ?? 0)
         try? fh.seek(toOffset: 0)
@@ -75,15 +75,20 @@ enum DetailsReader {
     /// cover.jpg / folder.png / front.jpeg … next to the file (case-insensitive).
     static func folderArt(for path: String) -> (Data, String)? {
         let dir = (path as NSString).deletingLastPathComponent
-        guard let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
+        guard let best = folderArtName(in: dir), let data = ExactPath.read(dir + "/" + best) else { return nil }
+        return (data, best)
+    }
+
+    /// The name of the cover file in a folder, if there is one.
+    static func folderArtName(in dir: String) -> String? {
+        guard let files = ExactPath.contents(ofDirectory: dir) else { return nil }
         let images = files.filter { ["jpg", "jpeg", "png"].contains(($0 as NSString).pathExtension.lowercased()) }
         func rank(_ f: String) -> Int {
             let stem = (f as NSString).deletingPathExtension.lowercased()
             return coverNames.firstIndex { stem == $0 || stem.hasPrefix($0) } ?? (images.count == 1 ? 50 : 99)
         }
-        guard let best = images.min(by: { rank($0) < rank($1) }), rank(best) < 99,
-              let data = FileManager.default.contents(atPath: (dir as NSString).appendingPathComponent(best)) else { return nil }
-        return (data, best)
+        guard let best = images.min(by: { rank($0) < rank($1) }), rank(best) < 99 else { return nil }
+        return best
     }
 
     // MARK: Helpers
@@ -103,7 +108,7 @@ enum DetailsReader {
     }
 
     /// ID3 genre "(17)" / "17" → "Rock" for the common numeric codes.
-    private static func genreName(_ g: String) -> String {
+    static func genreName(_ g: String) -> String {
         let digits = g.trimmingCharacters(in: CharacterSet(charactersIn: "()"))
         if let n = Int(digits), n >= 0, n < id3Genres.count { return id3Genres[n] }
         if g.hasPrefix("("), let close = g.firstIndex(of: ")"), let n = Int(g[g.index(after: g.startIndex)..<close]),

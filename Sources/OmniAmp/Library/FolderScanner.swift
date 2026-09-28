@@ -2,7 +2,11 @@ import Foundation
 
 /// Stage 1: walk folders/files and produce bare tracks (no tag reading).
 enum FolderScanner {
-    static let audioExtensions: Set<String> = ["mp3", "flac", "m4a", "m4b", "mp4", "aac", "alac", "wav", "wave", "aif", "aiff", "aifc", "caf"]
+    static let audioExtensions: Set<String> = ["mp3", "flac", "m4a", "m4b", "mp4", "aac", "alac", "wav", "wave", "aif", "aiff", "aifc", "caf",
+                                               "ogg", "oga"]
+    /// Music OmniAmp can't play (no decoder in macOS, or copy-protected): the library still lists it, marked,
+    /// so nothing in a collection is silently missing. The playlist leaves it out.
+    static let unplayableExtensions: Set<String> = ["wma", "shn", "ape", "wv", "mpc", "m4p", "ra", "rm", "tta", "opus", "dsf", "dff", "aa", "aax"]
 
     static func scan(_ urls: [URL]) -> [Track] {
         var out: [Track] = []
@@ -28,7 +32,8 @@ enum FolderScanner {
     /// Walks `urls` and hands over tracks as they are found, one folder at a time and in playlist order, so a
     /// big (or network) library starts showing up at once instead of after the whole tree has been read.
     /// Folders are listed with their file attributes in one request each (fast on NFS/SMB too).
-    static func scan(_ urls: [URL], batch emit: ([Track]) -> Void, unreadable: ((String) -> Void)? = nil) {
+    /// `includeUnplayable`: also list files in formats OmniAmp can't play (for the library).
+    static func scan(_ urls: [URL], includeUnplayable: Bool = false, batch emit: ([Track]) -> Void, unreadable: ((String) -> Void)? = nil) {
         func track(_ url: URL, _ v: URLResourceValues?) -> Track {
             Track(path: url.path, size: Int64(v?.fileSize ?? 0), mtime: v?.contentModificationDate?.timeIntervalSince1970 ?? 0)
         }
@@ -37,7 +42,7 @@ enum FolderScanner {
         func values(_ url: URL) -> URLResourceValues? {
             let v = try? url.resourceValues(forKeys: Set(keys))
             guard v?.isSymbolicLink == true else { return v }
-            return try? url.resolvingSymlinksInPath().resourceValues(forKeys: Set(keys))
+            return try? URL(exactPath: ExactPath.resolved(url.path)).resourceValues(forKeys: Set(keys))
         }
 
         // Every folder's real path: a link back up the tree must neither loop nor add a folder twice. Only links
@@ -49,7 +54,7 @@ enum FolderScanner {
         func walk(_ dir: URL, real: String, linked: Bool = false) {
             guard visited.insert(real).inserted else { return }
             // The listing doesn't follow a linked folder: list its target, keep the paths under the link.
-            let listFrom = linked ? URL(fileURLWithPath: real, isDirectory: true) : dir
+            let listFrom = linked ? URL(exactPath: real, isDirectory: true) : dir
             guard let listed = try? FileManager.default.contentsOfDirectory(at: listFrom, includingPropertiesForKeys: keys,
                                                                           options: [.skipsHiddenFiles]) else {
                 unreadable?(dir.path)
@@ -67,7 +72,8 @@ enum FolderScanner {
                 }
                 let ext = url.pathExtension.lowercased()
                 if ext == "cue" { cues.append(url); continue }
-                guard audioExtensions.contains(ext), v?.isRegularFile == true else { continue }
+                guard audioExtensions.contains(ext) || includeUnplayable && unplayableExtensions.contains(ext), v?.isRegularFile == true
+                else { continue }
                 files.append(track(url, v))
             }
             // CUE sheets: their tracks replace the whole-file entries they split up.
@@ -90,7 +96,7 @@ enum FolderScanner {
             }
             if !files.isEmpty { emit(files) }
             for d in subdirs.sorted(by: { $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending }) {
-                walk(d.url, real: d.linked ? d.url.resolvingSymlinksInPath().path : real + "/" + d.url.lastPathComponent,
+                walk(d.url, real: d.linked ? ExactPath.resolved(d.url.path) : real + "/" + d.url.lastPathComponent,
                      linked: d.linked)
             }
         }
@@ -115,7 +121,7 @@ enum FolderScanner {
             if rv?.isDirectory == true {
                 flushLoose()
                 let isLink = (try? root.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
-                walk(root, real: root.resolvingSymlinksInPath().path, linked: isLink)
+                walk(root, real: ExactPath.resolved(root.path), linked: isLink)
             } else if root.pathExtension.lowercased() == "cue" {
                 if let sheet = CueSheet.load(root) { loose += sheet.tracks(cueURL: root).tracks }
             } else if PlaylistFile.isPlaylist(root) {

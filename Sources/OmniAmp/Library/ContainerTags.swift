@@ -36,6 +36,16 @@ enum ContainerTags {
         info.title = info.title ?? tags.title
         info.artist = info.artist ?? tags.artist
         info.album = info.album ?? tags.album
+        info.albumArtist = info.albumArtist ?? tags.albumArtist
+        info.date = info.date ?? tags.date
+        info.originalDate = info.originalDate ?? tags.originalDate
+        info.genre = info.genre ?? tags.genre
+        info.trackNumber = info.trackNumber ?? tags.trackNumber
+        info.discNumber = info.discNumber ?? tags.discNumber
+        info.mbArtistID = info.mbArtistID ?? tags.mbArtistID
+        info.mbReleaseGroupID = info.mbReleaseGroupID ?? tags.mbReleaseGroupID
+        info.releaseType = info.releaseType ?? tags.releaseType
+        info.releaseStatus = info.releaseStatus ?? tags.releaseStatus
     }
 
     // MARK: WAV
@@ -90,6 +100,9 @@ enum ContainerTags {
             case "INAM": info.title = info.title ?? v
             case "IART": info.artist = info.artist ?? v
             case "IPRD": info.album = info.album ?? v
+            case "IGNR": if let v { info.setNamed(key: "GENRE", value: v) }
+            case "ICRD": if let v { info.setNamed(key: "DATE", value: v) }
+            case "ITRK", "IPRT": if let v { info.setNamed(key: "TRACKNUMBER", value: v) }
             default: break
             }
             p += 8 + len + (len & 1)
@@ -200,7 +213,7 @@ enum ContainerTags {
                         let f = value.split(separator: " ")
                         if f.count > 3, let n = Int64(f[3], radix: 16) { validSamples = n }
                     } else {
-                        info.setReplayGain(key: name, value: value)   // ----:com.apple.iTunes:replaygain_*
+                        info.setNamed(key: name, value: value)   // replaygain_*, MusicBrainz IDs, release type…
                     }
                 }
             case "mdhd":
@@ -231,8 +244,16 @@ enum ContainerTags {
                 }
             case "\u{A9}nam": if info.title == nil { info.title = mp4Text(b, body, bodyEnd) }
             case "\u{A9}ART": if info.artist == nil { info.artist = mp4Text(b, body, bodyEnd) }
-            case "aART": if info.artist == nil { info.artist = mp4Text(b, body, bodyEnd) }
+            case "aART": if info.albumArtist == nil { info.albumArtist = mp4Text(b, body, bodyEnd) }
             case "\u{A9}alb": if info.album == nil { info.album = mp4Text(b, body, bodyEnd) }
+            case "\u{A9}day": if info.date == nil { info.date = mp4Text(b, body, bodyEnd) }
+            case "\u{A9}gen": if info.genre == nil { info.genre = mp4Text(b, body, bodyEnd) }
+            case "gnre":
+                if info.genre == nil, let v = mp4Data(b, body, bodyEnd), v.count >= 2, be16(v, 0) > 0 {
+                    info.genre = DetailsReader.genreName(String(be16(v, 0) - 1))
+                }
+            case "trkn": if let v = mp4Data(b, body, bodyEnd), v.count >= 4, be16(v, 2) > 0 { info.trackNumber = be16(v, 2) }
+            case "disk": if let v = mp4Data(b, body, bodyEnd), v.count >= 4, be16(v, 2) > 0 { info.discNumber = be16(v, 2) }
             default: break
             }
             p = bodyEnd
@@ -258,10 +279,103 @@ enum ContainerTags {
 
     /// ilst item → its "data" atom (type + locale header, then UTF-8 text).
     private static func mp4Text(_ b: [UInt8], _ start: Int, _ end: Int) -> String? {
+        mp4Data(b, start, end).flatMap(text)
+    }
+
+    /// ilst item → the raw value of its "data" atom.
+    private static func mp4Data(_ b: [UInt8], _ start: Int, _ end: Int) -> [UInt8]? {
         guard start + 16 <= end, fourCC(b, start + 4) == "data" else { return nil }
         let len = min(be32(b, start), end - start)
         guard len > 16 else { return nil }
-        return text(Array(b[(start + 16)..<(start + len)]))
+        return Array(b[(start + 16)..<(start + len)])
+    }
+
+    // MARK: ASF (WMA)
+
+    static let asfHeader: [UInt8] = [0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C]
+    private static let asfFileProperties: [UInt8] = [0xA1, 0xDC, 0xAB, 0x8C, 0x47, 0xA9, 0xCF, 0x11, 0x8E, 0xE4, 0x00, 0xC0, 0x0C, 0x20, 0x53, 0x65]
+    private static let asfStreamProperties: [UInt8] = [0x91, 0x07, 0xDC, 0xB7, 0xB7, 0xA9, 0xCF, 0x11, 0x8E, 0xE6, 0x00, 0xC0, 0x0C, 0x20, 0x53, 0x65]
+    private static let asfContent: [UInt8] = [0x33, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C]
+    private static let asfExtendedContent: [UInt8] = [0x40, 0xA4, 0xD0, 0xD2, 0x07, 0xE3, 0xD2, 0x11, 0x97, 0xF0, 0x00, 0xA0, 0xC9, 0x5E, 0xA8, 0x50]
+
+    /// Windows Media tags and length, from the ASF header objects (OmniAmp can't play WMA; the library lists it).
+    static func asf(_ fh: FileHandle, fileSize: Int64) -> TagInfo {
+        let r = Reader(fh: fh, size: fileSize)
+        var info = TagInfo()
+        let h = r.bytes(0, 30)
+        guard h.count == 30, Array(h[0..<16]) == asfHeader else { return info }
+        let headerSize = Int(min(le64(h, 16), 4 << 20))
+        let count = le32(h, 24)
+        var p: Int64 = 30
+        func utf16(_ b: ArraySlice<UInt8>) -> String? {
+            var bytes = Array(b)
+            if bytes.count % 2 == 1 { bytes.removeLast() }
+            while bytes.count >= 2, bytes[bytes.count - 1] == 0, bytes[bytes.count - 2] == 0 { bytes.removeLast(2) }
+            let t = String(bytes: bytes, encoding: .utf16LittleEndian)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (t?.isEmpty ?? true) ? nil : t
+        }
+        for _ in 0..<min(count, 64) where p + 24 <= Int64(headerSize) {
+            let oh = r.bytes(p, 24)
+            guard oh.count == 24 else { break }
+            let guid = Array(oh[0..<16]), size = le64(oh, 16)
+            guard size >= 24, p + size <= Int64(headerSize) else { break }
+            // Pictures can make an object large; the tag objects themselves are small.
+            let body = guid == asfExtendedContent || guid == asfContent || guid == asfFileProperties || guid == asfStreamProperties
+                ? r.bytes(p + 24, Int(min(size - 24, 1 << 20))) : []
+            if guid == asfFileProperties, body.count >= 64 {
+                let duration = Double(le64(body, 40)) / 10_000_000 - Double(le64(body, 56)) / 1000
+                info.duration = duration > 0 ? duration : nil
+                info.bitrate = Sane.kbps(bytes: fileSize, seconds: info.duration)
+            } else if guid == asfStreamProperties, body.count >= 54 + 8 {
+                let rate = le32(body, 54 + 4)
+                if rate > 0, info.sampleRate == nil { info.sampleRate = rate }
+            } else if guid == asfContent, body.count >= 10 {
+                let lens = (0..<5).map { le16(body, $0 * 2) }
+                var at = 10
+                var fields: [String?] = []
+                for l in lens {
+                    fields.append(at + l <= body.count ? utf16(body[at..<(at + l)]) : nil)
+                    at += l
+                }
+                info.title = info.title ?? fields[0]
+                info.artist = info.artist ?? fields[1]
+            } else if guid == asfExtendedContent, body.count >= 2 {
+                var at = 2
+                for _ in 0..<min(le16(body, 0), 512) {
+                    guard at + 2 <= body.count else { break }
+                    let nl = le16(body, at)
+                    guard at + 2 + nl + 4 <= body.count else { break }
+                    let name = utf16(body[(at + 2)..<(at + 2 + nl)]) ?? ""
+                    at += 2 + nl
+                    let type = le16(body, at), vl = le16(body, at + 2)
+                    at += 4
+                    guard at + vl <= body.count else { break }
+                    let raw = body[at..<(at + vl)]
+                    at += vl
+                    let value: String?
+                    switch type {
+                    case 0: value = utf16(raw)
+                    case 3: value = String(le32(Array(raw), 0))
+                    case 5: value = String(le16(Array(raw), 0))
+                    default: value = nil
+                    }
+                    guard let v = value else { continue }
+                    switch name {
+                    case "WM/AlbumTitle": info.album = info.album ?? v
+                    case "WM/AlbumArtist": info.albumArtist = info.albumArtist ?? v
+                    case "WM/Year": info.date = info.date ?? v
+                    case "WM/OriginalReleaseYear": info.originalDate = info.originalDate ?? v
+                    case "WM/Genre": info.genre = info.genre ?? v
+                    case "WM/TrackNumber", "WM/Track":
+                        info.trackNumber = info.trackNumber ?? TagInfo.leadingInt(v).map { name == "WM/Track" ? $0 + 1 : $0 }
+                    case "WM/PartOfSet": info.discNumber = info.discNumber ?? TagInfo.leadingInt(v)
+                    default: info.setNamed(key: name.replacingOccurrences(of: "/", with: ""), value: v)   // MusicBrainz/…, replaygain_…
+                    }
+                }
+            }
+            p += size
+        }
+        return info
     }
 
     // MARK: Fallback
@@ -269,7 +383,7 @@ enum ContainerTags {
     /// Duration/format via Core Audio for files the fast parsers don't understand (raw AAC, CAF…). Slower.
     static func coreAudioInfo(path: String) -> TagInfo {
         var info = TagInfo()
-        guard let f = try? AVAudioFile(forReading: URL(fileURLWithPath: path)) else { return info }
+        guard let f = try? AVAudioFile(forReading: URL(exactPath: path)) else { return info }
         let sr = f.fileFormat.sampleRate
         if sr > 0 {
             info.sampleRate = Int(sr)

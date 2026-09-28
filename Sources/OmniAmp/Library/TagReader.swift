@@ -13,6 +13,44 @@ struct TagInfo: Equatable {
     var rgAlbumGain: Float?
     var rgTrackPeak: Float?
     var rgAlbumPeak: Float?
+    // Library fields (the playlist doesn't use these).
+    var albumArtist: String?
+    var date: String?
+    /// The first release's date (a remaster's original year).
+    var originalDate: String?
+    var genre: String?
+    var trackNumber: Int?
+    var discNumber: Int?
+    var mbArtistID: String?
+    var mbReleaseGroupID: String?
+    var releaseType: String?
+    var releaseStatus: String?
+
+    /// A named tag in any container: Vorbis comments, ID3 TXXX descriptions, MP4 freeform names, RIFF…
+    /// Spelling varies ("MUSICBRAINZ_ARTISTID", "MusicBrainz Artist Id"): spaces, underscores and case are ignored.
+    mutating func setNamed(key: String, value: String) {
+        let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !v.isEmpty else { return }
+        let k = key.uppercased().filter { $0 != " " && $0 != "_" }
+        switch k {
+        case "ALBUMARTIST": albumArtist = albumArtist ?? v
+        case "DATE", "YEAR": date = date ?? v
+        case "ORIGINALDATE", "ORIGINALYEAR": originalDate = originalDate ?? v
+        case "GENRE": genre = genre.map { $0 + "; " + v } ?? v   // several GENRE fields: keep them all
+        case "TRACKNUMBER", "TRACK": trackNumber = trackNumber ?? Self.leadingInt(v)
+        case "DISCNUMBER", "DISC": discNumber = discNumber ?? Self.leadingInt(v)
+        case "MUSICBRAINZARTISTID", "MUSICBRAINZALBUMARTISTID": mbArtistID = mbArtistID ?? v.split(separator: ";").first.map(String.init)
+        case "MUSICBRAINZRELEASEGROUPID": mbReleaseGroupID = mbReleaseGroupID ?? v
+        case "RELEASETYPE", "MUSICBRAINZALBUMTYPE": releaseType = releaseType ?? v
+        case "RELEASESTATUS", "MUSICBRAINZALBUMSTATUS": releaseStatus = releaseStatus ?? v
+        default: if k.hasPrefix("REPLAYGAIN") { setReplayGain(key: key.replacingOccurrences(of: " ", with: "_"), value: v) }
+        }
+    }
+
+    /// "3/12" → 3, " 07" → 7.
+    static func leadingInt(_ s: String) -> Int? {
+        Int(s.trimmingCharacters(in: .whitespaces).prefix { $0.isNumber })
+    }
 
     /// REPLAYGAIN_TRACK_GAIN = "-6.54 dB", REPLAYGAIN_TRACK_PEAK = "0.98" … (any container, any case).
     mutating func setReplayGain(key: String, value: String) {
@@ -52,6 +90,7 @@ enum TagReader {
         if let b = info.bitrate, !(0..<1_000_000).contains(b) { info.bitrate = nil }
         if let r = info.sampleRate, !(1..<10_000_000).contains(r) { info.sampleRate = nil }
         if let d = info.bitDepth, !(1...64).contains(d) { info.bitDepth = nil }
+        info.artist = info.artist ?? info.albumArtist   // M4A with only an album artist: the playlist shows that
         return info
     }
 
@@ -74,6 +113,12 @@ enum TagReader {
         let reader = PositionedReader(fd: fd, head: head)
         if ext == "flac" || head.starts(with: [0x66, 0x4C, 0x61, 0x43]) {
             return parseFLAC(compactFLAC(reader) ?? head)
+        }
+        if head.starts(with: ContainerTags.asfHeader) {   // WMA: listed in the library, not playable
+            return ContainerTags.asf(FileHandle(fileDescriptor: fd, closeOnDealloc: false), fileSize: fileSize)
+        }
+        if head.starts(with: [0x4F, 0x67, 0x67, 0x53]) {   // "OggS": Vorbis (Core Audio plays it)
+            return parseOgg(reader, fileSize: fileSize)
         }
         // Container formats may keep tags/indexes anywhere in the file, so they seek.
         let magic = Array(head.prefix(12))
@@ -249,10 +294,73 @@ enum TagReader {
             case "TITLE": if info.title == nil { info.title = val }
             case "ARTIST": if info.artist == nil { info.artist = val }
             case "ALBUM": if info.album == nil { info.album = val }
-            case let k where k.hasPrefix("REPLAYGAIN_"): info.setReplayGain(key: k, value: val)
-            default: break
+            default: info.setNamed(key: key, value: val)
             }
         }
+    }
+
+    // MARK: Ogg
+
+    /// Ogg Vorbis (or Opus): the identification header for the rate, the comment header for the tags (same
+    /// comment format as FLAC), and the last page's granule position for the length. Pages are read one by
+    /// one, so a comment header with a big embedded cover is cut short instead of read whole.
+    static func parseOgg(_ r: PositionedReader, fileSize: Int64) -> TagInfo {
+        var info = TagInfo()
+        var packets: [[UInt8]] = [], current: [UInt8] = []
+        var p = 0, serial: [UInt8]?
+        let cap = 256 * 1024   // per packet: tags come before the art
+        pages: for _ in 0..<64 {
+            guard let h = r.bytes(p, 27), h.count == 27, h.starts(with: [0x4F, 0x67, 0x67, 0x53]) else { break }
+            if serial == nil { serial = Array(h[14..<18]) }
+            let n = Int(h[26])
+            guard let lacing = r.bytes(p + 27, n), lacing.count == n else { break }
+            var at = p + 27 + n
+            for len in lacing.map(Int.init) {
+                if current.count < cap, let seg = r.bytes(at, len) { current += seg.prefix(cap - current.count) }
+                at += len
+                if len < 255 {
+                    packets.append(current)
+                    current = []
+                    if packets.count == 2 { break pages }
+                }
+            }
+            p = at
+        }
+        if !current.isEmpty, packets.count < 2 { packets.append(current) }   // cut short: parse what we have
+        guard let ident = packets.first else { return info }
+        var rate = 0, preSkip = 0, opus = false
+        if ident.count >= 16, ident.starts(with: [1] + Array("vorbis".utf8)) {
+            rate = le32(ident, 12) ?? 0
+        } else if ident.count >= 16, ident.starts(with: Array("OpusHead".utf8)) {
+            opus = true
+            preSkip = Int(ident[10]) | Int(ident[11]) << 8
+            rate = 48000   // Opus always counts at 48 kHz (the header's rate is the original's)
+        }
+        if rate > 0 { info.sampleRate = opus ? (le32(ident, 12) ?? rate) : rate }
+        if packets.count > 1 {
+            let c = packets[1]
+            let skip = c.starts(with: [3] + Array("vorbis".utf8)) ? 7 : (c.starts(with: Array("OpusTags".utf8)) ? 8 : -1)
+            if skip > 0 { parseVorbisComments(c, skip, c.count, into: &info) }
+        }
+        // Length: the granule position of the last page of this stream, in the tail.
+        let tailSize = Int(min(fileSize, 64 * 1024))
+        if rate > 0, let tail = r.bytes(Int(fileSize) - tailSize, tailSize), tail.count > 27 {
+            var i = tail.count - 27
+            while i >= 0 {
+                if tail[i] == 0x4F, tail[i + 1] == 0x67, tail[i + 2] == 0x67, tail[i + 3] == 0x53,
+                   serial == nil || Array(tail[(i + 14)..<(i + 18)]) == serial! {
+                    var g: Int64 = 0
+                    for k in (0..<8).reversed() { g = g << 8 | Int64(tail[i + 6 + k]) }
+                    if g > 0 {
+                        info.duration = Double(g - Int64(preSkip)) / Double(rate)
+                        info.bitrate = Sane.kbps(bytes: fileSize, seconds: info.duration)
+                    }
+                    break
+                }
+                i -= 1
+            }
+        }
+        return info
     }
 
     // MARK: MP3
@@ -298,7 +406,7 @@ enum TagReader {
                 case "TT2": info.title = decodeText(b, s, e)
                 case "TP1": info.artist = decodeText(b, s, e)
                 case "TAL": info.album = decodeText(b, s, e)
-                default: break
+                default: id3Library(id, b, s, e, into: &info)
                 }
                 p = s + size
             }
@@ -320,13 +428,28 @@ enum TagReader {
                 case "TLEN":
                     if info.duration == nil, let ms = Double(decodeText(b, s, e) ?? "") { info.duration = Sane.duration(ms / 1000) }
                 case "TXXX":
-                    // User text: description\0value (ReplayGain lives here).
+                    // User text: description\0value (ReplayGain, MusicBrainz IDs, release type…).
                     let parts = decodeParts(b, s, e)
-                    if parts.count >= 2 { info.setReplayGain(key: parts[0], value: parts[1]) }
-                default: break
+                    if parts.count >= 2 { info.setNamed(key: parts[0], value: parts[1]) }
+                default: id3Library(id, b, s, e, into: &info)
                 }
             }
             p = s + size
+        }
+    }
+
+    /// The frames only the library uses (v2.2 and v2.3/2.4 IDs).
+    private static func id3Library(_ id: String, _ b: [UInt8], _ s: Int, _ e: Int, into info: inout TagInfo) {
+        switch id {
+        case "TPE2", "TP2": info.albumArtist = info.albumArtist ?? decodeText(b, s, e)
+        case "TDRC", "TYER", "TYE": info.date = decodeText(b, s, e) ?? info.date
+        case "TDOR", "TORY", "TOR": info.originalDate = info.originalDate ?? decodeText(b, s, e)
+        case "TCON", "TCO":
+            let g = decodeParts(b, s, e).map(DetailsReader.genreName)
+            if info.genre == nil, !g.isEmpty { info.genre = g.joined(separator: "; ") }
+        case "TRCK", "TRK": info.trackNumber = decodeText(b, s, e).flatMap(TagInfo.leadingInt)
+        case "TPOS", "TPA": info.discNumber = decodeText(b, s, e).flatMap(TagInfo.leadingInt)
+        default: break
         }
     }
 
