@@ -774,8 +774,14 @@ final class PlayerController {
         NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil)
     }
 
-    /// Web addresses of the episodes with a saved position (started, not finished).
-    var startedEpisodeURLs: [String] { resumePositions.keys.filter { $0.hasPrefix("http") } }
+    /// Web addresses of the episodes you've heard more than 30 s of and not finished: those with a saved
+    /// position (saved on pause, stop, track change and quit), plus the one playing now once it's past 30 s.
+    /// (The live position is read, not saved: no extra writes while playing.)
+    var startedEpisodeURLs: [String] {
+        var urls = resumePositions.keys.filter { $0.hasPrefix("http") }
+        if let t = currentTrack, t.isEpisode, player.isPlayingEpisode, player.currentTime > 30, !urls.contains(t.path) { urls.append(t.path) }
+        return urls
+    }
 
     /// How far into an episode the user got: the live position for the one playing, else the saved one.
     /// nil = not started (or finished). `duration` is nil when only the feed could say.

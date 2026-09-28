@@ -116,13 +116,22 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         progressTimer = nil
     }
 
-    /// While an episode plays, its pie keeps up (every few seconds; nothing runs when the window is closed).
+    /// The playing episode that has been added to Continue listening (once it's past 30 s).
+    private var countedAsStarted: String?
+
+    /// While an episode plays, its pie keeps up, and past 30 s it joins Continue listening (every few seconds;
+    /// nothing runs when the window is closed).
     private func startProgressTimer() {
         guard progressTimer == nil else { return }
         let t = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
             guard let self, self.window?.occlusionState.contains(.visible) == true,
                   self.controller.player.isPlayingEpisode, self.controller.player.state == .playing,
-                  let url = self.controller.currentTrack?.path, let row = self.episodes.firstIndex(where: { $0.url == url }) else { return }
+                  let url = self.controller.currentTrack?.path else { return }
+            if self.controller.player.currentTime > 30, self.countedAsStarted != url {
+                self.countedAsStarted = url
+                self.refreshPinned(Self.continueShow)
+            }
+            guard let row = self.episodes.firstIndex(where: { $0.url == url }) else { return }
             self.episodesTable.reloadData(forRowIndexes: [row], columnIndexes: [0])
             if self.episodesTable.selectedRow == row { self.updateNotes() }
         }
@@ -274,7 +283,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         episodeFilter.target = self
         episodeFilter.action = #selector(episodeFilterChanged)
         episodeFilter.delegate = self
-        episodeFilter.toolTip = "Show only episodes whose title has all these words (⌥⌘F)"
+        episodeFilter.toolTip = "Show only episodes whose title has all these words (⇧⌘F)"
         episodeFilter.setContentHuggingPriority(.defaultLow, for: .horizontal)   // stretches across its row
         unplayedButton = ModernButton(glyph: "", label: "UNPLAYED", target: self, action: #selector(toggleUnplayed))
         unplayedButton.isToggle = true
@@ -429,7 +438,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     // MARK: Keyboard
 
     private enum Key {
-        static let left: UInt16 = 123, right: UInt16 = 124, returnKey: UInt16 = 36, enter: UInt16 = 76, space: UInt16 = 49, escape: UInt16 = 53
+        static let left: UInt16 = 123, right: UInt16 = 124, returnKey: UInt16 = 36, enter: UInt16 = 76, space: UInt16 = 49, escape: UInt16 = 53, tab: UInt16 = 48
     }
 
     private static func plain(_ e: NSEvent) -> Bool { e.modifierFlags.intersection([.command, .control, .option]).isEmpty }
@@ -438,6 +447,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func showsKey(_ e: NSEvent) -> Bool {
         guard Self.plain(e) else { return false }
         switch e.keyCode {
+        case Key.tab: focus(e.modifierFlags.contains(.shift) ? -1 : 1, from: .shows); return true
         case Key.escape: window?.performClose(nil); return true
         case Key.right, Key.returnKey, Key.enter:
             showSelectionWork?.perform()   // open the highlighted show now
@@ -459,6 +469,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func episodesKey(_ e: NSEvent) -> Bool {
         guard Self.plain(e) else { return false }
         switch e.keyCode {
+        case Key.tab: focus(e.modifierFlags.contains(.shift) ? -1 : 1, from: .episodes); return true
         case Key.escape: window?.performClose(nil); return true
         case Key.left: window?.makeFirstResponder(showsTable); return true
         case Key.returnKey, Key.enter: playSelected(); return true
@@ -633,21 +644,58 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     /// In the filter: ↓ or Return moves into the (filtered) list.
+    /// Both search fields: Return or ↓ go to the results; Esc clears the text, and in an empty field goes
+    /// back to the list (Esc steps back one level: field → list → window closed).
     func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
-        // Esc clears a search field first; in an empty one it closes the window (it never does nothing).
-        if sel == #selector(NSResponder.cancelOperation(_:)), (control as? NSTextField)?.stringValue.isEmpty == true {
-            window?.performClose(nil)
-            return true
+        let isFilter = control === episodeFilter
+        guard isFilter || control === search else { return false }
+        func toList() { if isFilter { focusEpisodes() } else { focusShows() } }
+        switch sel {
+        case #selector(NSResponder.insertNewline(_:)):
+            if isFilter { episodeFilterChanged() } else { searchChanged() }   // don't wait for the typing pause
+            toList()
+        case #selector(NSResponder.moveDown(_:)):
+            toList()
+        case #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)):
+            focus(sel == #selector(NSResponder.insertTab(_:)) ? 1 : -1, from: isFilter ? .filter : .search)
+        case #selector(NSResponder.cancelOperation(_:)):
+            if search === control, !search.stringValue.isEmpty { search.stringValue = ""; searchChanged() }
+            else if isFilter, !episodeFilter.stringValue.isEmpty { episodeFilter.stringValue = ""; episodeFilterChanged() }
+            else { toList() }
+        default:
+            return false
         }
-        guard control === episodeFilter else { return false }
-        if sel == #selector(NSResponder.moveDown(_:)) || sel == #selector(NSResponder.insertNewline(_:)) {
-            focusEpisodes()
-            return true
-        }
-        return false
+        return true
     }
 
-    /// ⌥⌘F, or typing in the episode list.
+    /// Tab / ⇧Tab go around a fixed ring: search → shows → episode filter → episodes (AppKit's own key view
+    /// loop gets recalculated by the split and stack views, so it's done here).
+    private enum Stop: Int, CaseIterable { case search, shows, filter, episodes }
+
+    private func focus(_ step: Int, from: Stop) {
+        let all = Stop.allCases
+        let next = all[(from.rawValue + step + all.count) % all.count]
+        switch next {
+        case .search: window?.makeFirstResponder(search)
+        case .shows: focusShows()
+        case .filter: window?.makeFirstResponder(episodeFilter)
+        case .episodes: focusEpisodes()
+        }
+    }
+
+    private func focusShows() {
+        window?.makeFirstResponder(showsTable)
+        if showsTable.selectedRow < 0, !shows.isEmpty { showsTable.selectRowIndexes([0], byExtendingSelection: false) }
+    }
+
+    /// ⌃Tab: TOP ⇄ SUBSCRIBED.
+    func toggleView() {
+        showingSubscriptions.toggle()
+        load()
+        focusShows()
+    }
+
+    /// ⇧⌘F, or typing in the episode list.
     func focusEpisodeFilter(typing text: String? = nil) {
         window?.makeFirstResponder(episodeFilter)
         if let text { episodeFilter.currentEditor()?.insertText(text) }

@@ -211,6 +211,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         podcasts?.focusList()
     }
 
+    @objc private func toggleRadio(_ sender: Any?) {
+        if let w = radio?.window, w.isVisible, w.isKeyWindow { w.performClose(nil) } else { showRadio(nil) }
+    }
+
+    @objc private func togglePodcasts(_ sender: Any?) {
+        if let w = podcasts?.window, w.isVisible, w.isKeyWindow { w.performClose(nil) } else { showPodcasts(nil) }
+    }
+
+    /// ⌃Tab in Radio (POPULAR ⇄ FAVORITES) or Podcasts (TOP ⇄ SUBSCRIBED).
+    @objc private func switchView(_ sender: Any?) {
+        if let p = podcasts, NSApp.keyWindow === p.window { p.toggleView() }
+        else if let r = radio, NSApp.keyWindow === r.window { r.toggleView() }
+        else { NSSound.beep() }
+    }
+
     @objc private func showRadio(_ sender: Any?) {
         if radio == nil { radio = RadioWindowController(controller: controller) }
         radio?.showWindow(nil)
@@ -365,6 +380,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func showClassic(_ sender: Any?) { if mode != .classic || look == nil { showLook(.classic) } }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(switchView(_:)) {
+            let key = NSApp.keyWindow
+            return key != nil && (key === podcasts?.window || key === radio?.window)
+        }
         if item.action == #selector(showModern(_:)) { item.state = mode == .modern ? .on : .off }
         if item.action == #selector(showClassic(_:)) { item.state = mode == .classic ? .on : .off }
         if item.action == #selector(toggleEQ(_:)) { item.state = controller.eqSettings.enabled ? .on : .off }
@@ -786,7 +805,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         editMenu.addItem(.separator())
         editMenu.addItem(withTitle: "Jump to Track…", action: #selector(find(_:)), keyEquivalent: "f").target = self
         let filterItem = editMenu.addItem(withTitle: "Filter Podcast Episodes", action: #selector(filterEpisodes(_:)), keyEquivalent: "f")
-        filterItem.keyEquivalentModifierMask = [.command, .option]
+        filterItem.keyEquivalentModifierMask = [.command, .shift]
         filterItem.target = self
         editItem.submenu = editMenu
         bar.addItem(editItem)
@@ -855,8 +874,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let winItem = NSMenuItem()
         let winMenu = NSMenu(title: "Window")
         winMenu.addItem(withTitle: "Player", action: #selector(showPlayer(_:)), keyEquivalent: "1").target = self
-        winMenu.addItem(withTitle: "Internet Radio", action: #selector(showRadio(_:)), keyEquivalent: "2").target = self
-        winMenu.addItem(withTitle: "Podcasts", action: #selector(showPodcasts(_:)), keyEquivalent: "3").target = self
+        // ⌘2 / ⌘3 toggle: open the window, or close it when it's the one in front.
+        winMenu.addItem(withTitle: "Internet Radio", action: #selector(toggleRadio(_:)), keyEquivalent: "2").target = self
+        winMenu.addItem(withTitle: "Podcasts", action: #selector(togglePodcasts(_:)), keyEquivalent: "3").target = self
+        let switchView = winMenu.addItem(withTitle: "Switch View", action: #selector(switchView(_:)), keyEquivalent: "\t")
+        switchView.keyEquivalentModifierMask = [.control]
+        switchView.target = self
         winMenu.addItem(.separator())
         winMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         winItem.submenu = winMenu

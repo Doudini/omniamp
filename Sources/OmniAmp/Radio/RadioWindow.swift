@@ -213,6 +213,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
         case 36, 76: playSelected(); return true
         case 49: controller.togglePlayPause(); return true
         case 53: window?.performClose(nil); return true
+        case 48: focusSearch(); return true   // Tab / ⇧Tab: list ⇄ search
         default:
             guard let c = e.characters, c.count == 1, c.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) else { return false }
             window?.makeFirstResponder(search)
@@ -221,15 +222,36 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
         }
     }
 
-    /// Esc clears the search first; in an empty field it closes the window.
+    /// The search field: Return searches and goes to the results, ↓ goes to them; Esc clears the text, and in an
+    /// empty field goes back to the list (field → list → window closed).
     func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
-        guard sel == #selector(NSResponder.cancelOperation(_:)), search.stringValue.isEmpty else { return false }
-        window?.performClose(nil)
+        guard control === search else { return false }
+        switch sel {
+        case #selector(NSResponder.insertNewline(_:)):
+            searchChanged()
+            focusList()
+        case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.insertTab(_:)), #selector(NSResponder.insertBacktab(_:)):
+            focusList()
+        case #selector(NSResponder.cancelOperation(_:)):
+            if !search.stringValue.isEmpty { search.stringValue = ""; searchChanged() } else { focusList() }
+        default:
+            return false
+        }
         return true
     }
 
+    /// ⌃Tab: POPULAR ⇄ FAVORITES.
+    func toggleView() {
+        showingFavorites.toggle()
+        load()
+        focusList()
+    }
+
     /// Opened from the menu or ⌘2: start in the station list, so arrows, Return and Esc work right away.
-    func focusList() { window?.makeFirstResponder(table) }
+    func focusList() {
+        window?.makeFirstResponder(table)
+        if table.selectedRow < 0, table.numberOfRows > 0 { table.selectRowIndexes([0], byExtendingSelection: false) }
+    }
 
     /// ⌘F while this window is in front.
     func focusSearch() {
