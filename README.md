@@ -33,7 +33,7 @@ Real Winamp 2.x skins: pixel-exact main, equalizer and playlist windows at 1×�
 
 ## Internet radio
 
-Press **RADIO** (or ⌘⌥R) to browse and search thousands of stations from [radio-browser.info](https://www.radio-browser.info). Filter by genre and country, star your favorites, and add stations to the playlist like any other track. Stations are saved in `.m3u`/`.pls` files along with their logos.
+Press **RADIO** (or ⌘2) to browse and search thousands of stations from [radio-browser.info](https://www.radio-browser.info). Filter by genre and country, star your favorites, and add stations to the playlist like any other track. Stations are saved in `.m3u`/`.pls` files along with their logos.
 - **MP3/AAC/AAC+ (Icecast and SHOUTcast):** play through OmniAmp's own engine, so the EQ and visualizer work. The INFO drawer shows the song currently on air.
 - **HLS and Ogg/Opus:** play through the macOS player.
 - **Your own stations:** **+ URL** adds any stream or `.pls`/`.m3u` link from a station's website to Favorites.
@@ -42,14 +42,21 @@ Press **RADIO** (or ⌘⌥R) to browse and search thousands of stations from [ra
 
 ## Podcasts
 
-Press **PODCASTS** (or ⌘⌥P) to browse the top shows in your country or search the [Apple Podcasts](https://podcasts.apple.com) directory. Pick a show to see its episodes, subscribe to it, and play or add episodes to the playlist like any other track.
-- **Subscriptions:** new episodes are counted under SUBSCRIBED each time you open the window.
-- **Resume:** episodes continue where you stopped, and finished ones are marked as played.
-- **Speed:** 1× to 2× (Controls → Podcast Speed), remembered per show, without changing the pitch.
+Press **PODCASTS** (or ⌘3) to browse the top shows in your country, or search both the [Apple Podcasts](https://podcasts.apple.com) and [fyyd](https://fyyd.de) directories at once. Pick a show to see its episodes, subscribe to it, and play or add episodes to the playlist like any other track.
 
-<p align="center"><img src="docs/podcasts.png" alt="The Podcasts window: top shows with artwork, and the selected show's episodes with dates and lengths" width="700"></p>
+<p align="center"><img src="docs/podcasts.png" alt="The Podcasts window: subscriptions with Continue listening, a show's episodes with thumbnails and played markers, and the show notes pane" width="700"></p>
+
+- **Subscriptions:** new episodes are counted under SUBSCRIBED each time you open the window.
+- **Continue listening:** episodes you've started (more than 30 seconds) are pinned at the top, from any show.
+- **Resume:** episodes continue where you stopped, and finished ones are marked as played.
+- **Show notes:** a resizable pane with the episode's notes and links (⌘I).
+- **Filter:** type to filter a show's episodes by title (⇧⌘F), or show only the ones you haven't played (UNPLAYED, ⇧⌘U).
+- **Downloads:** download episodes to play offline (⌘D). They're kept in a folder you choose in Settings; right-click → Show in Finder.
+- **OPML:** import your subscriptions from another podcast app, or export them as a backup (in the + FEED menu).
+- **Speed:** 1× to 2× (Controls → Podcast Speed), remembered per show, without changing the pitch.
 - **Playback:** episodes stream through the macOS player, so the EQ and visualizer don't apply to them.
 - **Any feed:** **+ FEED** subscribes to shows that aren't in the directory, including private or paid feeds with a personal link.
+- **Keyboard:** arrows move between shows and episodes, Return plays, ⌃Tab switches between top shows and subscriptions.
 
 ## Add URL
 
