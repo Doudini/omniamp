@@ -81,7 +81,7 @@ extension CollectionDB {
                          versions: versions[$0.key]?.n ?? 0) }
         for a in d.releases { d.playedAlbumKinds[Keys.fold(a.title)] = d.playedAlbumKinds[Keys.fold(a.title)] ?? a.kind }
         d.playedAlbums = albumsPlayed.sorted { $0.value.n > $1.value.n }.prefix(12).map { k, v in
-            .init(id: k, label: v.name, value: Double(v.n), detail: d.playedAlbumKinds[k] == nil ? "not in library" : "")
+            .init(id: k, label: v.name, value: Double(v.n))
         }
         // Every month from the first play to the last, empty ones too (a gap is part of the story).
         if let first = d.firstPlay?.date, let last = d.lastPlay {

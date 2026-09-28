@@ -288,7 +288,7 @@ final class SongPage: NSScrollView {
             }
             let other = plays.total - bars.reduce(0) { $0 + Int($1.value) }
             bars.sort { $0.value > $1.value }
-            if other > 0 { bars.append(.init(id: "", label: "other releases", value: Double(other), detail: "not in library")) }
+            if other > 0 { bars.append(.init(id: "", label: "other releases", value: Double(other))) }
             perVersion.bars = Array(bars.prefix(12))
             perVersion.color = { byKey[$0.id].map { Theme.kind($0.kind) } ?? Dash.text3 }
             perVersion.tip = { "\($0.label): \(Int($0.value).formatted()) plays" }

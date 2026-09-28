@@ -13,6 +13,8 @@ class StatsChart: NSView, NSViewToolTipOwner {
     }
     var regions: [Region] = []
     var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
+    /// Grows to fill its card when the row is taller (line and column charts); lists and maps don't.
+    var stretches: Bool { false }
 
     override var isFlipped: Bool { true }
     override init(frame: NSRect) {
@@ -130,8 +132,23 @@ final class BarListChart: StatsChart {
         NSSize(width: NSView.noIntrinsicMetric, height: CGFloat(bars.count) * Self.rowHeight + (footnote == nil ? 0 : 20))
     }
 
-    private var labelWidth: CGFloat { min(bounds.width * 0.4, 200) }
-    private let valueWidth: CGFloat = 120
+    private let nameFont = Dash.font(12.5)
+
+    /// The name column: as wide as the longest name, at most 45% of the width.
+    private var labelWidth: CGFloat {
+        let widest = bars.map { ($0.label as NSString).size(withAttributes: [.font: nameFont]).width }.max() ?? 0
+        return min(widest + 14, bounds.width * 0.45)
+    }
+
+    private func valueText(_ b: LibraryStats.Bar) -> NSAttributedString {
+        let v = NSMutableAttributedString(attributedString: Self.text(format(b.value), 11, Dash.text, bold: true))
+        if let c = b.count { v.append(Self.text(" (\(c.formatted()))", 10.5, Dash.text3)) }
+        if !b.detail.isEmpty { v.append(Self.sans("  " + b.detail, 10.5, Dash.text3)) }
+        return v
+    }
+
+    /// The figures' column: as wide as the widest, so the numbers all start right after the bars.
+    private var valueWidth: CGFloat { min((bars.map { valueText($0).size().width }.max() ?? 0) + 4, bounds.width * 0.4) }
 
     override func layoutRegions() {
         regions = bars.enumerated().map { i, b in
@@ -142,7 +159,8 @@ final class BarListChart: StatsChart {
 
     override func draw(_ dirtyRect: NSRect) {
         let most = max(bars.map(\.value).max() ?? 1, 0.0001)
-        let barX = labelWidth + 10, barW = max(10, bounds.width - barX - valueWidth - 10)
+        let lw = labelWidth, vw = valueWidth
+        let barX = lw + 8, barW = max(10, bounds.width - barX - vw - 10)
         for (i, b) in bars.enumerated() {
             let y = CGFloat(i) * Self.rowHeight
             let hot = hovered == i
@@ -150,16 +168,14 @@ final class BarListChart: StatsChart {
                 Dash.cardRaised.setFill()
                 NSBezierPath(roundedRect: NSRect(x: 0, y: y + 1, width: bounds.width, height: Self.rowHeight - 2), xRadius: 5, yRadius: 5).fill()
             }
-            Self.sans(b.label, 12.5, Dash.text, hot ? .medium : .regular)
-                .draw(with: NSRect(x: 6, y: y + 5, width: labelWidth - 6, height: 17), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            NSAttributedString(string: b.label, attributes: [.font: hot ? Dash.font(12.5, .medium) : nameFont, .foregroundColor: Dash.text])
+                .draw(with: NSRect(x: 6, y: y + 5, width: lw - 6, height: 17), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             // A faint track, then the bar.
             Dash.grid.setFill()
             NSBezierPath(roundedRect: NSRect(x: barX, y: y + 9, width: barW, height: 8), xRadius: 4, yRadius: 4).fill()
             Self.bar(NSRect(x: barX, y: y + 9, width: max(3, barW * CGFloat(b.value / most)), height: 8), color: color?(b), hot: hot, radius: 4)
-            let value = NSMutableAttributedString(attributedString: Self.text(format(b.value), 11, Dash.text, bold: true))
-            if !b.detail.isEmpty { value.append(Self.sans("  " + b.detail, 10.5, Dash.text3)) }
-            value.draw(with: NSRect(x: bounds.width - valueWidth, y: y + 5, width: valueWidth - 4, height: 17),
-                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            valueText(b).draw(with: NSRect(x: barX + barW + 10, y: y + 5, width: vw, height: 17),
+                              options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }
         if let footnote {
             Self.sans(footnote, 11, Dash.text3).draw(at: NSPoint(x: 6, y: CGFloat(bars.count) * Self.rowHeight + 3))
@@ -178,6 +194,7 @@ final class YearsChart: StatsChart {
     var color: NSColor?
     /// A 3-year moving average over the columns.
     var trend = false
+    override var stretches: Bool { true }
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 170) }
 
     private var span: ClosedRange<Int> {
@@ -261,6 +278,7 @@ class AreaChart: StatsChart {
     var color: NSColor?
     /// Axis labels along x: value → text (years by default).
     var xTicks: ((ClosedRange<Double>) -> [(Double, String)])?
+    override var stretches: Bool { true }
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: height) }
 
     private var top: Double { Self.niceMax(points.map(\.y).max() ?? 1) }
@@ -398,14 +416,32 @@ final class DonutChart: StatsChart {
     var center: (value: String, caption: String)?
     var unit = ""
     var onClick: ((Slice) -> Void)?
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: max(150, CGFloat(slices.count) * 22 + 10))
+    /// Beside the ring when the legend fits there, under it otherwise (nothing cut off); the height follows.
+    private var stacked: Bool {
+        let legend = 52 + (slices.map { Self.sans($0.label, 12, Dash.text2).size().width }.max() ?? 0)
+        return bounds.width < 150 + 30 + legend
+    }
+    private static let rowH: CGFloat = 22
+    private lazy var height: NSLayoutConstraint = {
+        let c = heightAnchor.constraint(equalToConstant: 160)
+        c.isActive = true
+        return c
+    }()
+
+    override func layout() {
+        let h = stacked ? min(150, bounds.width * 0.6) + 14 + CGFloat(slices.count) * Self.rowH : max(150, CGFloat(slices.count) * Self.rowH + 10)
+        if bounds.width > 0, abs(height.constant - h) > 0.5 { height.constant = h }
+        super.layout()
     }
 
     /// Two shades of the accent and a neutral: for a two- or three-part split that isn't about kinds.
     static var pair: [NSColor] { [Dash.accent, Dash.accent2, Dash.text3] }
 
     private var ring: (c: NSPoint, r: CGFloat) {
+        if stacked {
+            let d = min(150, bounds.width * 0.6)
+            return (NSPoint(x: bounds.midX, y: d / 2 + 2), d / 2 - 4)
+        }
         let r = min(bounds.height, bounds.width * 0.36) / 2 - 6
         return (NSPoint(x: r + 8, y: bounds.height / 2), r)
     }
@@ -421,21 +457,26 @@ final class DonutChart: StatsChart {
         return out
     }
 
-    override func layoutRegions() {
+    /// Where the legend starts (x) and its first row (y).
+    private var legendOrigin: NSPoint {
         let (c, r) = ring
-        let legendX = c.x + r + 22
+        if stacked {
+            // Centred as a block under the ring.
+            let w = slices.map { 48 + (Self.sans($0.label, 12, Dash.text2).size().width) }.max() ?? 0
+            return NSPoint(x: max(4, (bounds.width - w) / 2), y: c.y + r + 18)
+        }
+        let h = CGFloat(slices.count) * Self.rowH
+        return NSPoint(x: c.x + r + 22, y: (bounds.height - h) / 2 + 2)
+    }
+
+    override func layoutRegions() {
+        let o = legendOrigin
         regions = slices.enumerated().map { i, s in
             let pct = s.value / total * 100
-            return Region(rect: NSRect(x: legendX - 4, y: legendRowY(i) - 3, width: bounds.width - legendX, height: 20),
+            return Region(rect: NSRect(x: o.x - 4, y: o.y + CGFloat(i) * Self.rowH - 3, width: bounds.width - o.x, height: 20),
                           tip: "\(s.label): \(Int(s.value).formatted()) \(unit) · \(String(format: "%.1f", pct))%",
                           action: onClick.map { f in { f(s) } })
         }
-        // The ring itself hovers too (its square, per slice by angle in mouseMoved would be finer; the legend is enough).
-    }
-
-    private func legendRowY(_ i: Int) -> CGFloat {
-        let h = CGFloat(slices.count) * 22
-        return (bounds.height - h) / 2 + CGFloat(i) * 22 + 2
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -456,16 +497,16 @@ final class DonutChart: StatsChart {
             v.draw(at: NSPoint(x: c.x - v.size().width / 2, y: c.y - v.size().height + 2))
             cap.draw(at: NSPoint(x: c.x - cap.size().width / 2, y: c.y + 2))
         }
-        let legendX = c.x + r + 22
+        let o = legendOrigin
         for (i, s) in slices.enumerated() {
-            let y = legendRowY(i)
+            let y = o.y + CGFloat(i) * Self.rowH
             s.color.setFill()
-            NSBezierPath(roundedRect: NSRect(x: legendX, y: y + 3, width: 10, height: 10), xRadius: 3, yRadius: 3).fill()
+            NSBezierPath(roundedRect: NSRect(x: o.x, y: y + 3, width: 10, height: 10), xRadius: 3, yRadius: 3).fill()
             let share = s.value / total * 100
             let pct = Self.text(share > 0 && share < 1 ? "<1%" : String(format: "%.0f%%", share), 11, Dash.text, bold: true)
-            pct.draw(at: NSPoint(x: legendX + 16, y: y))
+            pct.draw(at: NSPoint(x: o.x + 16, y: y))
             Self.sans(s.label, 12, hovered == i ? Dash.text : Dash.text2)
-                .draw(with: NSRect(x: legendX + 48, y: y, width: max(10, bounds.width - legendX - 48), height: 17),
+                .draw(with: NSRect(x: o.x + 48, y: y, width: max(10, bounds.width - o.x - 48), height: 17),
                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }
     }
@@ -672,9 +713,18 @@ final class StatsPanel: NSView {
             // At most: a card stretched to its row's height keeps its content at the top.
             content.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -14),
         ])
-        // Charts are exactly as tall as their content (the page is rebuilt when the figures change).
         let h = content.intrinsicContentSize.height
-        if h > 0 { content.heightAnchor.constraint(equalToConstant: h).isActive = true }
+        if let chart = content as? StatsChart, chart.stretches, h > 0 {
+            // Line and column charts fill the card: at least their own height, as tall as the row makes it.
+            content.heightAnchor.constraint(greaterThanOrEqualToConstant: h).isActive = true
+            content.setContentHuggingPriority(.defaultLow, for: .vertical)
+            let fill = content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14)
+            fill.priority = .init(700)
+            fill.isActive = true
+        } else if h > 0, !(content is DonutChart) {
+            // Everything else is exactly as tall as its content (the page is rebuilt when the figures change).
+            content.heightAnchor.constraint(equalToConstant: h).isActive = true
+        }
         if let calendar = content as? ShowCalendar { calendar.needsLayout = true }
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -862,14 +912,14 @@ final class StatsPage: NSScrollView {
         // Lists in thirds.
         let genres = BarListChart()
         genres.bars = Array(s.genres.prefix(12))
-        genres.tip = { "\($0.label): \(Int($0.value).formatted()) tracks, \($0.detail) · click to open" }
+        genres.tip = { "\($0.label): \(Int($0.value).formatted()) tracks on \(($0.count ?? 0).formatted()) releases · click to open" }
         genres.onClick = { [weak self] in self?.onGenre?($0.id) }
         if s.otherGenres > 0 { genres.footnote = "+ \(s.otherGenres) more genres" }
         let songs = BarListChart()
         songs.bars = s.songs.map { .init(id: $0.artistKey + "\u{1}" + $0.titleKey, label: "\($0.title) — \($0.artist)", value: Double($0.versions),
-                                         detail: $0.unofficial > 0 ? "\($0.unofficial) unoff." : "") }
+                                         count: $0.unofficial > 0 ? $0.unofficial : nil) }
         songs.format = { "\(Int($0))×" }
-        songs.tip = { "\($0.label): on \(Int($0.value)) releases\($0.detail.isEmpty ? "" : ", \($0.detail)") · click to see them all" }
+        songs.tip = { "\($0.label): on \(Int($0.value)) releases\($0.count.map { ", \($0) of them unofficial" } ?? "") · click to see them all" }
         songs.onClick = { [weak self] b in
             let parts = b.id.components(separatedBy: "\u{1}")
             if parts.count == 2 { self?.onSong?(parts[0], parts[1]) }
@@ -877,11 +927,11 @@ final class StatsPage: NSScrollView {
         let artists = BarListChart()
         artists.bars = s.topArtists
         artists.format = { Self.hours($0) }
-        artists.tip = { "\($0.label): \(Self.hours($0.value)) · \($0.detail) · click for the artist page" }
+        artists.tip = { "\($0.label): \(Self.hours($0.value)) on \(($0.count ?? 0).formatted()) releases · click for the artist page" }
         artists.onClick = { [weak self] in self?.onArtist?($0.id) }
-        rows.append(dashGrid([(StatsPanel("Genres", genres, note: s.genres.isEmpty ? "no genre tags yet" : "tracks"), 1),
-                              (StatsPanel("Most versions", songs, note: s.songs.isEmpty ? "none on 3+ releases yet" : "releases"), 1),
-                              (StatsPanel("Most hours of music", artists, note: "by artist"), 1)]))
+        rows.append(dashGrid([(StatsPanel("Genres", genres, note: s.genres.isEmpty ? "no genre tags yet" : "tracks (releases)"), 1),
+                              (StatsPanel("Most versions", songs, note: s.songs.isEmpty ? "none on 3+ releases yet" : "releases (unofficial)"), 1),
+                              (StatsPanel("Most hours", artists, note: "hours (releases)"), 1)]))
 
         let calendar = ShowCalendar()
         calendar.months = s.showMonths

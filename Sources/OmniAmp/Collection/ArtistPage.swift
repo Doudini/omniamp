@@ -289,10 +289,11 @@ final class ArtistPage: NSScrollView {
 
         let top15 = BarListChart()
         top15.bars = d.topSongs.map { .init(id: $0.titleKey, label: $0.title, value: Double($0.plays),
-                                            detail: $0.versions == 0 ? "not in library" : "\($0.versions) version\($0.versions == 1 ? "" : "s")") }
-        top15.tip = { "\($0.label): \(Int($0.value).formatted()) plays · \($0.detail)\($0.detail.hasPrefix("not") ? "" : " · click for every version")" }
+                                            count: $0.versions == 0 ? nil : $0.versions) }
+        top15.tip = { b in "\(b.label): \(Int(b.value).formatted()) plays · "
+            + (b.count.map { "\($0) version\($0 == 1 ? "" : "s") in the library · click to see them" } ?? "not in the library") }
         top15.onClick = { [weak self] b in
-            guard let self, !b.detail.hasPrefix("not") else { return }   // nothing to show for a song not in the library
+            guard let self, b.count != nil else { return }   // nothing to show for a song not in the library
             self.onSong?(self.dash.key, b.id)
         }
         let recorded = BarListChart()
@@ -308,7 +309,7 @@ final class ArtistPage: NSScrollView {
         }
         kinds.center = (d.releases.count.formatted(), d.releases.count == 1 ? "release" : "releases")
         kinds.unit = "releases"
-        var thirds: [(NSView, Int)] = [(StatsPanel("Your top songs", top15, note: d.topSongs.isEmpty ? "no last.fm plays yet" : "plays"), 1)]
+        var thirds: [(NSView, Int)] = [(StatsPanel("Your top songs", top15, note: d.topSongs.isEmpty ? "no last.fm plays yet" : "plays (versions you own)"), 1)]
         if !d.mostRecorded.isEmpty { thirds.append((StatsPanel("Most versions", recorded, note: "recordings"), 1)) }
         if !d.releases.isEmpty { thirds.append((StatsPanel("What you own of them", kinds, note: "by kind"), 1)) }
         if thirds.count == 1 { thirds[0].1 = 3 } else if thirds.count == 2 { thirds[0].1 = 2 }
@@ -318,7 +319,7 @@ final class ArtistPage: NSScrollView {
         albums.bars = d.playedAlbums
         // Owned: its kind's color; not in the library: neutral (never a kind's color).
         albums.color = { [kinds = d.playedAlbumKinds] in kinds[$0.id].map(Theme.kind) ?? Dash.text3 }
-        albums.tip = { "\($0.label): \(Int($0.value).formatted()) plays\($0.detail.isEmpty ? "" : " · \($0.detail)")" }
+        albums.tip = { [kinds = d.playedAlbumKinds] b in "\(b.label): \(Int(b.value).formatted()) plays\(kinds[b.id] == nil ? " · not in the library" : "")" }
         var last: [(NSView, Int)] = []
         if !d.playedAlbums.isEmpty { last.append((StatsPanel("Albums you play most", albums, note: "plays, by the release last.fm saw"), 2)) }
         if !d.showsPerYear.isEmpty {

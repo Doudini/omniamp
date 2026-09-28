@@ -159,16 +159,15 @@ extension CollectionDB {
         try db.query("SELECT artist_key, sum(tracks) FROM albums GROUP BY artist_key") { owned[$0.text(0)] = $0.int(1) }
         try db.query("SELECT artist_key, min(artist), count(*) AS n FROM scrobbles GROUP BY artist_key ORDER BY n DESC LIMIT 400") { r in
             let key = r.text(0), n = r.int(2)
-            let bar = LibraryStats.Bar(id: key, label: r.text(1), value: Double(n),
-                                       detail: owned[key].map { "\($0.formatted()) owned" } ?? "not in library")
+            let bar = LibraryStats.Bar(id: key, label: r.text(1), value: Double(n), count: owned[key])
             if s.topArtists.count < 15 { s.topArtists.append(bar) }
-            if owned[key] == nil, s.notOwned.count < 15, !["unknown artist", "various artists"].contains(key) { s.notOwned.append(bar) }
+            if bar.count == nil, s.notOwned.count < 15, !["unknown artist", "various artists"].contains(key) { s.notOwned.append(bar) }
         }
         try db.query("""
             SELECT a.artist_key, min(a.artist), sum(a.tracks) AS t FROM albums a
             WHERE a.artist_key NOT IN (SELECT DISTINCT artist_key FROM scrobbles) AND a.artist_key NOT IN ('unknown artist', 'various artists')
             GROUP BY a.artist_key ORDER BY t DESC LIMIT 15
-            """) { r in s.neverPlayed.append(.init(id: r.text(0), label: r.text(1), value: Double(r.int(2)), detail: "tracks")) }
+            """) { r in s.neverPlayed.append(.init(id: r.text(0), label: r.text(1), value: Double(r.int(2)))) }
 
         try db.query("SELECT CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER), count(*) FROM scrobbles GROUP BY 1 ORDER BY 1") { r in
             s.years.append((r.int(0), r.int(1)))
@@ -236,8 +235,7 @@ extension CollectionDB {
             SELECT artist_key, min(artist), count(*) AS n FROM scrobbles WHERE ts >= ? AND ts < ?
             GROUP BY artist_key ORDER BY n DESC LIMIT ?
             """, [from ?? 0, to ?? Int.max, limit]) { r in
-            out.append(.init(id: r.text(0), label: r.text(1), value: Double(r.int(2)),
-                             detail: owned[r.text(0)].map { "\($0.formatted()) owned" } ?? "not in library"))
+            out.append(.init(id: r.text(0), label: r.text(1), value: Double(r.int(2)), count: owned[r.text(0)]))
         }
         return out
     }

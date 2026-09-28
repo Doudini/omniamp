@@ -6,7 +6,9 @@ struct LibraryStats: Sendable {
         let id: String       // what a click opens (a genre, an artist key, a year…)
         let label: String
         let value: Double
-        var detail = ""      // a second, quieter figure ("312 releases")
+        var detail = ""      // a quieter note ("longest · FLAC")
+        /// A second figure, shown as "(312)" after the value; the card's note says what it counts.
+        var count: Int? = nil
     }
 
     struct Song: Sendable, Equatable {
@@ -53,14 +55,14 @@ extension CollectionDB {
         var byKind: [Int: (Int, Int)] = [:]
         try db.query("SELECT a.kind, count(*), sum(a.tracks) FROM albums a WHERE \(f) GROUP BY a.kind") { r in byKind[r.int(0)] = (r.int(1), r.int(2)) }
         s.kinds = ReleaseKind.allCases.compactMap { k in
-            byKind[k.rawValue].map { LibraryStats.Bar(id: String(k.rawValue), label: k.title, value: Double($0.0), detail: "\($0.1.formatted()) tracks") }
+            byKind[k.rawValue].map { LibraryStats.Bar(id: String(k.rawValue), label: k.title, value: Double($0.0), count: $0.1) }
         }
 
         var genres: [LibraryStats.Bar] = []
         try db.query("""
             SELECT min(g.genre), count(DISTINCT f.id) AS n, count(DISTINCT a.key) FROM genres g JOIN files f ON f.id = g.file_id
             JOIN albums a ON a.key = f.album_key WHERE \(f) GROUP BY g.genre ORDER BY n DESC
-            """) { r in genres.append(.init(id: r.text(0), label: r.text(0), value: Double(r.int(1)), detail: "\(r.int(2).formatted()) releases")) }
+            """) { r in genres.append(.init(id: r.text(0), label: r.text(0), value: Double(r.int(1)), count: r.int(2))) }
         s.genres = Array(genres.prefix(14))
         s.otherGenres = genres.dropFirst(14).count
 
@@ -116,7 +118,7 @@ extension CollectionDB {
             GROUP BY a.artist_key ORDER BY d DESC LIMIT 12
             """) { r in
             s.topArtists.append(.init(id: r.text(0), label: r.text(1), value: r.double(2) / 3600,
-                                      detail: "\(r.int(4).formatted()) releases"))
+                                      count: r.int(4)))
         }
         return s
     }

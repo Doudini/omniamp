@@ -384,9 +384,10 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         countries.bars = source.sorted { $0.value > $1.value }.prefix(12).map {
             let n = (showOwned ? s.ownedArtistsByCountry : s.playedArtistsByCountry)[$0.key] ?? 0
             return .init(id: $0.key, label: "\(Self.flag($0.key))  \(Self.countryName($0.key))", value: $0.value,
-                         detail: "\(n) artist\(n == 1 ? "" : "s")")
+                         count: n)
         }
-        countries.tip = { "\($0.label): \(Int($0.value).formatted()) · click for its artists" }
+        let unit = showOwned ? "tracks" : "plays"
+        countries.tip = { b in "\(b.label): \(Int(b.value).formatted()) \(unit) by \(b.count ?? 0) artist\(b.count == 1 ? "" : "s") · click for its artists" }
         countries.onClick = { [weak self] b in self?.select(iso: b.id, name: b.label) }
         countryPanelTitle.font = Dash.font(13)
         let artistsColumn = NSStackView(views: [countryPanelTitle, countryArtists])
@@ -398,7 +399,7 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         split.alignment = .top
         split.distribution = .fillEqually
         split.spacing = 28
-        rows.append(dashGrid([(panel("Top countries", split, note: "click a country for its artists"), 3)]))
+        rows.append(dashGrid([(panel("Top countries", split, note: "\(showOwned ? "tracks" : "plays") (artists) · click a country for its artists"), 3)]))
         loadCountry()
 
         // 6. Nice to know: gaps in the library, and this day in other years.
@@ -444,7 +445,8 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         yearMenu.toolTip = "Your most played artists of one year"
         let controls = NSStackView(views: periodPills.map(\.0) + [yearMenu])
         controls.spacing = 6
-        topChart.tip = { "\($0.label): \(Int($0.value).formatted()) plays · \($0.detail) · click for the artist page" }
+        topChart.tip = { b in "\(b.label): \(Int(b.value).formatted()) plays · "
+            + (b.count.map { "\($0.formatted()) tracks in the library" } ?? "not in the library") + " · click for the artist page" }
         topChart.onClick = { [weak self] b in self?.onArtist?(b.id) }
         periodNote.font = Dash.font(11)
         periodNote.textColor = Dash.text3
@@ -455,7 +457,7 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         topChart.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
         updatePeriodControls()
         loadTop()
-        return StatsPanel("Most played artists", body)
+        return StatsPanel("Most played artists", body, note: "plays (tracks you own)")
     }
 
     private func updatePeriodControls() {
