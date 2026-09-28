@@ -250,8 +250,8 @@ final class ClassicMainView: SkinCanvasView {
         // Time: when the second changes, or the pause blink flips.
         let t = showRemaining ? max(0, c.player.duration - c.player.currentTime) : c.player.currentTime
         let blink = c.player.state == .paused && Int(animationTime * 2) % 2 == 1
-        if Int(t) != drawnSecond || blink != drawnBlink {
-            drawnSecond = Int(t); drawnBlink = blink
+        if Sane.int(t) != drawnSecond || blink != drawnBlink {
+            drawnSecond = Sane.int(t); drawnBlink = blink
             invalidate(CGRect(x: 36, y: 26, width: 63, height: 13))
         }
 
@@ -411,7 +411,7 @@ final class ClassicMainView: SkinCanvasView {
         let nums = skin.has("nums_ex") ? "nums_ex" : "numbers"
         var t = c.player.currentTime
         if showRemaining { t = max(0, c.player.duration - t) }
-        let secs = Int(t)
+        let secs = max(0, Sane.int(t))
         let m = min(secs / 60, 99), sec = secs % 60
         func digit(_ d: Int, _ x: CGFloat) {
             skin.draw(nums, CGRect(x: d * 9, y: 0, width: 9, height: 13), at: CGPoint(x: x, y: 26), in: ctx)

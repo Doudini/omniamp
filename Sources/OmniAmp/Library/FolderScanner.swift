@@ -10,6 +10,15 @@ enum FolderScanner {
         return out
     }
 
+    /// Also returns the folders that couldn't be listed (permission denied, network error…): their contents
+    /// are unknown, which is not the same as empty.
+    static func scan(_ urls: [URL], unreadable: inout [String]) -> [Track] {
+        var out: [Track] = [], failed: [String] = []
+        scan(urls, batch: { out += $0 }, unreadable: { failed.append($0) })
+        unreadable += failed
+        return out
+    }
+
     /// Only keys a directory listing delivers in bulk: on NFS/SMB, `isPackage` or `isHidden` cost a round trip
     /// per file (0.45 s instead of 0.005 s for a 127-file folder). Hidden files are skipped by the listing;
     /// the package check is asked of folders only.
@@ -19,7 +28,7 @@ enum FolderScanner {
     /// Walks `urls` and hands over tracks as they are found, one folder at a time and in playlist order, so a
     /// big (or network) library starts showing up at once instead of after the whole tree has been read.
     /// Folders are listed with their file attributes in one request each (fast on NFS/SMB too).
-    static func scan(_ urls: [URL], batch emit: ([Track]) -> Void) {
+    static func scan(_ urls: [URL], batch emit: ([Track]) -> Void, unreadable: ((String) -> Void)? = nil) {
         func track(_ url: URL, _ v: URLResourceValues?) -> Track {
             Track(path: url.path, size: Int64(v?.fileSize ?? 0), mtime: v?.contentModificationDate?.timeIntervalSince1970 ?? 0)
         }
@@ -44,7 +53,10 @@ enum FolderScanner {
                 guard visited.insert(listFrom.path).inserted else { return }
             }
             guard let listed = try? FileManager.default.contentsOfDirectory(at: listFrom, includingPropertiesForKeys: keys,
-                                                                          options: [.skipsHiddenFiles]) else { return }
+                                                                          options: [.skipsHiddenFiles]) else {
+                unreadable?(dir.path)
+                return
+            }
             let items = linked ? listed.map { dir.appendingPathComponent($0.lastPathComponent) } : listed
             var files: [Track] = [], cues: [URL] = [], subdirs: [(url: URL, linked: Bool)] = []
             for url in items {

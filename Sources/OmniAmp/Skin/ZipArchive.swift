@@ -8,11 +8,17 @@ struct ZipArchive {
     /// Entries keyed by lowercase file name (directories stripped).
     private(set) var entries: [String: Data] = [:]
 
-    init(url: URL) throws {
-        try self.init(data: Data(contentsOf: url, options: .mappedIfSafe))
+    /// Limits against crafted archives ("zip bombs"): many entries pointing at the same data can unpack a
+    /// 66 KB file to gigabytes. Real skins are a few MB.
+    static let maxTotalBytes = 64 * 1024 * 1024
+    static let maxEntries = 4096
+
+    /// `only`: unpack just these extensions (lowercase), skipping everything else unread.
+    init(url: URL, only: Set<String>? = nil) throws {
+        try self.init(data: Data(contentsOf: url, options: .mappedIfSafe), only: only)
     }
 
-    init(data: Data) throws {
+    init(data: Data, only: Set<String>? = nil) throws {
         let b = [UInt8](data)
         func u16(_ i: Int) -> Int { i + 2 <= b.count ? Int(b[i]) | Int(b[i + 1]) << 8 : 0 }
         func u32(_ i: Int) -> Int { i + 4 <= b.count ? u16(i) | u16(i + 2) << 16 : 0 }
@@ -26,7 +32,10 @@ struct ZipArchive {
         }
         guard eocd >= 0 else { throw ZipError.notZip }
         let count = u16(eocd + 10)
+        guard count <= Self.maxEntries else { throw ZipError.corrupt }
         var p = u32(eocd + 16)
+        var total = 0
+        var usedOffsets = Set<Int>()
 
         for _ in 0..<count {
             guard p + 46 <= b.count, u32(p) == 0x0201_4B50 else { throw ZipError.corrupt }
@@ -39,10 +48,15 @@ struct ZipArchive {
             p += 46 + nameLen + extraLen + commentLen
 
             guard !name.hasSuffix("/"), u32(localOffset) == 0x0403_4B50 else { continue }
+            let key = (name.replacingOccurrences(of: "\\", with: "/") as NSString).lastPathComponent.lowercased()
+            if let only, !only.contains((key as NSString).pathExtension) { continue }
+            // Each entry has its own data; the first of two same-named files wins.
+            guard usedOffsets.insert(localOffset).inserted, entries[key] == nil else { continue }
+            total += method == 0 ? compSize : size
+            guard total <= Self.maxTotalBytes else { throw ZipError.corrupt }
             let start = localOffset + 30 + u16(localOffset + 26) + u16(localOffset + 28)
             guard start + compSize <= b.count else { throw ZipError.corrupt }
             let raw = data.subdata(in: (data.startIndex + start)..<(data.startIndex + start + compSize))
-            let key = (name.replacingOccurrences(of: "\\", with: "/") as NSString).lastPathComponent.lowercased()
             switch method {
             case 0: entries[key] = raw
             case 8: entries[key] = try Self.inflate(raw, size: size)

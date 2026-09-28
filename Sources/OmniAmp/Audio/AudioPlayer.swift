@@ -37,11 +37,12 @@ final class AudioPlayer {
             self.url = url
             let sr = file.processingFormat.sampleRate
             let len = file.length
-            let ts = min(max(0, AVAudioFramePosition((range?.start ?? 0) * sr)), max(0, len - 1))
-            let te = range?.end.map { min(len, max(ts + 1, AVAudioFramePosition($0 * sr))) } ?? len
+            // Times come from CUE sheets and playlists: only believable ones become frame positions.
+            let ts = min(max(0, AVAudioFramePosition((Sane.offset(range?.start) ?? 0) * sr)), max(0, len - 1))
+            let te = Sane.offset(range?.end).map { min(len, max(ts + 1, AVAudioFramePosition($0 * sr))) } ?? len
             trackStart = ts
             trackEnd = te
-            startFrame = min(ts + AVAudioFramePosition(max(0, offset) * sr), max(ts, te - 1))
+            startFrame = min(ts + AVAudioFramePosition((Sane.offset(offset) ?? 0) * sr), max(ts, te - 1))
         }
     }
     private var nextItemID = 1
@@ -65,6 +66,8 @@ final class AudioPlayer {
     /// After we switch the device rate, the engine reports a configuration change a moment later and stops.
     /// Playback waits for that (or a timeout) instead of starting and then stuttering on the restart.
     private var awaitingRateSettle = false
+    /// Which wait a settle timeout belongs to (the play generation changes too often to tell).
+    private var settleToken = 0
     /// Playback clock kept on the host clock. Never ask the engine (`lastRenderTime`) from the main thread:
     /// during a device reconfiguration that call waits for an IO cycle while holding the engine lock, and the
     /// engine's own reconfiguration handler needs that lock → deadlock (silent, frozen UI, slow quit).
@@ -158,6 +161,9 @@ final class AudioPlayer {
     private var streamURL: URL?
     private var streamStarted = false
     private var reconnects = 0
+    /// When the current connection started playing (nil until it does). Per connection: the retry budget
+    /// comes back only after a connection that really played a while, not after each failed attempt.
+    private var connectionPlayingSince: CFTimeInterval?
     /// True while waiting for enough audio (start, or after the connection stalled).
     private(set) var isBuffering = false { didSet { if isBuffering != oldValue { onStreamChange?() } } }
     var isStreaming: Bool { stream != nil || systemPlayer != nil }
@@ -336,6 +342,7 @@ final class AudioPlayer {
         let src = StreamSource(url: url)
         stream = src
         streamFormat = nil
+        connectionPlayingSince = nil
         streamStarted = false
         // Per connection: completions of an earlier connection's buffers must not count against this one.
         let bufferedFrames = OSAllocatedUnfairLock(initialState: AVAudioFramePosition(0))
@@ -378,6 +385,7 @@ final class AudioPlayer {
                     self.startEngineIfNeeded()
                     guard self.playNode() else { return }
                     self.clockStart = CACurrentMediaTime()
+                    self.connectionPlayingSince = CACurrentMediaTime()
                 }
                 self.isBuffering = false
             }
@@ -394,7 +402,7 @@ final class AudioPlayer {
                 guard let self, self.stream === src, self.state == .playing else { return }
                 // Dropped connection: retry a few times before giving up. A connection that played for a
                 // while earns the retries back (a long session can see several unrelated drops).
-                if let t = self.clockStart, CACurrentMediaTime() - t > 60 { self.reconnects = 0 }
+                if let t = self.connectionPlayingSince, CACurrentMediaTime() - t > 60 { self.reconnects = 0 }
                 if self.reconnects < 3, let u = self.streamURL {
                     self.reconnects += 1
                     NSLog("OmniAmp: stream ended (%@), reconnecting (%d/3)", error?.localizedDescription ?? "closed", self.reconnects)
@@ -681,6 +689,7 @@ final class AudioPlayer {
         stopNode()
         stopStream()
         upcoming = nil
+        awaitingRateSettle = false   // a new track: any earlier wait is over (a new one starts below if needed)
         let file: AVAudioFile
         do {
             file = try AVAudioFile(forReading: url)
@@ -722,11 +731,12 @@ final class AudioPlayer {
     private func awaitSettle() {
         dlog("awaitSettle")
         awaitingRateSettle = true
-        let gen = generation
+        settleToken += 1
+        let token = settleToken
         // OMNIAMP_SETTLE_TIMEOUT (test hook) shortens the wait to force the timeout path.
         let wait = ProcessInfo.processInfo.environment["OMNIAMP_SETTLE_TIMEOUT"].flatMap(Double.init) ?? 0.8
         DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
-            guard let self, self.awaitingRateSettle, self.generation == gen else { return }
+            guard let self, self.awaitingRateSettle, self.settleToken == token else { return }
             dlog("settle timeout → start")
             self.settleComplete()
         }
@@ -737,6 +747,8 @@ final class AudioPlayer {
     private func settleComplete() {
         awaitingRateSettle = false
         if engine.isRunning { engine.stop() }
+        // Stopping the engine drops everything scheduled: a queued gapless track has to be queued again.
+        if upcoming != nil { upcoming = nil; onPreloadDropped?() }
         bindOutputUnit()
         rebuildGraph()
         if let f = current?.file { connect(format: f.processingFormat) }
@@ -748,7 +760,8 @@ final class AudioPlayer {
     /// (different sample rate / channel count, unreadable), in which case the normal end-of-track path is used.
     @discardableResult
     func queueNext(url: URL, range: (start: Double, end: Double?)? = nil) -> Bool {
-        guard let c = current, upcoming == nil, state != .stopped else { return false }
+        // Not while the device settles: the restart that follows would drop it, and it could land first.
+        guard let c = current, upcoming == nil, state != .stopped, !awaitingRateSettle else { return false }
         guard let file = try? AVAudioFile(forReading: url) else { return false }
         let a = file.processingFormat, b = c.file.processingFormat
         guard a.sampleRate == b.sampleRate, a.channelCount == b.channelCount, a.commonFormat == b.commonFormat else { return false }
@@ -820,7 +833,7 @@ final class AudioPlayer {
         if let u = streamURL, !isStreaming { playStream(url: u); return }
         if !engine.isRunning, var c = current {
             // The engine idled out while paused and dropped the schedule: start again where we paused.
-            c.startFrame = min(c.trackStart + AVAudioFramePosition(clockBase * c.sampleRate), max(c.trackStart, c.trackEnd - 1))
+            c.startFrame = min(c.trackStart + AVAudioFramePosition((Sane.offset(clockBase) ?? 0) * c.sampleRate), max(c.trackStart, c.trackEnd - 1))
             current = c
             stopNode()
             state = .playing
@@ -854,7 +867,7 @@ final class AudioPlayer {
         guard !isStreaming, var c = current else { return }   // live radio can't seek
         awaitingRateSettle = false
         let wasPaused = state == .paused
-        let frame = c.trackStart + AVAudioFramePosition(max(0, min(seconds, duration)) * c.sampleRate)
+        let frame = c.trackStart + AVAudioFramePosition((Sane.offset(min(seconds, duration)) ?? 0) * c.sampleRate)
         stopNode()
         upcoming = nil
         c.startFrame = min(frame, max(c.trackStart, c.trackEnd - 1))

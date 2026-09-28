@@ -3,12 +3,15 @@ import Foundation
 /// OPML, the file podcast apps use to move subscriptions: `<outline type="rss" text="…" xmlUrl="…"/>`, often
 /// grouped in folders (nested outlines). Reading is forgiving: any outline with a feed address counts.
 enum PodcastOPML {
-    static func read(_ data: Data) -> [PodcastShow] {
+    static func read(_ data: Data) -> [PodcastShow] { parse(data).shows }
+
+    /// `complete` is false when the file is damaged and reading stopped early (the shows before it are kept).
+    static func parse(_ data: Data) -> (shows: [PodcastShow], complete: Bool) {
         let r = Reader()
-        let x = XMLParser(data: data)
+        let x = XMLParser(data: XMLRepair.repair(data))
         x.delegate = r
-        x.parse()
-        return r.shows
+        let ok = x.parse()
+        return (r.shows, ok)
     }
 
     private final class Reader: NSObject, XMLParserDelegate {

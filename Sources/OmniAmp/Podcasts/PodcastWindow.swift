@@ -1044,8 +1044,11 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Subscribe to every show in an OPML file (also when one is opened from Finder).
     func importOPML(_ url: URL) {
         guard let data = try? Data(contentsOf: url) else { status.stringValue = "Couldn't read \(url.lastPathComponent)."; return }
-        let list = PodcastOPML.read(data)
-        guard !list.isEmpty else { status.stringValue = "No podcasts found in \(url.lastPathComponent)."; return }
+        let (list, complete) = PodcastOPML.parse(data)
+        guard !list.isEmpty else {
+            status.stringValue = complete ? "No podcasts found in \(url.lastPathComponent)." : "\(url.lastPathComponent) isn't a readable OPML file."
+            return
+        }
         let added = library.subscribe(list)
         showingSubscriptions = true
         search.stringValue = ""
@@ -1058,7 +1061,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
                 for s in list { group.addTask { _ = try? await PodcastLibrary.shared.episodes(s) } }
             }
             if showingSubscriptions { load() }
-            status.stringValue = "Imported \(added) show\(added == 1 ? "" : "s")" + (already > 0 ? " (\(already) already subscribed)" : "") + "."
+            status.stringValue = "Imported \(added) show\(added == 1 ? "" : "s")" + (already > 0 ? " (\(already) already subscribed)" : "")
+                + (complete ? "." : ". The file is damaged part-way: some shows may be missing.")
         }
     }
 

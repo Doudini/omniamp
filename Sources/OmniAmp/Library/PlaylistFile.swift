@@ -60,7 +60,7 @@ enum PlaylistFile {
             if ref.hasPrefix("http://") || ref.hasPrefix("https://") {   // radio or podcast
                 return URL(string: ref).map {
                     Entry(url: $0, title: title, logo: Self.attribute("tvg-logo", in: h), podcast: Self.attribute("omniamp-podcast", in: h),
-                          seconds: Double(h.split(separator: " ").first ?? "").flatMap { $0 > 0 ? $0 : nil })
+                          seconds: Sane.duration(Double(h.split(separator: " ").first ?? "")))
                 }
             }
             let u: URL
@@ -75,8 +75,8 @@ enum PlaylistFile {
             var e = Entry(url: u, title: title)
             if let cue = Self.attribute("omniamp-cue", in: h) {
                 let f = cue.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-                e.cueStart = f.first.flatMap(Double.init)
-                e.cueEnd = f.count > 1 ? Double(f[1]) : nil
+                e.cueStart = Sane.offset(f.first.flatMap(Double.init))
+                e.cueEnd = f.count > 1 ? Sane.offset(Double(f[1])) : nil
                 e.cueNumber = f.count > 2 ? Int(f[2]) : nil
             }
             return e
@@ -106,7 +106,7 @@ enum PlaylistFile {
         var out = "#EXTM3U\n"
         out.reserveCapacity(tracks.count * 120)
         for t in tracks {
-            let secs = t.duration.map { Int($0.rounded()) } ?? -1
+            let secs = Sane.duration(t.duration).map { Int($0.rounded()) } ?? -1
             let logo = t.logo.map { " tvg-logo=\"\($0)\"" } ?? ""
             let show = t.podcast.map { " omniamp-podcast=\"\($0.replacingOccurrences(of: "\"", with: "'"))\"" } ?? ""
             let cue = t.cueStart.map { " omniamp-cue=\"\($0),\(t.cueEnd.map { String($0) } ?? ""),\(t.cueNumber ?? 0)\"" } ?? ""

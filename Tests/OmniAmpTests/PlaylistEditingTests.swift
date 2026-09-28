@@ -91,3 +91,21 @@ final class PlaylistEditingTests: XCTestCase {
         XCTAssertEqual(names(c.store), ["short", "long", "none"])
     }
 }
+
+final class UnplayableLoopTests: XCTestCase {
+    func testAPlaylistOfMissingFilesStopsAfterOneRound() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-unplayable-\(UUID().uuidString)")
+        setenv("OMNIAMP_CACHE_DIR", dir.path, 1)
+        defer { unsetenv("OMNIAMP_CACHE_DIR"); try? FileManager.default.removeItem(at: dir) }
+        let c = PlayerController()
+        c.store.restore((0..<3).map { var t = Track(path: "/Volumes/Gone-\(UUID().uuidString)/\($0).mp3", size: 1, mtime: 0); t.tagsLoaded = true; return t })
+        if !c.repeatAll { c.toggleRepeat() }
+        c.play(index: 0)
+        let settled = expectation(description: "stops")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { settled.fulfill() }
+        wait(for: [settled], timeout: 3)
+        XCTAssertEqual(c.player.state, .stopped)
+        XCTAssertNotNil(c.playbackProblem, "says why")
+        XCTAssertTrue(c.statusText.hasPrefix("Stopped"))
+    }
+}

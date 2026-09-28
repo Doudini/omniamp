@@ -190,3 +190,26 @@ final class PodcastTests: XCTestCase {
         return try result.get()
     }
 }
+
+final class PlayedPruningTests: XCTestCase {
+    func testOldestMarksGoFirstAndNewOnesStay() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-played-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // An older build's list (no dates), already long.
+        let old = (0..<20_500).map { "https://old.example.com/\($0).mp3" }
+        try JSONEncoder().encode(old).write(to: dir.appendingPathComponent("played.json"))
+        let lib = PodcastLibrary(directory: dir)
+        XCTAssertTrue(lib.isPlayed(old[0]), "the old format still loads")
+
+        let fresh = (0..<50).map { "https://new.example.com/\($0).mp3" }
+        lib.markPlayed(fresh)
+        lib.markPlayed("https://new.example.com/single.mp3")
+        XCTAssertTrue(fresh.allSatisfy { lib.isPlayed($0) }, "what was just marked is never the part that's dropped")
+        XCTAssertTrue(lib.isPlayed("https://new.example.com/single.mp3"))
+        XCTAssertLessThan(old.filter { lib.isPlayed($0) }.count, old.count, "the list was trimmed, from the old end")
+
+        let again = PodcastLibrary(directory: dir)
+        XCTAssertTrue(again.isPlayed("https://new.example.com/single.mp3"), "saved with dates")
+    }
+}

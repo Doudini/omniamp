@@ -314,10 +314,10 @@ final class PlaylistStore {
                 tracks[i].artist = tracks[i].artist ?? info.artist
                 tracks[i].album = tracks[i].album ?? info.album
                 let end = tracks[i].cueEnd ?? info.duration
-                tracks[i].duration = end.map { max(0, $0 - start) }
+                tracks[i].duration = Sane.duration(end.map { $0 - start })
                 // The bitrate belongs to the whole file, not to this slice of it.
-                if let whole = info.duration, whole > 0 {
-                    tracks[i].bitrate = info.bitrate ?? Int(Double(tracks[i].size) * 8 / whole / 1000)
+                if Sane.duration(info.duration) != nil {
+                    tracks[i].bitrate = info.bitrate ?? Sane.kbps(bytes: tracks[i].size, seconds: info.duration)
                 }
             } else {
                 tracks[i].title = info.title

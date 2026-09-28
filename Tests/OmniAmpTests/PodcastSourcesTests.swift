@@ -123,3 +123,63 @@ final class PodcastSourcesTests: XCTestCase {
         XCTAssertEqual(net.requests.count, 3, "the same search again is instant")
     }
 }
+
+final class FeedRobustnessTests: XCTestCase {
+    func testRepairMakesSloppyFeedsParse() {
+        let xml = """
+        <rss><channel><title>Tom &amp; Jerry&nbsp;Show</title>
+        <item><title>Part 1 &hellip; the start</title><enclosure url="https://e.com/1.mp3?a=1&b=2" type="audio/mpeg"/>
+          <description><![CDATA[<p>Keep &nbsp; literally & fine</p>]]></description></item>
+        <item><title>R&D &unknown; stuff</title><enclosure url="https://e.com/2.mp3" type="audio/mpeg"/></item>
+        </channel></rss>
+        """
+        let p = PodcastFeedParser.parse(Data(xml.utf8))
+        XCTAssertFalse(p.failed)
+        XCTAssertEqual(p.title, "Tom & Jerry\u{A0}Show")
+        XCTAssertEqual(p.episodes.map(\.title), ["Part 1 … the start", "R&D &unknown; stuff"])
+        XCTAssertEqual(p.episodes.first?.url, "https://e.com/1.mp3?a=1&b=2")
+        XCTAssertEqual(p.episodes.first?.summary, "Keep literally & fine", "CDATA left alone: the notes cleanup turns &nbsp; into a space itself")
+    }
+
+    func testBrokenResponseKeepsTheSavedEpisodes() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-feedkeep-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        final class Switch: HTTPTransport, @unchecked Sendable {
+            var body = ""
+            func send(_ req: URLRequest) async throws -> (Data, Int) { (Data(body.utf8), 200) }
+        }
+        let net = Switch()
+        let lib = PodcastLibrary(directory: dir)
+        lib.transport = net
+        let show = PodcastShow(feedURL: "https://example.com/feed", title: "S", author: "")
+        net.body = #"<rss><channel><title>S</title><item><title>E1</title><enclosure url="https://e.com/1.mp3" type="audio/mpeg"/></item></channel></rss>"#
+
+        func fetch() -> Result<[PodcastEpisode], Error> {
+            let done = expectation(description: "feed")
+            var r: Result<[PodcastEpisode], Error>!
+            Task { @MainActor in
+                do { r = .success(try await lib.episodes(show, maxAge: 0)) } catch { r = .failure(error) }
+                done.fulfill()
+            }
+            wait(for: [done], timeout: 5)
+            return r
+        }
+        XCTAssertEqual(try fetch().get().count, 1)
+
+        net.body = "<html><body><h1>Please log in to the Wi-Fi</h1></body></html>"   // captive portal, HTTP 200
+        XCTAssertThrowsError(try fetch().get())
+        XCTAssertEqual(lib.cachedEpisodes(show).map(\.title), ["E1"], "the saved episodes survive")
+        XCTAssertEqual(PodcastLibrary(directory: dir).cachedEpisodes(show).count, 1, "on disk too")
+    }
+
+    func testDamagedOPMLReportsAPartialImport() {
+        let opml = #"<opml><body><outline type="rss" text="A" xmlUrl="https://a.com/f"/><outline text="<<broken"#
+        let r = PodcastOPML.parse(Data(opml.utf8))
+        XCTAssertEqual(r.shows.map(\.title), ["A"])
+        XCTAssertFalse(r.complete)
+        let amp = #"<opml><body><outline type="rss" text="B & C" xmlUrl="https://b.com/f?x=1&y=2"/></body></opml>"#
+        let r2 = PodcastOPML.parse(Data(amp.utf8))
+        XCTAssertTrue(r2.complete, "bare & from sloppy exporters is repaired")
+        XCTAssertEqual(r2.shows.first?.feedURL, "https://b.com/f?x=1&y=2")
+    }
+}

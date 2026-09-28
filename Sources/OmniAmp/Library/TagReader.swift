@@ -46,7 +46,13 @@ enum TagReader {
     static let headSize = 32 * 1024
 
     static func read(path: String, fileSize: Int64, buffer: TagReadBuffer? = nil) -> TagInfo {
-        autoreleasepool { readHead(path: path, fileSize: fileSize, buffer: buffer ?? TagReadBuffer()) }
+        var info = autoreleasepool { readHead(path: path, fileSize: fileSize, buffer: buffer ?? TagReadBuffer()) }
+        // Whatever a damaged or crafted file claims, only believable values leave the tag reader.
+        info.duration = Sane.duration(info.duration)
+        if let b = info.bitrate, !(0..<1_000_000).contains(b) { info.bitrate = nil }
+        if let r = info.sampleRate, !(1..<10_000_000).contains(r) { info.sampleRate = nil }
+        if let d = info.bitDepth, !(1...64).contains(d) { info.bitDepth = nil }
+        return info
     }
 
     private static func readHead(path: String, fileSize: Int64, buffer: TagReadBuffer) -> TagInfo {
@@ -85,7 +91,7 @@ enum TagReader {
             info.duration = ca.duration
             info.sampleRate = ca.sampleRate
             info.bitDepth = ext == "aac" ? nil : ca.bitDepth
-            if let d = info.duration, d > 0 { info.bitrate = Int(Double(fileSize) * 8 / d / 1000) }
+            info.bitrate = Sane.kbps(bytes: fileSize, seconds: info.duration)
             return info
         }
         var info: TagInfo
@@ -312,7 +318,7 @@ enum TagReader {
                 case "TPE1": info.artist = decodeText(b, s, e)
                 case "TALB": info.album = decodeText(b, s, e)
                 case "TLEN":
-                    if info.duration == nil, let ms = Double(decodeText(b, s, e) ?? ""), ms > 0 { info.duration = ms / 1000 }
+                    if info.duration == nil, let ms = Double(decodeText(b, s, e) ?? "") { info.duration = Sane.duration(ms / 1000) }
                 case "TXXX":
                     // User text: description\0value (ReplayGain lives here).
                     let parts = decodeParts(b, s, e)
@@ -425,7 +431,7 @@ enum TagReader {
                                 let d = Double(frames) * Double(samplesPerFrame) / Double(sr)
                                 info.duration = d
                                 let audioBytes = flags & 2 != 0 && x + 16 <= b.count ? Double(be32(b, x + 12)) : Double(fileSize - Int64(p))
-                                if d > 0 { info.bitrate = Int((audioBytes * 8 / d / 1000).rounded()) }
+                                if let k = Sane.kbps(bytes: Int64(audioBytes), seconds: d) { info.bitrate = k }
                                 return
                             }
                         }
@@ -436,7 +442,7 @@ enum TagReader {
                         if frames > 0 {
                             let d = Double(frames) * Double(samplesPerFrame) / Double(sr)
                             info.duration = d
-                            if d > 0 { info.bitrate = Int((Double(bytes) * 8 / d / 1000).rounded()) }
+                            if let k = Sane.kbps(bytes: Int64(bytes), seconds: d) { info.bitrate = k }
                             return
                         }
                     }

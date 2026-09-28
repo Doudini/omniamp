@@ -31,6 +31,11 @@ struct PodcastEpisode: Codable, Equatable {
     }
 }
 
+enum PodcastFeedError: Error, LocalizedError {
+    case unreadable(String)
+    var errorDescription: String? { if case .unreadable(let why) = self { return "Couldn't read this feed: " + why } else { return nil } }
+}
+
 // MARK: - Directory (Apple's podcast search: free, no API key)
 
 final class PodcastDirectory {
@@ -195,6 +200,57 @@ final class PodcastDirectory {
 
 // MARK: - RSS feed
 
+/// Feeds and OPML files in the wild are often not quite XML: HTML entities (&nbsp;, &hellip;) and bare
+/// ampersands make XMLParser stop at the first one. Rewrite those into valid XML before parsing.
+enum XMLRepair {
+    private static let named: [String: String] = [
+        "nbsp": "#160", "hellip": "#8230", "mdash": "#8212", "ndash": "#8211", "lsquo": "#8216", "rsquo": "#8217",
+        "ldquo": "#8220", "rdquo": "#8221", "laquo": "#171", "raquo": "#187", "copy": "#169", "reg": "#174",
+        "trade": "#8482", "euro": "#8364", "pound": "#163", "bull": "#8226", "middot": "#183", "deg": "#176",
+        "auml": "#228", "ouml": "#246", "uuml": "#252", "Auml": "#196", "Ouml": "#214", "Uuml": "#220", "szlig": "#223",
+        "eacute": "#233", "egrave": "#232", "agrave": "#224", "ccedil": "#231", "iacute": "#237", "oacute": "#243",
+    ]
+    private static let entity = try! NSRegularExpression(pattern: "&(#?[A-Za-z0-9]{0,31};?)")
+
+    static func repair(_ data: Data) -> Data {
+        guard data.firstIndex(of: UInt8(ascii: "&")) != nil, let s = String(data: data, encoding: .utf8) else { return data }
+        // CDATA is taken literally by the parser: copy those blocks as they are, fix only the text between.
+        var out = "", rest = Substring(s)
+        while let open = rest.range(of: "<![CDATA[") {
+            out += fix(String(rest[..<open.lowerBound]))
+            guard let close = rest.range(of: "]]>", range: open.upperBound..<rest.endIndex) else {
+                out += rest[open.lowerBound...]
+                return Data(out.utf8)
+            }
+            out += rest[open.lowerBound..<close.upperBound]
+            rest = rest[close.upperBound...]
+        }
+        out += fix(String(rest))
+        return Data(out.utf8)
+    }
+
+    private static func fix(_ s: String) -> String {
+        guard s.contains("&") else { return s }
+        let ns = s as NSString
+        var out = "", last = 0
+        for m in entity.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+            let body = ns.substring(with: m.range(at: 1))   // "nbsp;", "#160;", "amp;", or "" for a bare &
+            if body.hasSuffix(";") {
+                let name = String(body.dropLast())
+                if ["amp", "lt", "gt", "quot", "apos"].contains(name) || (name.hasPrefix("#") && name.count > 1) { out += "&" + body }
+                else if let n = named[name] { out += "&" + n + ";" }
+                else { out += "&amp;" + body }   // unknown entity: keep it as text
+            } else {
+                out += "&amp;" + body            // a bare & (or one without ;)
+            }
+            last = m.range.location + m.range.length
+        }
+        out += ns.substring(from: last)
+        return out
+    }
+}
+
 /// Reads a podcast RSS feed. Forgiving: feeds in the wild are messy, so anything without an audio
 /// enclosure is skipped and missing fields just stay empty.
 final class PodcastFeedParser: NSObject, XMLParserDelegate {
@@ -209,12 +265,15 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
     private var itemURL: String?
     private var itemType: String?
 
+    /// The parser stopped at an error (what came before it is kept).
+    private(set) var failed = false
+
     static func parse(_ data: Data) -> PodcastFeedParser {
         let p = PodcastFeedParser()
-        let x = XMLParser(data: data)
+        let x = XMLParser(data: XMLRepair.repair(data))
         x.delegate = p
         x.shouldProcessNamespaces = false
-        x.parse()
+        p.failed = !x.parse()
         return p
     }
 
@@ -308,7 +367,7 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
         let parts = s.split(separator: ":").map { Double($0.trimmingCharacters(in: .whitespaces)) }
         guard !parts.isEmpty, parts.allSatisfy({ $0 != nil }) else { return nil }
         let secs = parts.compactMap { $0 }.reduce(0) { $0 * 60 + $1 }
-        return secs > 0 ? secs : nil
+        return Sane.duration(secs)
     }
 
     /// The notes' links as [text, url] (web and mail links only, at most 30): the notes pane puts them back
@@ -356,7 +415,9 @@ final class PodcastLibrary {
 
     private let dir: URL
     private(set) var subscriptions: [PodcastShow] = []
-    private var played: Set<String> = []
+    /// Played episodes and when they were marked (the oldest go first when the list gets long).
+    private var played: [String: Double] = [:]
+    private static let maxPlayed = 20_000
     /// Newest episode date the user has seen, per feed ("new" = released after that).
     private var seen: [String: Double] = [:]
     private var feeds: [String: FeedCache] = [:]
@@ -369,7 +430,8 @@ final class PodcastLibrary {
         dir = directory ?? LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("Podcasts", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir.appendingPathComponent("feeds"), withIntermediateDirectories: true)
         subscriptions = load("subscriptions.json") ?? []
-        played = Set(load("played.json") ?? [String]())
+        // Older builds saved a plain list (no dates): those count as oldest.
+        played = load("played.json") ?? Dictionary((load("played.json") ?? [String]()).map { ($0, 0) }, uniquingKeysWith: { a, _ in a })
         seen = load("seen.json") ?? [:]
         listened = load("listened.json") ?? [:]
     }
@@ -474,10 +536,19 @@ final class PodcastLibrary {
         req.timeoutInterval = 20
         let (data, status) = try await transport.send(req)
         guard (200..<300).contains(status) else { throw ScrobbleError.http(status, "podcast feed") }
-        let (eps, channel) = await Task.detached(priority: .utility) { () -> ([PodcastEpisode], (title: String, author: String, artwork: String?)) in
+        let (eps, channel, failed) = await Task.detached(priority: .utility) { () -> ([PodcastEpisode], (title: String, author: String, artwork: String?), Bool) in
             let p = PodcastFeedParser.parse(data)
-            return (p.episodes.sorted { ($0.published ?? 0) > ($1.published ?? 0) }, (p.title, p.author, p.artwork))
+            return (p.episodes.sorted { ($0.published ?? 0) > ($1.published ?? 0) }, (p.title, p.author, p.artwork), p.failed)
         }.value
+        // A login page, an error page or a damaged feed must not replace the episodes we have: keep the saved
+        // copy (it's still shown, offline too) and say what went wrong.
+        let saved = feeds[show.feedURL]?.episodes ?? []
+        if eps.isEmpty, failed || !saved.isEmpty {
+            throw PodcastFeedError.unreadable(failed ? "the feed isn't valid XML (a login or error page?)" : "the feed has no episodes now")
+        }
+        if failed, saved.count > eps.count {
+            throw PodcastFeedError.unreadable("the feed is damaged part-way through")
+        }
         let c = FeedCache(fetched: Date().timeIntervalSince1970, episodes: eps)
         feeds[show.feedURL] = c
         try? JSONEncoder().encode(c).write(to: feedFile(show.feedURL), options: .atomic)
@@ -487,12 +558,18 @@ final class PodcastLibrary {
 
     // Played / new
 
-    func isPlayed(_ url: String) -> Bool { played.contains(url) }
+    func isPlayed(_ url: String) -> Bool { played[url] != nil }
+
+    /// Keep the list bounded by dropping the oldest marks, never the ones just made.
+    private func prunePlayed() {
+        guard played.count > Self.maxPlayed else { return }
+        for (k, _) in played.sorted(by: { $0.value < $1.value }).prefix(played.count - Self.maxPlayed + 1000) { played.removeValue(forKey: k) }
+    }
 
     func markPlayed(_ url: String, _ on: Bool = true) {
-        if on { played.insert(url) } else { played.remove(url) }
-        if played.count > 5000 { played = Set(played.prefix(4000)) }
-        save(Array(played), "played.json")
+        if on { played[url] = Date().timeIntervalSince1970 } else { played.removeValue(forKey: url) }
+        prunePlayed()
+        save(played, "played.json")
         NotificationCenter.default.post(name: Self.progressChanged, object: nil)
     }
 
@@ -519,9 +596,10 @@ final class PodcastLibrary {
 
     /// Mark many episodes played at once (one save).
     func markPlayed(_ urls: [String]) {
-        played.formUnion(urls)
-        if played.count > 5000 { played = Set(played.prefix(4000)) }
-        save(Array(played), "played.json")
+        let now = Date().timeIntervalSince1970
+        for u in urls { played[u] = now }
+        prunePlayed()
+        save(played, "played.json")
         NotificationCenter.default.post(name: Self.progressChanged, object: nil)
     }
 

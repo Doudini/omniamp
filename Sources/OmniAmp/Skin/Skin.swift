@@ -41,7 +41,7 @@ final class Skin {
     init(url: URL) throws {
         self.url = url
         name = url.deletingPathExtension().lastPathComponent
-        let zip = try ZipArchive(url: url)
+        let zip = try ZipArchive(url: url, only: ["bmp", "png", "txt"])
         for (file, data) in zip.entries {
             let ext = (file as NSString).pathExtension
             let base = (file as NSString).deletingPathExtension

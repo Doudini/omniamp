@@ -29,13 +29,8 @@ final class LastFM: ScrobbleService {
 
     /// The user's own API key (Settings), used instead of the built-in one when both key and secret are set.
     var customKey: String? { UserDefaults.standard.string(forKey: "lastfmCustomKey").flatMap { $0.isEmpty ? nil : $0 } }
-    private var cachedCustomSecret: String??
-    private var customSecret: String? {
-        if let c = cachedCustomSecret { return c }
-        let s = customKey == nil ? nil : Keychain.get("lastfm.customSecret")
-        cachedCustomSecret = .some(s)
-        return s
-    }
+    /// Read through Keychain's own (locked) cache: this is used from background tasks too.
+    private var customSecret: String? { customKey == nil ? nil : Keychain.get("lastfm.customSecret") }
     var usesCustomKey: Bool { fixedKey == nil && customKey != nil && customSecret != nil }
     var hasBuiltInKey: Bool { builtInKey != nil && builtInSecret != nil }
 
@@ -50,7 +45,6 @@ final class LastFM: ScrobbleService {
         let on = !k.isEmpty && !s.isEmpty
         UserDefaults.standard.set(on ? k : nil, forKey: "lastfmCustomKey")
         Keychain.set("lastfm.customSecret", on ? s : nil)
-        cachedCustomSecret = .some(on ? s : nil)
         disconnect()
     }
 

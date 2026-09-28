@@ -46,7 +46,8 @@ final class FolderWatcher {
 /// folder-mates, deleted files are removed, edited files are re-tagged. OmniAmp remembers which files it has
 /// already seen, so tracks the user removed by hand are not re-added on the next scan.
 final class FolderSync {
-    private unowned let controller: PlayerController
+    /// Weak: a scan finishing after the controller is gone (tests, quitting) just does nothing.
+    private weak var controllerRef: PlayerController?
     private let watcher = FolderWatcher()
     private(set) var roots: [String]
     /// Files already seen per root (persisted).
@@ -58,7 +59,7 @@ final class FolderSync {
     private static var stateURL: URL { LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("watched.plist") }
 
     init(controller: PlayerController) {
-        self.controller = controller
+        self.controllerRef = controller
         roots = UserDefaults.standard.stringArray(forKey: "watchedFolders") ?? []
         if let d = try? Data(contentsOf: Self.stateURL),
            let s = try? PropertyListDecoder().decode([String: [String]].self, from: d) {
@@ -89,7 +90,7 @@ final class FolderSync {
         seen.removeValue(forKey: root)
         persistRoots()
         saveSeen()
-        if removeTracks {
+        if removeTracks, let controller = controllerRef {
             let idx = IndexSet(controller.tracks.indices.filter { controller.tracks[$0].path.hasPrefix(root + "/") })
             controller.remove(trackIndices: idx)
         }
@@ -166,12 +167,12 @@ final class FolderSync {
         let rootsSnapshot = roots
         DispatchQueue.global(qos: .utility).async {
             let fm = FileManager.default
-            var dirs: [String] = [], gone: [String] = [], found: [Track] = []
+            var dirs: [String] = [], gone: [String] = [], found: [Track] = [], unreadable: [String] = []
             for s in scopes {
                 var isDir: ObjCBool = false
                 if fm.fileExists(atPath: s, isDirectory: &isDir) {
                     if isDir.boolValue { dirs.append(s) }
-                    found += FolderScanner.scan([URL(fileURLWithPath: s)]).map { t in
+                    found += FolderScanner.scan([URL(fileURLWithPath: s)], unreadable: &unreadable).map { t in
                         var t = t
                         t.path = Self.canonical(t.path, roots: rootsSnapshot)
                         return t
@@ -180,14 +181,29 @@ final class FolderSync {
                     gone.append(s)
                 }
             }
-            DispatchQueue.main.async { self.apply(dirs: dirs, gone: gone, found: found) }
+            let unknown = unreadable.map { Self.canonical($0, roots: rootsSnapshot) }
+            DispatchQueue.main.async { self.apply(dirs: dirs, gone: gone, found: found, unknown: unknown) }
         }
     }
 
-    private func apply(dirs: [String], gone: [String], found: [Track]) {
+    /// `unknown`: folders that couldn't be listed. What's under them is left alone (no removals, `seen` kept):
+    /// a permission problem or a network error must not look like "everything was deleted".
+    func apply(dirs: [String], gone: [String], found: [Track], unknown: [String] = []) {
+        guard let controller = controllerRef else { return }
         let foundKeys = Set(found.map(\.key))
+        var unknown = unknown
+        // A watched root that suddenly lists nothing while the playlist still has its tracks is far more likely
+        // unavailable (a share mounted over an empty folder, a drive that isn't ready) than emptied.
+        let tracksNow = controller.tracks
+        for d in dirs where roots.contains(d) && !found.contains(where: { $0.path.hasPrefix(d + "/") })
+            && tracksNow.contains(where: { $0.path.hasPrefix(d + "/") }) {
+            NSLog("OmniAmp: watched folder %@ lists no files: treating it as unavailable", d)
+            unknown.append(d)
+        }
+        func isUnknown(_ path: String) -> Bool { unknown.contains { path == $0 || path.hasPrefix($0 + "/") } }
         func covered(_ path: String) -> Bool {
-            dirs.contains { path.hasPrefix($0 + "/") } || gone.contains { path == $0 || path.hasPrefix($0 + "/") }
+            guard !isUnknown(path) else { return false }
+            return dirs.contains { path.hasPrefix($0 + "/") } || gone.contains { path == $0 || path.hasPrefix($0 + "/") }
         }
 
         // 1. Removed on disk.

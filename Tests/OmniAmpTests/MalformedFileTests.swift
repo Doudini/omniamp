@@ -77,3 +77,77 @@ final class MalformedFileTests: XCTestCase {
         XCTAssertThrowsError(try ZipArchive(data: Data(head + eocd)))
     }
 }
+
+/// Lengths and times from damaged or crafted sources must never reach an Int conversion unchecked.
+final class AbsurdDurationTests: XCTestCase {
+    func testTimeFormattingNeverTraps() {
+        for v in [1e19, 1e300, Double.infinity, -Double.infinity, Double.nan, -5, 9.22e18] {
+            _ = TimeFormat.mmss(v)
+            _ = Sane.int(v)
+        }
+        XCTAssertEqual(TimeFormat.mmss(1e19), "")
+        XCTAssertEqual(TimeFormat.mmss(3723), "1:02:03")
+        XCTAssertNil(Sane.kbps(bytes: 1_000_000, seconds: 1e-300), "a tiny length doesn't make an absurd bitrate")
+        XCTAssertEqual(Sane.kbps(bytes: 1_000_000, seconds: 8), 1000)
+    }
+
+    func testMP3LengthTagIsChecked() {
+        func frame(_ id: String, _ text: String) -> [UInt8] {
+            let body: [UInt8] = [3] + Array(text.utf8)
+            return Array(id.utf8) + [0, 0, 0, UInt8(body.count), 0, 0] + body
+        }
+        let frames = frame("TIT2", "Huge") + frame("TLEN", "1e25")
+        let n = frames.count
+        let bytes: [UInt8] = Array("ID3".utf8) + [3, 0, 0, 0, 0, UInt8(n >> 7), UInt8(n & 0x7F)] + frames
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tlen-\(UUID().uuidString).mp3")
+        try? Data(bytes).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let info = TagReader.read(path: url.path, fileSize: Int64(bytes.count))
+        XCTAssertEqual(info.title, "Huge")
+        XCTAssertNil(info.duration, "1e25 ms isn't a length")
+    }
+
+    func testCueAndPlaylistTimesAreChecked() throws {
+        XCTAssertNil(CueSheet.time("inf:00:00"))
+        XCTAssertNil(CueSheet.time("-5:00:00"))
+        XCTAssertEqual(CueSheet.time("01:02:00"), 62)
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("absurd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let m3u = dir.appendingPathComponent("x.m3u")
+        try """
+        #EXTM3U
+        #EXTINF:1e30 omniamp-podcast="Show",Show - Episode
+        https://example.com/e.mp3
+        #EXTINF:5 omniamp-cue="inf,1e40,1",Split
+        /music/album.flac
+        """.write(to: m3u, atomically: true, encoding: .utf8)
+        let e = PlaylistFile.entries(m3u)
+        XCTAssertNil(e[0].seconds)
+        XCTAssertNil(e[1].cueStart)
+        XCTAssertNil(e[1].cueEnd)
+
+        var t = Track.episode("https://example.com/e.mp3", title: "E", show: "S", artwork: nil, duration: 1e30, published: nil, summary: nil)
+        t.duration = .infinity
+        XCTAssertNoThrow(try PlaylistFile.writeM3U([t], to: dir.appendingPathComponent("out.m3u")), "writing doesn't trap")
+        XCTAssertNil(PodcastFeedParser.duration("99999999999:00:00"))
+    }
+}
+
+final class NestedBoxTests: XCTestCase {
+    func testDeeplyNestedMP4DoesNotOverflowTheStack() throws {
+        func be32(_ n: Int) -> [UInt8] { [UInt8((n >> 24) & 0xFF), UInt8((n >> 16) & 0xFF), UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)] }
+        let depth = 200_000   // 1.6 MB of boxes inside boxes: overflows any stack without a depth limit
+        var inner = [UInt8]()
+        inner.reserveCapacity(depth * 8)
+        for i in 0..<depth { inner += be32(8 * (depth - i)) + Array("udta".utf8) }
+        let moov = be32(inner.count + 8) + Array("moov".utf8) + inner
+        let file = [0, 0, 0, 16] + Array("ftypM4A ".utf8) + [0, 0, 0, 0] + moov
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("nested-\(UUID().uuidString).m4a")
+        try Data(file).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        _ = TagReader.read(path: url.path, fileSize: Int64(file.count))
+        _ = DetailsReader.read(path: url.path)
+    }
+}

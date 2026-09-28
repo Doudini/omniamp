@@ -15,6 +15,7 @@ final class SettingsWindowController: NSWindowController {
     private var ownKeyRows: NSStackView!
     private var stack: NSStackView!
     private let folderLabel = NSTextField(labelWithString: "")
+    private var folderButtons: [NSButton] = []
     private var authTask: Task<Void, Never>?
 
     init() {
@@ -76,6 +77,7 @@ final class SettingsWindowController: NSWindowController {
         folderLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let reveal = NSButton(title: "Show in Finder", target: self, action: #selector(revealDownloads))
         let change = NSButton(title: "Change…", target: self, action: #selector(changeDownloads))
+        folderButtons = [reveal, change]
         let folderRow = NSStackView(views: [folderLabel, NSView(), reveal, change])
         folderRow.orientation = .horizontal
         folderRow.distribution = .fill
@@ -163,19 +165,26 @@ final class SettingsWindowController: NSWindowController {
         p.message = "Choose where downloaded podcast episodes are saved."
         p.directoryURL = PodcastDownloads.shared.dir.deletingLastPathComponent()
         p.beginSheetModal(for: w) { [weak self] r in
-            guard r == .OK, let url = p.url else { return }
-            if let problem = PodcastDownloads.shared.setFolder(url) {
+            guard let self, r == .OK, let url = p.url else { return }
+            // Moving to another disk copies every file: done in the background, with the buttons held meanwhile.
+            self.folderLabel.stringValue = "Moving downloads…"
+            self.folderButtons.forEach { $0.isEnabled = false }
+            PodcastDownloads.shared.setFolder(url) { [weak self] problem in
+                self?.folderButtons.forEach { $0.isEnabled = true }
+                self?.refresh()
+                guard let problem else { return }
                 let a = NSAlert()
                 a.messageText = "Some downloads weren't moved"
                 a.informativeText = problem
                 a.beginSheetModal(for: w)
             }
-            self?.refresh()
         }
     }
 
     func refresh() {
-        folderLabel.stringValue = (PodcastDownloads.shared.dir.path as NSString).abbreviatingWithTildeInPath
+        if !PodcastDownloads.shared.isMoving {
+            folderLabel.stringValue = (PodcastDownloads.shared.dir.path as NSString).abbreviatingWithTildeInPath
+        }
         folderLabel.toolTip = PodcastDownloads.shared.dir.path
         let lfm = LastFM.shared, lb = ListenBrainz.shared
         let keyNote = lfm.usesCustomKey ? " (your API key)" : ""

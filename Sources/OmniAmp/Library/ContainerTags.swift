@@ -167,13 +167,18 @@ enum ContainerTags {
         // AAC encoder priming/padding: iTunSMPB holds the real sample count.
         if let n = validSamples, n > 0, let sr = info.sampleRate, sr > 0 { info.duration = Double(n) / Double(sr) }
         if let d = info.duration, d > 0, info.bitrate == nil {
-            info.bitrate = Int(Double(fileSize) * 8 / d / 1000)
+            info.bitrate = Sane.kbps(bytes: fileSize, seconds: d)
         }
         return info
     }
 
     /// Recursive atom walk over the moov box.
-    private static func walkMP4(_ b: [UInt8], _ start: Int, _ end: Int, into info: inout TagInfo, validSamples: inout Int64?) {
+    /// Real files nest boxes 6–8 deep; a crafted one could nest thousands and overflow the stack.
+    static let maxBoxDepth = 16
+
+    private static func walkMP4(_ b: [UInt8], _ start: Int, _ end: Int, into info: inout TagInfo, validSamples: inout Int64?,
+                                depth: Int = 0) {
+        guard depth < maxBoxDepth else { return }
         var p = start
         while p + 8 <= end {
             var len = be32(b, p)
@@ -185,9 +190,9 @@ enum ContainerTags {
             let bodyEnd = p + len
             switch type {
             case "trak", "mdia", "minf", "stbl", "udta", "ilst":
-                walkMP4(b, body, bodyEnd, into: &info, validSamples: &validSamples)
+                walkMP4(b, body, bodyEnd, into: &info, validSamples: &validSamples, depth: depth + 1)
             case "meta":
-                walkMP4(b, body + 4, bodyEnd, into: &info, validSamples: &validSamples)   // full box: skip version/flags
+                walkMP4(b, body + 4, bodyEnd, into: &info, validSamples: &validSamples, depth: depth + 1)   // full box: skip version/flags
             case "----":
                 // Freeform iTunes item: mean / name / data. We only want iTunSMPB.
                 if let (name, value) = freeform(b, body, bodyEnd) {

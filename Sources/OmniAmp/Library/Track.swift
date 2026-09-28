@@ -89,9 +89,38 @@ struct Track: Codable, Sendable {
     }
 }
 
+/// Tags, CUE sheets, playlists and feeds can claim anything (1e25 seconds, infinity): every time and rate that
+/// reaches the app goes through these, so nothing downstream can trap converting it to an Int.
+enum Sane {
+    /// Longest believable length: ~115 days.
+    static let maxSeconds = 10_000_000.0
+
+    /// A length in seconds: finite, positive and believable, else nil.
+    static func duration(_ d: Double?) -> Double? {
+        guard let d, d.isFinite, d > 0, d < maxSeconds else { return nil }
+        return d
+    }
+
+    /// A time within a file (may be 0), same bounds.
+    static func offset(_ d: Double?) -> Double? {
+        guard let d, d.isFinite, d >= 0, d < maxSeconds else { return nil }
+        return d
+    }
+
+    /// kbit/s from a size and a length; nil when that can't be meaningful (tiny or bogus lengths).
+    static func kbps(bytes: Int64, seconds: Double?) -> Int? {
+        guard let s = duration(seconds), s >= 0.1 else { return nil }
+        let k = Double(bytes) * 8 / s / 1000
+        return k.isFinite && k >= 0 && k < 1_000_000 ? Int(k.rounded()) : nil
+    }
+
+    /// Any Double as an Int without trapping (non-finite → 0, clamped to ±1e12).
+    static func int(_ x: Double) -> Int { x.isFinite ? Int(max(-1e12, min(x, 1e12))) : 0 }
+}
+
 enum TimeFormat {
     static func mmss(_ seconds: Double?) -> String {
-        guard let s = seconds, s.isFinite, s >= 0 else { return "" }
+        guard let s = seconds, s.isFinite, s >= 0, s < Sane.maxSeconds else { return "" }
         let total = Int(s.rounded())
         if total >= 3600 { return String(format: "%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60) }
         return String(format: "%d:%02d", total / 60, total % 60)

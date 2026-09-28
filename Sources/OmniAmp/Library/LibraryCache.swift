@@ -31,6 +31,13 @@ enum LibraryCache {
     static func load() -> Payload? {
         guard let data = try? Data(contentsOf: fileURL),
               var p = try? PropertyListDecoder().decode(Payload.self, from: data) else { return nil }
+        // Caches written before lengths were checked may hold impossible values (a crafted tag): clean them.
+        for i in p.tracks.indices {
+            p.tracks[i].duration = Sane.duration(p.tracks[i].duration)
+            if p.tracks[i].cueStart != nil { p.tracks[i].cueStart = Sane.offset(p.tracks[i].cueStart) ?? 0 }
+            p.tracks[i].cueEnd = Sane.offset(p.tracks[i].cueEnd)
+            if let b = p.tracks[i].bitrate, !(0..<1_000_000).contains(b) { p.tracks[i].bitrate = nil }
+        }
         if p.version < currentVersion {
             // v2 added ReplayGain: re-read tags once (fast, in the background).
             // Only files: radio stations and podcast episodes have no tags to read, and their names would be lost.

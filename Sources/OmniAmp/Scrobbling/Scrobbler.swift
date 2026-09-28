@@ -109,7 +109,7 @@ final class Scrobbler {
         listened = 0
         guard let t, let id = Self.identify(t), let th = Self.threshold(for: duration),
               services.contains(where: { $0.isConnected }) else { return }
-        pending = Scrobble(artist: id.artist, title: id.title, album: t.album, duration: Int(duration.rounded()),
+        pending = Scrobble(artist: id.artist, title: id.title, album: t.album, duration: Sane.int(duration.rounded()),
                            timestamp: Int(Date().timeIntervalSince1970))
         threshold = th
         playingSince = Date()

@@ -27,4 +27,49 @@ final class FolderSyncTests: XCTestCase {
         XCTAssertFalse(FolderSync.deletionIsReal(unmounted + "/Album", roots: [unmounted]), "unmounted share")
         XCTAssertFalse(FolderSync.deletionIsReal(unmounted, roots: [unmounted]))
     }
+
+    func testUnreadableOrSuddenlyEmptyFoldersKeepTheirTracks() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-watch-\(UUID().uuidString)")
+        setenv("OMNIAMP_CACHE_DIR", dir.path, 1)
+        let before = UserDefaults.standard.stringArray(forKey: "watchedFolders")
+        defer {
+            unsetenv("OMNIAMP_CACHE_DIR")
+            UserDefaults.standard.set(before, forKey: "watchedFolders")
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let root = "/music"
+        UserDefaults.standard.set([root], forKey: "watchedFolders")
+        let c = PlayerController()
+        func track(_ p: String) -> Track { var t = Track(path: p, size: 1, mtime: 0); t.tagsLoaded = true; return t }
+        c.store.restore([track("/music/A/1.mp3"), track("/music/B/2.mp3")])
+
+        // B couldn't be listed (permission / network error): its track stays.
+        c.folders.apply(dirs: [root], gone: [], found: [track("/music/A/1.mp3")], unknown: ["/music/B"])
+        XCTAssertEqual(c.tracks.map(\.path), ["/music/A/1.mp3", "/music/B/2.mp3"])
+
+        // The whole root lists nothing while it still has tracks: unavailable, not emptied.
+        c.folders.apply(dirs: [root], gone: [], found: [])
+        XCTAssertEqual(c.tracks.count, 2)
+
+        // A real deletion still removes the track.
+        c.folders.apply(dirs: [root], gone: [], found: [track("/music/A/1.mp3")])
+        XCTAssertEqual(c.tracks.map(\.path), ["/music/A/1.mp3"])
+    }
+
+    func testScannerReportsFoldersItCannotList() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("omniamp-locked-\(UUID().uuidString)")
+        let locked = root.appendingPathComponent("Locked")
+        try fm.createDirectory(at: locked, withIntermediateDirectories: true)
+        fm.createFile(atPath: root.appendingPathComponent("a.mp3").path, contents: Data([0]))
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
+            try? fm.removeItem(at: root)
+        }
+        var unreadable: [String] = []
+        let found = FolderScanner.scan([root], unreadable: &unreadable)
+        XCTAssertEqual(found.map { ($0.path as NSString).lastPathComponent }, ["a.mp3"])
+        XCTAssertEqual(unreadable.map { ($0 as NSString).lastPathComponent }, ["Locked"])
+    }
 }

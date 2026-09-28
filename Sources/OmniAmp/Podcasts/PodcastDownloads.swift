@@ -14,7 +14,14 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
         var file: String        // name inside the downloads folder
         var bytes: Int64
         var date: Double        // when it finished
+        /// Set when the file isn't in the downloads folder (it couldn't be moved along when the folder changed).
+        var folder: String?
     }
+
+    /// Where an entry's file is.
+    private func path(of e: Entry) -> URL { URL(fileURLWithPath: e.folder ?? dir.path, isDirectory: true).appendingPathComponent(e.file) }
+    /// A folder change is moving files right now.
+    private(set) var isMoving = false
 
     enum State: Equatable {
         case none
@@ -58,8 +65,15 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
         }
         super.init()
         if let d = try? Data(contentsOf: indexURL), let e = try? JSONDecoder().decode([String: Entry].self, from: d) {
-            // Keep only what is still on disk.
-            entries = e.filter { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0.value.file).path) }
+            entries = e
+            // Forget files deleted in Finder, but only when the folder is there: a drive that isn't mounted yet
+            // must not wipe the list (localFile checks each file when it's played anyway).
+            if FileManager.default.fileExists(atPath: dir.path) {
+                entries = e.filter { entry in
+                    let p = path(of: entry.value)
+                    return FileManager.default.fileExists(atPath: p.path) || !FileManager.default.fileExists(atPath: p.deletingLastPathComponent().path)
+                }
+            }
         }
         if directory == nil { adoptEarlyDownloads(from: support.appendingPathComponent("Downloads", isDirectory: true)) }
     }
@@ -69,16 +83,24 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     private func adoptEarlyDownloads(from old: URL) {
         let oldIndex = old.appendingPathComponent("downloads.json")
         guard let d = try? Data(contentsOf: oldIndex), let e = try? JSONDecoder().decode([String: Entry].self, from: d) else { return }
+        var left: [String: Entry] = [:]   // couldn't be moved now (folder unavailable…): try again next launch
         for (url, var entry) in e where entries[url] == nil {
             let src = old.appendingPathComponent(entry.file)
-            guard FileManager.default.fileExists(atPath: src.path), ensureFolder() else { continue }
+            guard FileManager.default.fileExists(atPath: src.path) else { continue }
             let name = uniqueName(Self.fileName(for: entry.episode, show: entry.show, ext: src.pathExtension))
-            guard (try? FileManager.default.moveItem(at: src, to: dir.appendingPathComponent(name))) != nil else { continue }
+            guard ensureFolder(), (try? FileManager.default.moveItem(at: src, to: dir.appendingPathComponent(name))) != nil else {
+                left[url] = entry
+                continue
+            }
             entry.file = name
             entries[url] = entry
         }
         save()
-        try? FileManager.default.removeItem(at: old)
+        if left.isEmpty {
+            try? FileManager.default.removeItem(at: old)
+        } else {
+            try? JSONEncoder().encode(left).write(to: oldIndex, options: .atomic)
+        }
     }
 
     @discardableResult
@@ -86,35 +108,55 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
         (try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)) != nil
     }
 
-    /// Use another folder: the downloads already there move along. Returns why it failed, if it did.
-    func setFolder(_ new: URL) -> String? {
-        let new = new.standardizedFileURL
-        guard new.path != dir.standardizedFileURL.path else { return nil }
-        do { try FileManager.default.createDirectory(at: new, withIntermediateDirectories: true) } catch { return error.localizedDescription }
-        var failed = 0
-        for (url, var e) in entries {
-            let src = dir.appendingPathComponent(e.file)
-            var name = e.file
-            var n = 2
-            while FileManager.default.fileExists(atPath: new.appendingPathComponent(name).path) {
-                name = "\((e.file as NSString).deletingPathExtension) (\(n)).\((e.file as NSString).pathExtension)"
-                n += 1
+    /// The same folder under another spelling (case, a symlink, a trailing slash)?
+    static func sameFolder(_ a: URL, _ b: URL) -> Bool {
+        let key: Set<URLResourceKey> = [.fileResourceIdentifierKey]
+        // Resource values describe a symlink itself: compare the folders they lead to.
+        if let x = try? a.resolvingSymlinksInPath().resourceValues(forKeys: key).fileResourceIdentifier,
+           let y = try? b.resolvingSymlinksInPath().resourceValues(forKeys: key).fileResourceIdentifier {
+            return x.isEqual(y)
+        }
+        return a.standardizedFileURL.resolvingSymlinksInPath().path == b.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    /// Use another folder: the downloads already there move along, in the background (across disks that's a
+    /// copy). A file that can't be moved stays listed where it is. `completion` (main thread) gets a problem to
+    /// show, if there was one.
+    func setFolder(_ newFolder: URL, completion: @escaping (String?) -> Void) {
+        let new = newFolder.standardizedFileURL
+        guard !isMoving else { completion("The downloads are still being moved."); return }
+        do { try FileManager.default.createDirectory(at: new, withIntermediateDirectories: true) } catch {
+            completion(error.localizedDescription)
+            return
+        }
+        let old = dir
+        guard !Self.sameFolder(new, old) else { completion(nil); return }
+        isMoving = true
+        let jobs = entries.map { ($0.key, path(of: $0.value), $0.value.file) }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fm = FileManager.default
+            var moved: [String: String] = [:], failed: [String] = []
+            for (url, src, file) in jobs where fm.fileExists(atPath: src.path) {
+                var name = file, n = 2
+                while fm.fileExists(atPath: new.appendingPathComponent(name).path) {
+                    name = "\((file as NSString).deletingPathExtension) (\(n)).\((file as NSString).pathExtension)"
+                    n += 1
+                }
+                if (try? fm.moveItem(at: src, to: new.appendingPathComponent(name))) != nil { moved[url] = name } else { failed.append(url) }
             }
-            do {
-                try FileManager.default.moveItem(at: src, to: new.appendingPathComponent(name))   // copies across disks
-                e.file = name
-                entries[url] = e
-            } catch {
-                failed += 1
+            DispatchQueue.main.async {
+                for (url, name) in moved { self.entries[url]?.file = name; self.entries[url]?.folder = nil }
+                // Not moved (or finished downloading while moving): they stay in the old folder, still listed.
+                for (url, e) in self.entries where moved[url] == nil && e.folder == nil { self.entries[url]?.folder = old.path }
+                self.dir = new
+                UserDefaults.standard.set(new.path, forKey: Self.folderKey)
+                self.isMoving = false
+                self.save()
+                NotificationCenter.default.post(name: Self.changed, object: nil)
+                completion(failed.isEmpty ? nil : "\(failed.count) episode\(failed.count == 1 ? "" : "s") couldn't be moved: "
+                           + "they stay in \((old.path as NSString).abbreviatingWithTildeInPath) and still play.")
             }
         }
-        dir = new
-        UserDefaults.standard.set(new.path, forKey: Self.folderKey)
-        // What couldn't move stays where it was; the list only keeps files it can find.
-        entries = entries.filter { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0.value.file).path) }
-        save()
-        NotificationCenter.default.post(name: Self.changed, object: nil)
-        return failed == 0 ? nil : "\(failed) episode\(failed == 1 ? "" : "s") couldn't be moved and were dropped from the list."
     }
     private func save() { try? JSONEncoder().encode(entries).write(to: indexURL, options: .atomic) }
     private func changed(_ url: String) { NotificationCenter.default.post(name: Self.changed, object: url) }
@@ -131,7 +173,7 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     /// The downloaded file, if there is one.
     func localFile(_ url: String) -> URL? {
         guard let e = entries[url] else { return nil }
-        let f = dir.appendingPathComponent(e.file)
+        let f = path(of: e)
         return FileManager.default.fileExists(atPath: f.path) ? f : nil
     }
 
@@ -165,7 +207,7 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     func remove(_ url: String) {
         cancel(url)
         guard let e = entries.removeValue(forKey: url) else { return }
-        try? FileManager.default.removeItem(at: dir.appendingPathComponent(e.file))
+        try? FileManager.default.removeItem(at: path(of: e))
         save()
         changed(url)
     }

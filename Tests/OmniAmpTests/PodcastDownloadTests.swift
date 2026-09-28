@@ -39,9 +39,33 @@ final class PodcastDownloadTests: XCTestCase {
         let key = PodcastDownloads.folderKey
         let before = UserDefaults.standard.string(forKey: key)
         defer { UserDefaults.standard.set(before, forKey: key) }
-        XCTAssertNil(d.setFolder(b))
+        let moved = expectation(description: "moved")
+        var problem: String? = "not called"
+        d.setFolder(b) { problem = $0; moved.fulfill() }
+        wait(for: [moved], timeout: 10)
+        XCTAssertNil(problem)
         XCTAssertEqual(d.localFile(ep.url)?.deletingLastPathComponent().standardizedFileURL.path, b.standardizedFileURL.path)
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("a/Llama Radio Hour - Episode 9.mp3").path))
+
+        // The same folder under another spelling (a symlink here) changes nothing: no "(2)" copies.
+        let alias = dir.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: b)
+        let same = expectation(description: "same")
+        d.setFolder(alias) { _ in same.fulfill() }
+        wait(for: [same], timeout: 10)
+        XCTAssertEqual(d.localFile(ep.url)?.lastPathComponent, "Llama Radio Hour - Episode 9.mp3")
+
+        // A file that can't be moved stays listed where it is (a folder we may not write into).
+        let locked = dir.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+        let blocked = expectation(description: "blocked")
+        d.setFolder(locked) { problem = $0; blocked.fulfill() }
+        wait(for: [blocked], timeout: 10)
+        XCTAssertNotNil(problem)
+        XCTAssertNotNil(d.localFile(ep.url), "still listed and playable from the old folder")
+        XCTAssertEqual(d.state(ep.url), .done)
     }
 
     func testDownloadPlaysLocallyAndIsRemembered() throws {
@@ -71,6 +95,19 @@ final class PodcastDownloadTests: XCTestCase {
         XCTAssertEqual(again.state(ep.url), .none)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
         XCTAssertEqual(PodcastDownloads(directory: store).state(ep.url), .none, "removal is saved")
+    }
+
+    func testIndexSurvivesAnUnavailableFolder() throws {
+        // An entry whose file lives on a drive that isn't mounted: listed, just not playable right now.
+        let store = dir.appendingPathComponent("store3")
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let ep = PodcastEpisode(title: "E", url: "https://example.com/e.mp3", published: nil, duration: nil, summary: nil)
+        let entry = PodcastDownloads.Entry(episode: ep, show: show, file: "S - E.mp3", bytes: 10, date: 1,
+                                           folder: "/Volumes/NotMounted-\(UUID().uuidString)")
+        try JSONEncoder().encode([ep.url: entry]).write(to: store.appendingPathComponent("downloads.json"))
+        let d = PodcastDownloads(directory: store)
+        XCTAssertEqual(d.state(ep.url), .done, "kept while its drive is away")
+        XCTAssertNil(d.localFile(ep.url))
     }
 
     func testMissingFileIsForgotten() throws {

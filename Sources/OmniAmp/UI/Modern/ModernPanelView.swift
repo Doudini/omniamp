@@ -447,7 +447,7 @@ final class ModernPanelView: NSView {
         let track = c.currentTrack
         let live = track?.isStream == true
         let remaining = showRemaining && !live && d > 0 && st != .stopped
-        let t = Int(st == .stopped ? 0 : max(0, remaining ? d - p.currentTime : p.currentTime))
+        let t = Sane.int(st == .stopped ? 0 : max(0, remaining ? d - p.currentTime : p.currentTime))
         // Called 20× a second: only touch what changed (a text field redraws on every stringValue set).
         remainTag.setIfChanged(live ? "LIVE" : "REM")
         if remainTag.isHidden != !(live || showRemaining) { remainTag.isHidden = !(live || showRemaining) }

@@ -55,7 +55,11 @@ final class PlayerController {
         }
         player.onTrackFinished = { [weak self] in self?.trackFinished() }
         player.onGaplessAdvance = { [weak self] in self?.gaplessAdvanced() }
-        player.onPreloadDropped = { [weak self] in self?.preloaded = nil; self?.preloadAttempted = false }
+        player.onPreloadDropped = { [weak self] in
+            self?.preloaded = nil
+            self?.preloadAttempted = false
+            self?.schedulePreloadCheck()
+        }
         player.apply(eqSettings)
         player.onStreamChange = { [weak self] in
             guard let self, let c = self.currentIndex else { return }
@@ -412,12 +416,28 @@ final class PlayerController {
             return
         }
         let ok = player.play(url: store.tracks[index].url, from: resumePosition(for: store.tracks[index]), range: store.tracks[index].cueRange)
-        if ok { Scrobbler.shared.trackStarted(store.tracks[index], duration: store.tracks[index].duration ?? player.duration) }
+        if ok {
+            Scrobbler.shared.trackStarted(store.tracks[index], duration: store.tracks[index].duration ?? player.duration)
+            failedInARow = 0
+            if playbackProblem != nil { playbackProblem = nil; ui?.optionsDidChange() }
+        } else {
+            failedInARow += 1
+        }
         schedulePreloadCheck()
         ui?.currentTrackDidChange(old: old, new: index)
         updateNowPlaying()
         if !ok {
-            // Skip unplayable files.
+            // Skip unplayable files, but not forever: when every track has failed in a row (a drive that's gone,
+            // with repeat on), stop and say so instead of trying five files a second.
+            if failedInARow >= min(max(1, store.tracks.count), 50) {
+                failedInARow = 0
+                player.stop()
+                playbackProblem = "Stopped: the files couldn't be opened (is the drive connected?)"
+                NSLog("OmniAmp: %d files in a row couldn't be opened, stopping", store.tracks.count)
+                ui?.optionsDidChange()
+                updateNowPlaying()
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                 guard let self, self.currentIndex == index else { return }
                 self.advance()
@@ -744,21 +764,36 @@ final class PlayerController {
         get { resumeCache }
         set { resumeCache = newValue; UserDefaults.standard.set(newValue, forKey: "resumePositions") }
     }
+    /// When each position was saved: the list is trimmed oldest first (never the one just saved).
+    private lazy var resumeDates = UserDefaults.standard.dictionary(forKey: "resumeDates") as? [String: Double] ?? [:]
+    private static let maxResumePositions = 1000
 
     private func resumePosition(for t: Track) -> Double {
         // Only long tracks are ever stored, so a stored position is enough (the duration may not be known yet).
-        guard resumeLongTracks, let p = resumePositions[t.key] else { return 0 }
+        // Podcasts always continue where you left off; the setting is about long music files.
+        guard resumeLongTracks || t.isEpisode, let p = resumePositions[t.key] else { return 0 }
         return max(0, p - 3)   // a few seconds back, for context
     }
 
     /// Save the current position of a long track (not at the very start or end).
     private func rememberPosition() {
-        guard resumeLongTracks, let t = currentTrack, isLong(t), player.state != .stopped else { return }
-        let pos = player.currentTime
+        guard let t = currentTrack, resumeLongTracks || t.isEpisode, isLong(t), player.state != .stopped else { return }
+        let pos = player.currentTime, length = player.duration
         var all = resumePositions
-        if pos > 30, pos < player.duration - 30 { all[t.key] = pos } else { all.removeValue(forKey: t.key) }
-        // Keep the list small.
-        if all.count > 300 { for k in all.keys.prefix(all.count - 300) { all.removeValue(forKey: k) } }
+        if pos > 30, length <= 0 || pos < length - 30 {
+            all[t.key] = pos
+            resumeDates[t.key] = Date().timeIntervalSince1970
+        } else if length > 60, pos >= length - 30 {
+            all.removeValue(forKey: t.key)          // heard to the end
+            resumeDates.removeValue(forKey: t.key)
+        }
+        // Otherwise (the first 30 s, or still loading: an episode reads 0 until it plays) the saved place stays:
+        // leaving before playback really started must not erase it.
+        if all.count > Self.maxResumePositions {
+            let oldest = all.keys.sorted { (resumeDates[$0] ?? 0) < (resumeDates[$1] ?? 0) }.prefix(all.count - Self.maxResumePositions)
+            for k in oldest { all.removeValue(forKey: k); resumeDates.removeValue(forKey: k) }
+        }
+        UserDefaults.standard.set(resumeDates, forKey: "resumeDates")
         resumePositions = all
         if t.isEpisode {
             PodcastLibrary.shared.noteListened(t.path)
@@ -770,6 +805,8 @@ final class PlayerController {
         guard let p = path, resumePositions[p] != nil else { return }
         var all = resumePositions
         all.removeValue(forKey: p)
+        resumeDates.removeValue(forKey: p)
+        UserDefaults.standard.set(resumeDates, forKey: "resumeDates")
         resumePositions = all
         NotificationCenter.default.post(name: PodcastLibrary.progressChanged, object: nil)
     }
@@ -881,7 +918,7 @@ final class PlayerController {
         if t.isStream { return player.streamInfo?.bitrate }
         if t.isEpisode { return t.bitrate }
         if let b = t.bitrate { return b }
-        if let d = t.duration, d > 0 { return Int(Double(t.size) * 8 / d / 1000) }
+        if let k = Sane.kbps(bytes: t.size, seconds: t.duration) { return k }
         return nil
     }
 
@@ -936,7 +973,7 @@ final class PlayerController {
         let khz = sr > 0 ? (sr % 1000 == 0 ? "\(sr / 1000) kHz" : String(format: "%.1f kHz", Double(sr) / 1000)) : ""
         let channels = playing ? player.channelCount : 0
         let ch = channels == 1 ? "mono" : (channels == 2 ? "stereo" : (channels > 2 ? "\(channels) ch" : ""))
-        let kbps = t.bitrate ?? t.duration.flatMap { $0 > 0 ? Int(Double(t.size) * 8 / $0 / 1000) : nil }
+        let kbps = t.bitrate ?? Sane.kbps(bytes: t.size, seconds: t.duration)
         func join(_ p: [String]) -> String {
             p.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " · ")
         }
@@ -959,7 +996,13 @@ final class PlayerController {
         return (n, d)
     }
 
+    /// Files that couldn't be opened one after another (reset by the first that plays).
+    private var failedInARow = 0
+    /// Why playback stopped by itself, shown in the status line until something plays.
+    private(set) var playbackProblem: String?
+
     var statusText: String {
+        if let p = playbackProblem { return p }
         let total = store.tracks.count
         // While a folder is being added: how far along it is.
         if store.scansInProgress > 0 {

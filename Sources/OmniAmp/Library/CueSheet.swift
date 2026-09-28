@@ -21,7 +21,7 @@ struct CueSheet {
     static func time(_ s: String) -> Double? {
         let p = s.split(separator: ":").compactMap { Double($0) }
         guard p.count == 3 else { return nil }
-        return p[0] * 60 + p[1] + p[2] / 75
+        return Sane.offset(p[0] * 60 + p[1] + p[2] / 75)   // "inf:00:00" parses as a Double
     }
 
     /// Cue files are often not UTF-8: older rips use Windows-1252. UTF-16 only with a byte-order mark

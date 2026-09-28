@@ -262,7 +262,8 @@ enum DetailsReader {
         i + 4 <= b.count ? String(bytes: b[i..<(i + 4)], encoding: .isoLatin1) ?? "" : ""
     }
 
-    private static func walk(_ b: [UInt8], _ start: Int, _ end: Int, into d: inout TrackDetails) {
+    private static func walk(_ b: [UInt8], _ start: Int, _ end: Int, into d: inout TrackDetails, depth: Int = 0) {
+        guard depth < ContainerTags.maxBoxDepth else { return }   // crafted files could nest thousands deep
         var p = start
         while p + 8 <= end {
             let len = be32(b, p)
@@ -276,8 +277,8 @@ enum DetailsReader {
             }
             func text() -> String? { value().flatMap { String(bytes: $0, encoding: .utf8) } }
             switch type {
-            case "udta", "ilst": walk(b, body, bodyEnd, into: &d)
-            case "meta": walk(b, body + 4, bodyEnd, into: &d)
+            case "udta", "ilst": walk(b, body, bodyEnd, into: &d, depth: depth + 1)
+            case "meta": walk(b, body + 4, bodyEnd, into: &d, depth: depth + 1)
             case "\u{A9}nam": d.title = d.title ?? text()
             case "\u{A9}ART": d.artist = d.artist ?? text()
             case "\u{A9}alb": d.album = d.album ?? text()
