@@ -77,7 +77,7 @@ final class PlayerController {
         let d = UserDefaults.standard
         player.setOutputDevice(uid: d.string(forKey: "outputDeviceUID"))
         player.setBitPerfect(d.bool(forKey: "bitPerfect"), exclusive: d.bool(forKey: "exclusiveAccess"))
-        folders.rescanAll()   // pick up changes made while the app was closed
+        folders.catchUp()   // pick up changes made while the app was closed
         setupRemoteCommands()
         Scrobbler.shared.flushAll()   // send anything queued while offline / closed
         player.onStateChange = { [weak self] in
@@ -171,16 +171,26 @@ final class PlayerController {
         if let i = cache.currentIndex, i < store.tracks.count { currentIndex = i }
     }
 
-    func saveNow() {
-        LibraryCache.save(payload())
-    }
+    /// Saves run one at a time, in order (an older snapshot can never land after a newer one).
+    private static let saveQueue = DispatchQueue(label: "omniamp.library-save", qos: .utility)
 
-    func scheduleSave() {
+    func saveNow() {
         saveWorkItem?.cancel()
         let p = payload()
-        let item = DispatchWorkItem { LibraryCache.save(p) }
+        Self.saveQueue.sync { LibraryCache.save(p) }
+    }
+
+    /// Edits come in bursts (a drag, tags arriving, a folder sync): write once they settle. A save re-encodes
+    /// the whole playlist (a fifth of a second and several MB at 50,000 tracks).
+    func scheduleSave() {
+        saveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let p = self.payload()   // a snapshot now (copy-on-write, no copying)
+            Self.saveQueue.async { LibraryCache.save(p) }
+        }
         saveWorkItem = item
-        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 1, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: item)
     }
 
     private func payload() -> LibraryCache.Payload {
@@ -711,6 +721,7 @@ final class PlayerController {
     func shutdown() {
         rememberPosition()
         saveNow()
+        PodcastLibrary.writes.sync {}   // podcast state saved in the background: let it land before quitting
         player.shutdown()
     }
 

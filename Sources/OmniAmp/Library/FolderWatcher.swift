@@ -3,27 +3,33 @@ import Foundation
 
 /// FSEvents stream over a set of folders, delivering changed paths on the main queue.
 final class FolderWatcher {
-    /// Changed paths, and whether FSEvents asked for a full rescan (dropped events, root changed…).
-    var onEvents: (([String], Bool) -> Void)?
+    /// Changed paths, whether FSEvents asked for a full rescan (dropped events, root changed, history
+    /// incomplete…), and the newest event ID in the batch.
+    var onEvents: (([String], Bool, FSEventStreamEventId) -> Void)?
     private var stream: FSEventStreamRef?
 
-    func watch(_ roots: [String]) {
+    /// `since`: replay what changed after this event ID (changes made while OmniAmp was closed) first.
+    func watch(_ roots: [String], since: FSEventStreamEventId? = nil) {
         stop()
         guard !roots.isEmpty else { return }
         var ctx = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                        retain: nil, release: nil, copyDescription: nil)
-        let callback: FSEventStreamCallback = { _, info, count, rawPaths, flags, _ in
+        let callback: FSEventStreamCallback = { _, info, count, rawPaths, flags, ids in
             guard let info else { return }
             let me = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
-            let paths = (Unmanaged<CFArray>.fromOpaque(rawPaths).takeUnretainedValue() as? [String]) ?? []
+            let all = (Unmanaged<CFArray>.fromOpaque(rawPaths).takeUnretainedValue() as? [String]) ?? []
             let rescanFlags = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
-                                     | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagRootChanged)
+                                     | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagRootChanged
+                                     | kFSEventStreamEventFlagEventIdsWrapped)
             let rescan = (0..<count).contains { flags[$0] & rescanFlags != 0 }
-            me.onEvents?(paths, rescan)
+            // "History done" marks the end of the replay: not a change.
+            let paths = (0..<min(count, all.count)).filter { flags[$0] & UInt32(kFSEventStreamEventFlagHistoryDone) == 0 }.map { all[$0] }
+            let newest = (0..<count).map { ids[$0] }.max() ?? 0
+            me.onEvents?(paths, rescan, newest)
         }
         let flags = UInt32(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot)
         guard let s = FSEventStreamCreate(nil, callback, &ctx, roots as CFArray,
-                                          FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 1.0, flags) else { return }
+                                          since ?? FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 1.0, flags) else { return }
         FSEventStreamSetDispatchQueue(s, .main)
         FSEventStreamStart(s)
         stream = s
@@ -65,8 +71,50 @@ final class FolderSync {
            let s = try? PropertyListDecoder().decode([String: [String]].self, from: d) {
             seen = s.mapValues(Set.init)
         }
-        watcher.onEvents = { [weak self] paths, rescan in self?.received(paths, rescan: rescan) }
-        watcher.watch(roots)
+        watcher.onEvents = { [weak self] paths, rescan, newest in self?.received(paths, rescan: rescan, through: newest) }
+        let resume = Self.resumePoint(for: roots)
+        processedThrough = resume ?? 0
+        watcher.watch(roots, since: resume)
+    }
+
+    // MARK: Catching up at launch
+
+    // How far the playlist is in line with the folders: an FSEvents event ID, saved with the time and the
+    // roots it belongs to. At launch the events after it are replayed (only what changed is read again)
+    // instead of re-reading every file in every watched folder.
+    private static let resumeKey = "watchedResumePoint"
+    /// Replays only reach this far back with confidence; older, or roots changed: read everything again.
+    private static let resumeMaxAge: TimeInterval = 7 * 86400
+
+    private static func resumePoint(for roots: [String]) -> FSEventStreamEventId? {
+        guard let d = UserDefaults.standard.dictionary(forKey: resumeKey), let id = d["id"] as? NSNumber,
+              let at = d["at"] as? Double, Date().timeIntervalSince1970 - at < resumeMaxAge,
+              (d["roots"] as? [String])?.sorted() == roots.sorted() else { return nil }
+        return id.uint64Value
+    }
+
+    /// Folders whose changes FSEvents keeps a history of: local internal disks. Network shares report no
+    /// events from other computers and external drives may keep no history: those are read again.
+    private static func historyKept(_ root: String) -> Bool {
+        let v = try? URL(fileURLWithPath: root).resourceValues(forKeys: [.volumeIsLocalKey, .volumeIsInternalKey])
+        return v?.volumeIsLocal == true && v?.volumeIsInternal == true
+    }
+
+    /// At launch: replay events where there's a history (started in init), read the rest again.
+    func catchUp() {
+        if Self.resumePoint(for: roots) == nil { rescanAll(); return }
+        let others = roots.filter { !Self.historyKept($0) }
+        if !others.isEmpty { rescan(others) }
+    }
+
+    /// Everything up to here is applied to the playlist (only moves forward).
+    private var processedThrough: FSEventStreamEventId = 0
+    private var scansRunning = 0
+
+    private func saveResumePoint() {
+        guard scansRunning == 0, pending.isEmpty, processedThrough > 0 else { return }
+        UserDefaults.standard.set(["id": NSNumber(value: processedThrough), "at": Date().timeIntervalSince1970, "roots": roots],
+                                  forKey: Self.resumeKey)
     }
 
     // MARK: Folders
@@ -82,7 +130,7 @@ final class FolderSync {
         roots.removeAll { $0.hasPrefix(path + "/") }
         roots.append(path)
         persistRoots()
-        rescan([path])
+        rescan([path], through: FSEventsGetCurrentEventId())
     }
 
     func remove(_ root: String, removeTracks: Bool) {
@@ -90,13 +138,14 @@ final class FolderSync {
         seen.removeValue(forKey: root)
         persistRoots()
         saveSeen()
+        saveResumePoint()   // for the remaining roots
         if removeTracks, let controller = controllerRef {
             let idx = IndexSet(controller.tracks.indices.filter { controller.tracks[$0].path.hasPrefix(root + "/") })
             controller.remove(trackIndices: idx)
         }
     }
 
-    func rescanAll() { rescan(roots) }
+    func rescanAll() { rescan(roots, through: FSEventsGetCurrentEventId()) }
 
     private func persistRoots() {
         UserDefaults.standard.set(roots, forKey: "watchedFolders")
@@ -129,7 +178,11 @@ final class FolderSync {
 
     // MARK: Events
 
-    private func received(_ paths: [String], rescan: Bool) {
+    /// The newest event received and not yet applied (applied with the rescan it triggers).
+    private var receivedThrough: FSEventStreamEventId = 0
+
+    private func received(_ paths: [String], rescan: Bool, through newest: FSEventStreamEventId) {
+        receivedThrough = max(receivedThrough, newest)
         if rescan {
             pending.formUnion(roots)
         } else {
@@ -148,7 +201,7 @@ final class FolderSync {
             guard let self else { return }
             let scopes = self.pending
             self.pending.removeAll()
-            self.rescan(Array(scopes))
+            self.rescan(Array(scopes), through: self.receivedThrough)
         }
         flushWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: w)
@@ -156,8 +209,9 @@ final class FolderSync {
 
     // MARK: Reconcile
 
-    /// Re-read the given folders/files and bring the playlist in line with them.
-    private func rescan(_ rawScopes: [String]) {
+    /// Re-read the given folders/files and bring the playlist in line with them. `through`: the event ID
+    /// this brings the playlist up to (saved as the resume point once nothing else is pending).
+    private func rescan(_ rawScopes: [String], through: FSEventStreamEventId = 0) {
         // Drop scopes already covered by an ancestor scope.
         let sorted = Set(rawScopes).sorted()
         var scopes: [String] = []
@@ -165,6 +219,7 @@ final class FolderSync {
         guard !scopes.isEmpty else { return }
 
         let rootsSnapshot = roots
+        scansRunning += 1
         DispatchQueue.global(qos: .utility).async {
             let fm = FileManager.default
             var dirs: [String] = [], gone: [String] = [], found: [Track] = [], unreadable: [String] = []
@@ -182,7 +237,12 @@ final class FolderSync {
                 }
             }
             let unknown = unreadable.map { Self.canonical($0, roots: rootsSnapshot) }
-            DispatchQueue.main.async { self.apply(dirs: dirs, gone: gone, found: found, unknown: unknown) }
+            DispatchQueue.main.async {
+                self.scansRunning -= 1
+                self.apply(dirs: dirs, gone: gone, found: found, unknown: unknown)
+                self.processedThrough = max(self.processedThrough, through)
+                self.saveResumePoint()
+            }
         }
     }
 

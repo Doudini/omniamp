@@ -28,7 +28,31 @@ enum LibraryCache {
         return dir.appendingPathComponent("library.cache")
     }
 
+    /// `preload()`'s result, taken by the first `load()`.
+    private final class Pending: @unchecked Sendable {
+        let done = DispatchSemaphore(value: 0)
+        var result: Payload?
+    }
+    private static var pending: Pending?
+
+    /// Read and decode in the background now (while AppKit starts up); `load()` then waits only for what's left.
+    static func preload() {
+        let p = Pending()
+        pending = p
+        DispatchQueue.global(qos: .userInitiated).async {
+            p.result = read()
+            p.done.signal()   // the semaphore orders the write before the waiting read
+        }
+    }
+
     static func load() -> Payload? {
+        guard let p = pending else { return read() }
+        pending = nil
+        p.done.wait()
+        return p.result
+    }
+
+    private static func read() -> Payload? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         guard var p = try? PropertyListDecoder().decode(Payload.self, from: data) else {
             // Unreadable (damaged, or from a future version): set it aside rather than overwrite it with an

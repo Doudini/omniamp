@@ -483,6 +483,7 @@ final class PodcastLibrary {
 
     init(directory: URL? = nil) {
         dir = directory ?? LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("Podcasts", isDirectory: true)
+        Self.writes.sync {}   // saves are written in the background: let any still on their way land first
         try? FileManager.default.createDirectory(at: dir.appendingPathComponent("feeds"), withIntermediateDirectories: true)
         subscriptions = load("subscriptions.json") ?? []
         // Older builds saved a plain list (no dates): those count as oldest.
@@ -519,7 +520,8 @@ final class PodcastLibrary {
         listened[url] = Date().timeIntervalSince1970
         if listened.count > 500 { for k in listened.sorted(by: { $0.value < $1.value }).prefix(100).map(\.key) { listened.removeValue(forKey: k) } }
         save(listened, "listened.json")
-        if let found = lookupInFeeds(url) {
+        // Noted on every pause and track change: the feeds on disk are only searched the first time.
+        if let found = lookupInFeeds(url, disk: started[url] == nil) {
             started[url] = Started(episode: found.episode, show: found.show)
         } else if started[url] == nil, let t = track, t.isEpisode {
             let showName = t.podcast.flatMap { $0.isEmpty ? nil : $0 } ?? "Web audio"
@@ -536,16 +538,20 @@ final class PodcastLibrary {
     /// An episode and its show: from the feeds read so far, the subscriptions' saved feeds, or what was noted
     /// when it was listened to.
     func lookup(_ url: String) -> (episode: PodcastEpisode, show: PodcastShow)? {
-        if let found = lookupInFeeds(url) { return found }
-        return started[url].map { ($0.episode, $0.show) }
+        // Memory first (feeds read this session, then what was noted when listening); the saved feeds on
+        // disk (several MB each) only if neither knows it.
+        if let found = lookupInFeeds(url, disk: false) { return found }
+        if let s = started[url] { return (s.episode, s.show) }
+        return lookupInFeeds(url, disk: true)
     }
 
-    private func lookupInFeeds(_ url: String) -> (episode: PodcastEpisode, show: PodcastShow)? {
+    private func lookupInFeeds(_ url: String, disk: Bool = true) -> (episode: PodcastEpisode, show: PodcastShow)? {
         for (feed, c) in feeds {
             if let e = c.episodes.first(where: { $0.url == url }), let s = knownShows[feed] ?? subscriptions.first(where: { $0.feedURL == feed }) {
                 return (e, s)
             }
         }
+        guard disk else { return nil }
         for s in subscriptions where feeds[s.feedURL] == nil {
             if let e = cachedEpisodes(s).first(where: { $0.url == url }) { return (e, s) }
         }
@@ -556,8 +562,11 @@ final class PodcastLibrary {
         (try? Data(contentsOf: dir.appendingPathComponent(name))).flatMap { try? JSONDecoder().decode(T.self, from: $0) }
     }
 
+    /// Encoded and written on the serial `writes` queue, in order: the played list alone can hold 20,000
+    /// entries, and it's saved at every mark and pause.
     private func save<T: Encodable>(_ value: T, _ name: String) {
-        try? JSONEncoder().encode(value).write(to: dir.appendingPathComponent(name), options: .atomic)
+        let url = dir.appendingPathComponent(name)
+        Self.writes.async { try? JSONEncoder().encode(value).write(to: url, options: .atomic) }
     }
 
     // Subscriptions
@@ -688,13 +697,7 @@ final class PodcastLibrary {
     }
 
     /// An episode from the feeds read so far or the subscriptions' saved feeds (nil if none has it).
-    func knownEpisode(_ url: String) -> PodcastEpisode? {
-        for c in feeds.values { if let e = c.episodes.first(where: { $0.url == url }) { return e } }
-        for s in subscriptions where feeds[s.feedURL] == nil {
-            if let e = cachedEpisodes(s).first(where: { $0.url == url }) { return e }
-        }
-        return nil
-    }
+    func knownEpisode(_ url: String) -> PodcastEpisode? { lookup(url)?.episode }
 
     /// Newest episode date the user had seen of a subscribed show (nil: not subscribed, nothing is "new").
     func seenMark(_ show: PodcastShow) -> Double? {
