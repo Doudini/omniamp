@@ -186,7 +186,7 @@ final class SongPage: NSScrollView {
                 self.versions = v
                 self.plays = p
                 self.build()
-                self.documentView?.scroll(.zero)
+                self.scrollToTop()
             }
         }
     }
@@ -291,7 +291,7 @@ final class SongPage: NSScrollView {
             bars.sort { $0.value > $1.value }
             if other > 0 { bars.append(.init(id: "", label: "other releases", value: Double(other), detail: "not in library")) }
             perVersion.bars = Array(bars.prefix(12))
-            perVersion.color = { byKey[$0.id].map { Theme.kind($0.kind) } }
+            perVersion.color = { byKey[$0.id].map { Theme.kind($0.kind) } ?? Theme.phosphorDim }
             perVersion.tip = { "\($0.label): \(Int($0.value).formatted()) plays" }
             let years = YearsChart()
             years.unit = "play"
@@ -335,5 +335,14 @@ final class SongPage: NSScrollView {
         let pool = plain.contains { $0.kind == .album } ? plain.filter { $0.kind == .album } : (plain.isEmpty ? versions : plain)
         let counts = Dictionary(grouping: pool.map(\.track.title), by: { $0 }).mapValues(\.count)
         return counts.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key ?? versions.first?.track.title ?? ""
+    }
+
+    /// After the new content has its size (scrolling before would land short of the top).
+    private func scrollToTop() {
+        layoutSubtreeIfNeeded()
+        // Test hook: OMNIAMP_STATS_SCROLL=<y> for screenshots of the lower part.
+        let y = ProcessInfo.processInfo.environment["OMNIAMP_STATS_SCROLL"].flatMap(Double.init) ?? 0
+        contentView.scroll(to: NSPoint(x: 0, y: y))
+        reflectScrolledClipView(contentView)
     }
 }

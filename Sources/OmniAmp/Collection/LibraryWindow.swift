@@ -79,8 +79,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let statsPage = StatsPage()
     private let listeningPage = ListeningPage()
     private let songPage = SongPage()
-    /// The song shown over the lists (artist key, title key), if any.
-    private var song: (artist: String, title: String)?
+    private let artistPage = ArtistPage()
+    /// Pages over the lists, the one shown last: Back goes down the stack, then to the lists.
+    private enum Page { case song(artist: String, title: String), artist(String) }
+    private var pages: [Page] = []
     private var statsGeneration = 0
 
     init(controller: PlayerController) {
@@ -122,6 +124,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         reloadAll(keepEntry: entry, keepAlbum: Self.lastState?.album)
         // Test hook: OMNIAMP_LIBRARY_SONG="Artist|Title" opens that song's page.
+        if let name = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_ARTIST"] {   // test hook: that artist's page
+            DispatchQueue.main.async { [weak self] in self?.push(.artist(Keys.artist(name))) }
+        }
         if let hook = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_SONG"]?.components(separatedBy: "|"), hook.count == 2 {
             DispatchQueue.main.async { [weak self] in self?.showSong(artist: Keys.artist(hook[0]), titleKey: Keys.title(hook[1])) }
         }
@@ -193,6 +198,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             menu.delegate = self
             t.menu = menu
         }
+        let artistMenu = NSMenu()
+        artistMenu.delegate = self
+        middle.menu = artistMenu
 
         letters.onLetter = { [weak self] l in self?.jump(to: l) }
         letters.translatesAutoresizingMaskIntoConstraints = false
@@ -223,19 +231,24 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         let root = NSView()
         statsPage.onGenre = { [weak self] g in self?.open(.genres, g) }
         statsPage.onYear = { [weak self] y in self?.open(.years, String(y)) }
-        statsPage.onArtist = { [weak self] a in self?.open(.artists, a) }
+        statsPage.onArtist = { [weak self] a in self?.push(.artist(a)) }
         statsPage.onSearch = { [weak self] q in
             guard let self else { return }
             self.search.stringValue = q
             self.searchChanged()
         }
-        listeningPage.onArtist = { [weak self] a in self?.open(.artists, a) }
+        listeningPage.onArtist = { [weak self] a in self?.push(.artist(a)) }
         statsPage.onSong = { [weak self] a, t in self?.showSong(artist: a, titleKey: t) }
-        songPage.onBack = { [weak self] in self?.closeSong() }
-        songPage.onArtist = { [weak self] a in self?.closeSong(); self?.open(.artists, a) }
+        songPage.onBack = { [weak self] in self?.back() }
+        songPage.onArtist = { [weak self] a in self?.push(.artist(a)) }
         songPage.onPlay = { [weak self] list in self?.play(list) }
         songPage.onAdd = { [weak self] list in self?.enqueue(list) }
-        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage]
+        artistPage.onBack = { [weak self] in self?.back() }
+        artistPage.onSong = { [weak self] a, t in self?.push(.song(artist: a, title: t)) }
+        artistPage.onRelease = { [weak self] a in self?.openRelease(artist: a.artistKey, album: a.key) }
+        artistPage.onBrowse = { [weak self] a in self?.openRelease(artist: a, album: nil) }
+        artistPage.onPlay = { [weak self] list in self?.play(list) }
+        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage, artistPage]
             as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
@@ -286,6 +299,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             statsPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
             statsPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
             statsPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            artistPage.topAnchor.constraint(equalTo: side.topAnchor),
+            artistPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
+            artistPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
+            artistPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             songPage.topAnchor.constraint(equalTo: side.topAnchor),
             songPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
             songPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
@@ -361,21 +378,59 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
     }
 
-    // MARK: Song page
+    // MARK: Pages (song, artist)
 
-    /// Every version of a song, over whatever section is showing (Back returns to it).
-    private func showSong(artist: String, titleKey: String) {
-        song = (artist, titleKey)
-        for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, statsPage, listeningPage] as [NSView] { v.isHidden = true }
-        songPage.isHidden = false
-        songPage.show(artist: artist, titleKey: titleKey)
-        window?.makeFirstResponder(songPage)
+    private func showSong(artist: String, titleKey: String) { push(.song(artist: artist, title: titleKey)) }
+
+    private func push(_ p: Page) {
+        pages.append(p)
+        showTopPage()
     }
 
-    private func closeSong() {
-        song = nil
+    private func showTopPage() {
+        guard let p = pages.last else { return }
+        for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, statsPage, listeningPage, songPage, artistPage] as [NSView] {
+            v.isHidden = true
+        }
+        switch p {
+        case .song(let artist, let title):
+            songPage.isHidden = false
+            songPage.show(artist: artist, titleKey: title)
+            window?.makeFirstResponder(songPage)
+        case .artist(let key):
+            artistPage.isHidden = false
+            artistPage.show(artist: key)
+            window?.makeFirstResponder(artistPage)
+        }
+    }
+
+    /// Back: the page before, or the lists.
+    private func back() {
+        pages.removeLast()
+        if pages.isEmpty { closePages() } else { showTopPage() }
+    }
+
+    private func closePages() {
+        pages = []
         songPage.isHidden = true
+        artistPage.isHidden = true
         reloadAll()
+    }
+
+    /// A release (or just the artist) in the library's lists.
+    private func openRelease(artist: String, album: String?) {
+        pages = []
+        songPage.isHidden = true
+        artistPage.isHidden = true
+        section = .artists
+        reloadAll(keepEntry: artist, keepAlbum: album)
+        window?.makeFirstResponder(album == nil ? middle : albumTable)
+    }
+
+    /// The artist selected in the list: their page.
+    @objc private func openArtistPage() {
+        guard let e = selectedEntry, section == .artists || section == .shows || searching else { return }
+        push(.artist(e.id))
     }
 
     /// Right-click on a track: all recordings of that song by that artist.
@@ -395,9 +450,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private func loadEntries(keep: String?, keepAlbum: String? = nil) {
-        if song != nil, !searching { return }   // the song page stays until Back
+        if !pages.isEmpty, !searching { return }   // a page stays until Back
         songPage.isHidden = true
-        song = nil
+        artistPage.isHidden = true
+        pages = []
         statsPage.isHidden = !showingStats
         listeningPage.isHidden = !showingListening
         for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingPage }
@@ -774,6 +830,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     @objc private func doubleClicked(_ sender: NSTableView) {
         guard sender.clickedRow >= 0 else { return }
         switch sender {
+        case middle where section == .artists || section == .shows || searching: openArtistPage()
         case sidebar, middle: window?.makeFirstResponder(albumTable)
         case trackTable: play(trackTable.selectedRowIndexes.filter { $0 < tracks.count }.map { tracks[$0] })
         default:
@@ -850,6 +907,17 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if menu === middle.menu {
+            // An artist in the list: their page, or everything they made.
+            guard section == .artists || section == .shows || searching, middle.clickedRow >= 0 else { return }
+            if middle.selectedRow != middle.clickedRow { middle.selectRowIndexes([middle.clickedRow], byExtendingSelection: false) }
+            window?.makeFirstResponder(middle)
+            menu.addItem(withTitle: "Artist Page", action: #selector(openArtistPage), keyEquivalent: "").target = self
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "Play All", action: #selector(playSelection), keyEquivalent: "").target = self
+            menu.addItem(withTitle: "Add All to Playlist", action: #selector(addSelection), keyEquivalent: "").target = self
+            return
+        }
         let t = menu === albumTable.menu ? albumTable : trackTable
         let row = t.clickedRow
         guard row >= 0 else { return }
@@ -897,9 +965,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         switch t {
         case sidebar:
             guard !searching, let s = Section(rawValue: sidebar.selectedRow) else { return }
-            if song != nil {   // leaving the song page
-                song = nil
+            if !pages.isEmpty {   // leaving the pages
+                pages = []
                 songPage.isHidden = true
+                artistPage.isHidden = true
                 section = s
                 loadEntries(keep: nil)
                 return

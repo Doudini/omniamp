@@ -140,6 +140,15 @@ final class CollectionDB {
         try addColumn("albums", "unplayable", "INTEGER NOT NULL DEFAULT 0")
         try addColumn("albums", "unplayable_format", "TEXT")
         try ensureListeningTables()
+        // Song keys follow Keys.title: recomputed from the stored titles when its rules change (no files read).
+        if (try db.scalar("SELECT value FROM meta WHERE key = 'songKeys'") ?? 1) < songKeyVersion {
+            try db.transaction {
+                var rows: [(Int64, String)] = []
+                try db.query("SELECT id, title FROM files") { rows.append(($0.int64(0), $0.text(1))) }
+                for (id, title) in rows { try db.run("UPDATE files SET title_key = ? WHERE id = ?", [Keys.title(title), id]) }
+                try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('songKeys', ?)", [songKeyVersion])
+            }
+        }
         let content = try db.scalar("SELECT value FROM meta WHERE key = 'content'") ?? 0
         if content < Self.contentVersion {
             // Unknown mtime: the scanner treats every file as changed.

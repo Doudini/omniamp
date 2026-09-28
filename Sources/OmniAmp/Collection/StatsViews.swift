@@ -121,6 +121,8 @@ final class YearsChart: StatsChart {
     var onClick: ((Int) -> Void)?
     /// What the columns count ("release", "play").
     var unit = "release"
+    /// The columns' color when they're all one kind of thing (shows); nil: the phosphor.
+    var color: NSColor?
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 150) }
 
     private var span: ClosedRange<Int> {
@@ -148,7 +150,8 @@ final class YearsChart: StatsChart {
         for (i, y) in years.enumerated() {
             let h = max(2, p.height * CGFloat(y.releases) / most)
             let x = p.minX + CGFloat(y.year - span.lowerBound) * s
-            Self.bar(NSRect(x: x + (s > 4 ? 1 : 0), y: p.maxY - h, width: max(1.5, s - (s > 4 ? 2 : 0.5)), height: h), hot: hovered == i)
+            Self.bar(NSRect(x: x + (s > 4 ? 1 : 0), y: p.maxY - h, width: max(1.5, s - (s > 4 ? 2 : 0.5)), height: h), color: color,
+                     hot: hovered == i)
         }
         var decade = span.lowerBound
         while decade <= span.upperBound {

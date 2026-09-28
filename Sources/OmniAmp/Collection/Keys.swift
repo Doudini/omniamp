@@ -1,5 +1,8 @@
 import Foundation
 
+/// Bump when `title(_:)` changes: the library recomputes its song keys from the stored titles.
+let songKeyVersion = 2
+
 /// Names folded for grouping and sorting: "The Beatles", "BEATLES" and "Beatles, The" are one artist, and
 /// "Song (Live)", "Song - 2011 Remaster" and "Song [demo]" are one song.
 enum Keys {
@@ -53,8 +56,10 @@ enum Keys {
         // Bracketed parts that describe a version: "(Live)", "[Demo 1983]", "{take 3}".
         for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
             while let o = t.range(of: open, options: .backwards), let c = t.range(of: close, range: o.upperBound..<t.endIndex) {
-                let inner = fold(String(t[o.upperBound..<c.lowerBound]))
+                let raw = String(t[o.upperBound..<c.lowerBound]), inner = fold(raw)
+                // A version note: "(Live)", "[Demo]", or anything with a year in it ("(Paris 4 mai 2002)", "[BBC 1989]").
                 guard inner.split(separator: " ").contains(where: { versionWords.contains(String($0)) }) || inner.allSatisfy(\.isNumber)
+                        || year(raw) != nil
                 else { break }
                 t.removeSubrange(o.lowerBound..<c.upperBound)
             }
@@ -66,6 +71,13 @@ enum Keys {
         }
         let k = fold(t)
         return k.isEmpty ? fold(title) : k
+    }
+
+    /// How to show a song spelled several ways: a spelling without version notes if there is one, the most common.
+    static func displayTitle(_ spellings: [String: Int]) -> String {
+        let plain = spellings.filter { fold($0.key) == title($0.key) }
+        let pool = plain.isEmpty ? spellings : plain
+        return pool.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key ?? ""
     }
 
     /// The year in a date tag or name: "1977-05-08", "1977", "May 1977" → 1977.

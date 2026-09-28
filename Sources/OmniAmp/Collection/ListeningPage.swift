@@ -321,7 +321,7 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         let top = BarListChart()
         top.bars = s.topArtists
         top.tip = { "\($0.label): \(Int($0.value).formatted()) plays · \($0.detail)" }
-        top.onClick = { [weak self] b in if !b.detail.contains("not in") { self?.onArtist?(b.id) } }
+        top.onClick = { [weak self] b in self?.onArtist?(b.id) }
         let years = YearsChart()
         years.unit = "play"
         years.years = s.years
@@ -332,6 +332,7 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         let notOwned = BarListChart()
         notOwned.bars = s.notOwned
         notOwned.tip = { "\($0.label): \(Int($0.value).formatted()) plays, nothing in the library" }
+        notOwned.onClick = { [weak self] b in self?.onArtist?(b.id) }
         rows.append(row([panel("When you listen", clock, note: "plays by weekday and hour"),
                          panel("Played a lot, not in your library", notOwned, note: "plays")]))
 

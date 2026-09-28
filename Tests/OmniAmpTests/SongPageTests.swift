@@ -63,4 +63,33 @@ final class SongPageTests: XCTestCase {
         XCTAssertEqual(SongPage.bestTitle([v("Dark Star (live)", .show), v("Dark Star", .show), v("Dark Star", .show)]), "Dark Star")
         XCTAssertEqual(SongPage.bestTitle([v("Song [demo]", .unreleased)]), "Song [demo]", "nothing plainer to choose")
     }
+
+    func testArtistDashboard() throws {
+        let d = try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite"))
+        try d.upsert([
+            file(1, album: "Bleach", title: "About a Girl", kind: .album, year: 1989),
+            file(2, album: "Bleach", title: "Swap Meet", kind: .album, year: 1989),
+            file(3, album: "1991-11-25 Paradiso", title: "About A Girl (Paris 4 mai 2002)", kind: .show, year: 1991, show: "1991-11-25"),
+            file(4, album: "1993-12-13 Seattle", title: "About a Girl", kind: .show, year: 1993, show: "1993-12-13"),
+        ])
+        let jan2008 = 1_199_188_800   // 2008-01-01
+        try d.addPlays([
+            LastFM.Play(ts: jan2008, artist: "Nirvana", album: "Bleach", title: "About a Girl", artistMBID: nil),
+            LastFM.Play(ts: jan2008 + 86400, artist: "Nirvana", album: "Bleach", title: "About A Girl", artistMBID: nil),
+            LastFM.Play(ts: jan2008 + 70 * 86400, artist: "Nirvana", album: "Nevermind", title: "Lithium", artistMBID: nil),
+        ])
+        let a = try d.artistDashboard("nirvana")
+        XCTAssertEqual(a.name, "Nirvana")
+        XCTAssertEqual(a.releases.count, 3)
+        XCTAssertEqual(a.ownedTracks, 4)
+        XCTAssertEqual(a.plays, 3)
+        XCTAssertEqual(a.firstPlay?.title, "About a Girl")
+        XCTAssertEqual(a.months.map(\.plays), [2, 0, 1], "every month from first to last, empty ones too")
+        XCTAssertEqual(a.topSongs.map(\.title), ["About a Girl", "Lithium"])
+        XCTAssertEqual(a.topSongs.map(\.versions), [3, 0], "Lithium isn't in the library")
+        XCTAssertEqual(a.mostRecorded.map(\.title), ["About a Girl"], "the plain spelling")
+        XCTAssertEqual(a.playedAlbums.map(\.label), ["Bleach", "Nevermind"])
+        XCTAssertEqual(a.playedAlbumKinds[Keys.fold("Bleach")], .album)
+        XCTAssertEqual(a.showsPerYear.map(\.year), [1991, 1993])
+    }
 }

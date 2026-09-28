@@ -31,6 +31,11 @@ final class CollectionClassifierTests: XCTestCase {
         XCTAssertEqual(Keys.title("Sugar Magnolia - 2013 Remaster"), k)
         XCTAssertEqual(Keys.title("Sugar Magnolia - Live at Winterland"), k)
         XCTAssertNotEqual(Keys.title("Sugar Magnolia (Sunshine Daydream)"), k)   // not a version note
+        XCTAssertEqual(Keys.title("The hover is ajar (Paris 4 mai 2002)"), Keys.title("The Hover Is Ajar"))
+        XCTAssertEqual(Keys.title("Transmission [BBC Session 1979]"), Keys.title("Transmission"))
+        XCTAssertNotEqual(Keys.title("1999"), "")   // a title that is a year stays
+        XCTAssertEqual(Keys.displayTitle(["You hurry wonder (Paris 4 mai 2002)": 5, "You Hurry Wonder": 2]), "You Hurry Wonder")
+        XCTAssertEqual(Keys.displayTitle(["Song (live)": 1]), "Song (live)")
         XCTAssertEqual(Keys.title("(Live)"), "live")   // nothing else left: keep it
     }
 

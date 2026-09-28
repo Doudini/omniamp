@@ -99,8 +99,13 @@ extension CollectionDB {
             FROM files f JOIN albums a ON a.key = f.album_key WHERE \(f) AND length(f.title_key) >= 3
             GROUP BY f.artist_key, f.title_key HAVING n >= 3 ORDER BY n DESC LIMIT 60
             """) { r in
-            let title = r.text(0)
+            var title = r.text(0)
             guard !Self.isPlaceholderTitle(title) else { return }
+            // Shown as spelled without version notes where some recording is.
+            var spellings: [String: Int] = [:]
+            try? self.db.query("SELECT title, count(*) FROM files WHERE artist_key = ? AND title_key = ? GROUP BY title",
+                               [r.text(4), r.text(5)]) { spellings[$0.text(0)] = $0.int(1) }
+            if !spellings.isEmpty { title = Keys.displayTitle(spellings) }
             s.songs.append(.init(title: title, artist: r.text(1), artistKey: r.text(4), titleKey: r.text(5), versions: r.int(2),
                                  unofficial: r.int(3)))
         }
