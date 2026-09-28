@@ -175,6 +175,23 @@ final class CollectionDBTests: XCTestCase {
         XCTAssertEqual(try d.albums(matching: "\"quoted OR", LibraryFilter()), [])   // no FTS syntax errors
     }
 
+    func testAttention() throws {
+        let d = try db()
+        try d.upsert([row(1, artist: "Nirvana", album: "Bleach", title: "Blew", genre: "Grunge"),
+                      row(2, artist: "NIRVANA", album: "Bleach", title: "School", genre: "Grunge"),
+                      row(3, artist: "Slowdive", album: "Souvlaki", title: "Alison", genre: "Shoegaze", year: nil),
+                      row(4, artist: "Slowdive", album: "1992-05-01 Paris", title: "Alison", kind: .show, genre: "Shoegaze", year: nil)])
+        let a = try d.attention()
+        let groups = Dictionary(uniqueKeysWithValues: a.groups.map { ($0.id, $0) })
+        // No year: only the official album; a show without a year is normal.
+        XCTAssertEqual(groups["year"]?.entries.map(\.title), ["Slowdive — Souvlaki"])
+        XCTAssertNil(groups["genre"])
+        XCTAssertEqual(groups["spelling"]?.total, 1)
+        XCTAssertEqual(groups["spelling"]?.entries.first?.fix, .artist(Keys.artist("Nirvana")))
+        XCTAssertEqual(groups["dupes"]?.entries.first?.lead, "×2")
+        XCTAssertEqual(a.total, a.groups.reduce(0) { $0 + $1.total })
+    }
+
     func testRetagMovesTrackBetweenAlbums() throws {
         let d = try db()
         try d.upsert([row(1, artist: "A", album: "X", title: "t")])

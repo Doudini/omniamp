@@ -9,7 +9,7 @@ import AppKit
 final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
                                      NSMenuDelegate, NSSearchFieldDelegate {
     enum Section: Int, CaseIterable {
-        case artists, shows, years, genres, added, stats, listening
+        case artists, shows, years, genres, added, stats, listening, attention
 
         var title: String {
             switch self {
@@ -20,6 +20,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             case .added: "Recently Added"
             case .stats: "Stats"
             case .listening: "Listening"
+            case .attention: "Needs Attention"
             }
         }
         var glyph: String {
@@ -31,6 +32,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             case .added: "\u{F0150}"     // nf-md-clock_outline
             case .stats: "\u{F0128}"     // nf-md-chart_bar
             case .listening: "\u{F01E7}"   // nf-md-earth
+            case .attention: Fonts.Icon.warning
             }
         }
     }
@@ -80,6 +82,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let listeningPage = ListeningPage()
     private let songPage = SongPage()
     private let artistPage = ArtistPage()
+    private let attentionPage = AttentionPage()
     /// Pages over the lists, the one shown last: Back goes down the stack, then to the lists.
     private enum Page { case song(artist: String, title: String), artist(String) }
     private var pages: [Page] = []
@@ -251,12 +254,22 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         songPage.onArtist = { [weak self] a in self?.push(.artist(a)) }
         songPage.onPlay = { [weak self] list in self?.play(list) }
         songPage.onAdd = { [weak self] list in self?.enqueue(list) }
+        attentionPage.onFix = { [weak self] fix in
+            guard let self else { return }
+            switch fix {
+            case .artist(let a): self.push(.artist(a))
+            case .open(let a, let album): self.openRelease(artist: a, album: album)
+            case .findInfo(let a, let album):
+                self.openRelease(artist: a, album: album)
+                if self.selectedAlbum?.key == album { self.findInfo() }
+            }
+        }
         artistPage.onBack = { [weak self] in self?.back() }
         artistPage.onSong = { [weak self] a, t in self?.push(.song(artist: a, title: t)) }
         artistPage.onRelease = { [weak self] a in self?.openRelease(artist: a.artistKey, album: a.key) }
         artistPage.onBrowse = { [weak self] a in self?.openRelease(artist: a, album: nil) }
         artistPage.onPlay = { [weak self] list in self?.play(list) }
-        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage, artistPage]
+        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage, artistPage, attentionPage]
             as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
@@ -307,6 +320,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             statsPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
             statsPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
             statsPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            attentionPage.topAnchor.constraint(equalTo: side.topAnchor),
+            attentionPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
+            attentionPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
+            attentionPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             artistPage.topAnchor.constraint(equalTo: side.topAnchor),
             artistPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
             artistPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
@@ -372,7 +389,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Stats and Listening replace the lists; everything else shows them.
     private var showingStats: Bool { section == .stats && !searching }
     private var showingListening: Bool { section == .listening && !searching }
-    private var showingPage: Bool { showingStats || showingListening }
+    private var showingAttention: Bool { section == .attention && !searching }
+    private var showingPage: Bool { showingStats || showingListening || showingAttention }
 
     private func showStatsPage() {
         for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty] as [NSView] { v.isHidden = true }
@@ -403,7 +421,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func showTopPage() {
         guard let p = pages.last else { return }
-        for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, statsPage, listeningPage, songPage, artistPage] as [NSView] {
+        for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, statsPage, listeningPage, songPage, artistPage, attentionPage]
+            as [NSView] {
             v.isHidden = true
         }
         switch p {
@@ -502,7 +521,13 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         pages = []
         statsPage.isHidden = !showingStats
         listeningPage.isHidden = !showingListening
+        attentionPage.isHidden = !showingAttention
         for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingPage }
+        if showingAttention {
+            for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
+            attentionPage.reload()
+            return
+        }
         if showingStats { showStatsPage(); return }
         if showingListening {
             for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
@@ -523,7 +548,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 entries = try db.genres(filter).map { Entry(id: $0.id, title: $0.title, count: $0.count) }
             case .added:
                 entries = try db.addedMonths(filter).map { Entry(id: $0.id, title: $0.title, count: $0.count) }
-            case .stats, .listening:
+            case .stats, .listening, .attention:
                 entries = []
             }
         } catch {
@@ -578,7 +603,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 case .added:
                     list = try db.albums(addedIn: e.id, filter)
                     grouping = { _ in "" }
-                case .stats, .listening:
+                case .stats, .listening, .attention:
                     break
                 }
             } catch {
