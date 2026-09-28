@@ -29,10 +29,13 @@ struct LibraryAttention: Sendable {
 }
 
 extension CollectionDB {
-    func attention(limit: Int = 12) throws -> LibraryAttention {
+    /// `only`: that group alone (its full list, with a large `limit`).
+    func attention(limit: Int = 12, only: String? = nil) throws -> LibraryAttention {
         var out = LibraryAttention()
+        func wanted(_ id: String) -> Bool { only == nil || only == id }
         func albums(_ id: String, _ title: String, _ note: String, _ condition: String, fix: (LibraryAlbum) -> LibraryAttention.Fix,
                     detail: (LibraryAlbum) -> String) throws {
+            guard wanted(id) else { return }
             let total = Int(try db.scalar("SELECT count(*) FROM albums a WHERE \(condition)") ?? 0)
             guard total > 0 else { return }
             let list = try albumsWhere(condition, [], order: "a.tracks DESC LIMIT \(limit)")
@@ -53,7 +56,7 @@ extension CollectionDB {
         // One artist, several spellings (case, "The", accents, even the same letters in two Unicode forms).
         var spellings: [LibraryAttention.Entry] = []
         var spellTotal = 0
-        try db.query("""
+        if wanted("spelling") { try db.query("""
             SELECT artist_key, group_concat(DISTINCT album_artist), count(DISTINCT album_artist), count(*) FROM files
             WHERE artist_key NOT IN ('unknown artist', '') GROUP BY artist_key HAVING count(DISTINCT album_artist) > 1 ORDER BY count(*) DESC
             """) { r in
@@ -63,7 +66,7 @@ extension CollectionDB {
             let lookAlike = Set(forms.map { $0.precomposedStringWithCanonicalMapping }).count < forms.count
             spellings.append(.init(lead: "×\(r.int(2))", title: forms.joined(separator: " · "),
                                    detail: lookAlike ? "same letters, stored two ways" : "\(r.int(3)) tracks", fix: .artist(r.text(0))))
-        }
+        } }
         if spellTotal > 0 {
             out.groups.append(.init(id: "spelling", title: "Artists spelled several ways", note: "retag to one spelling",
                                     total: spellTotal, entries: spellings))
@@ -72,7 +75,7 @@ extension CollectionDB {
         // The same release title by the same artist in more than one folder.
         var dupes: [LibraryAttention.Entry] = []
         var dupeTotal = 0
-        try db.query("""
+        if wanted("dupes") { try db.query("""
             SELECT a.artist_key, min(a.artist), min(a.title), count(*), min(a.key), sum(a.tracks) FROM albums a
             WHERE a.artist_key NOT IN ('unknown artist', '') GROUP BY a.artist_key, lower(a.title) HAVING count(*) > 1 ORDER BY count(*) DESC, sum(a.tracks) DESC
             """) { r in
@@ -80,7 +83,7 @@ extension CollectionDB {
             guard dupes.count < limit else { return }
             dupes.append(.init(lead: "×\(r.int(3))", title: "\(r.text(1)) — \(r.text(2))", detail: "\(r.int(5)) tracks in all",
                                fix: .open(artist: r.text(0), album: r.text(4))))
-        }
+        } }
         if dupeTotal > 0 {
             out.groups.append(.init(id: "dupes", title: "Same title in several folders", note: "copies, or other sources of a show",
                                     total: dupeTotal, entries: dupes))

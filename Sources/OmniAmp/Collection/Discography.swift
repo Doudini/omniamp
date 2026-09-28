@@ -31,6 +31,8 @@ struct ArtistDiscography: Codable, Sendable, Equatable {
     var bootlegTotal = 0
     /// Recordings on the Live Music Archive (archive.org's etree collection), nil when unknown.
     var liveArchive: Int?
+    /// Those recordings, oldest first (up to `MetadataLookup.liveArchiveLimit`); nil in copies kept before they were.
+    var liveRecordings: [LiveRecording]?
 
     var artistURL: URL { URL(string: "https://musicbrainz.org/artist/\(mbid)")! }
 
@@ -87,7 +89,10 @@ extension MetadataLookup {
         let ids = Set(official.groups.map(\.id))
         d.bootlegs = all.groups.filter { !ids.contains($0.id) }.sorted { ($0.showDate ?? $0.date ?? "9999") < ($1.showDate ?? $1.date ?? "9999") }
         d.bootlegTotal = max(d.bootlegs.count, all.total - official.total)
-        d.liveArchive = await liveArchiveCount(artist)
+        if let live = await liveArchive(artist) {
+            d.liveArchive = live.total
+            d.liveRecordings = live.recordings
+        }
         return d
     }
 
@@ -109,17 +114,6 @@ extension MetadataLookup {
         }
         return (out, total)
     }
-
-    /// How many of their concerts are on the Live Music Archive (free to stream; taping-friendly artists only).
-    private func liveArchiveCount(_ artist: String) async -> Int? {
-        guard let json = await get(Self.url("https://archive.org/advancedsearch.php", [
-            "q": "collection:etree AND creator:\(Self.lucene(artist))", "rows": "0", "output": "json"])) as? [String: Any] else { return nil }
-        return (json["response"] as? [String: Any])?["numFound"] as? Int
-    }
-
-    static func liveArchiveURL(_ artist: String) -> URL {
-        url("https://archive.org/search", ["query": "collection:etree AND creator:\(lucene(artist))"])
-    }
 }
 
 extension CollectionDB {
@@ -132,7 +126,9 @@ extension CollectionDB {
         try ensureDiscographyTable()
         var out: (ArtistDiscography?, stale: Bool) = (nil, true)
         try db.query("SELECT json, checked FROM artist_discography WHERE artist_key = ?", [key]) { r in
-            out = (try? JSONDecoder().decode(ArtistDiscography.self, from: Data(r.text(0).utf8)), Date().timeIntervalSince1970 - r.double(1) > maxAge)
+            let d = try? JSONDecoder().decode(ArtistDiscography.self, from: Data(r.text(0).utf8))
+            // Kept before recordings were: look up again.
+            out = (d, Date().timeIntervalSince1970 - r.double(1) > maxAge || d?.liveRecordings == nil)
         }
         return out
     }

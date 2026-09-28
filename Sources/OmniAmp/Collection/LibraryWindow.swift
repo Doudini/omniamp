@@ -145,8 +145,12 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 probe.isActive = false
             }
         }
-        // Test hook: OMNIAMP_LIBRARY_FIND=1 opens Find Missing Info for the selected release.
-        if ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_FIND"] != nil {
+        // Test hook: OMNIAMP_LIBRARY_FIND=1 opens Find Missing Info for the selected release, "Artist|Album" for that one.
+        if let hook = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_FIND"] {
+            let parts = hook.components(separatedBy: "|")
+            if parts.count == 2, let a = try? db?.albums(artist: Keys.artist(parts[0]), LibraryFilter()).first(where: { $0.title == parts[1] }) {
+                openRelease(artist: a.artistKey, album: a.key)
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.findInfo() }
         }
     }
@@ -269,6 +273,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         artistPage.onRelease = { [weak self] a in self?.openRelease(artist: a.artistKey, album: a.key) }
         artistPage.onBrowse = { [weak self] a in self?.openRelease(artist: a, album: nil) }
         artistPage.onPlay = { [weak self] list in self?.play(list) }
+        artistPage.onShows = { [weak self] a in self?.pages = []; self?.open(.shows, a) }
         for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage, artistPage, attentionPage]
             as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -525,7 +530,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingPage }
         if showingAttention {
             for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
-            attentionPage.reload()
+            attentionPage.reload(group: keep)   // a group only from the test hook ("attention:genre")
             return
         }
         if showingStats { showStatsPage(); return }

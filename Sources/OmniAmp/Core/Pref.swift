@@ -36,6 +36,8 @@ enum Pref {
     static let libraryFolders = "libraryFolders"
     /// The library may look things up online in the background (artist countries from MusicBrainz).
     static let libraryOnlineLookups = "libraryOnlineLookups"
+    /// Where Live Music Archive downloads go (a folder per artist inside).
+    static let liveArchiveFolder = "liveArchiveFolder"
     /// Whose last.fm history the library shows (defaults to the connected account).
     static let lastfmHistoryUser = "lastfmHistoryUser"
     // Podcasts

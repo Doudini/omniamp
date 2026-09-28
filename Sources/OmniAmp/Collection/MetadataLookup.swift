@@ -2,7 +2,10 @@ import Foundation
 
 /// A possible identity for a release, from one online source.
 struct InfoCandidate: Equatable, Sendable {
-    enum Source: String, Sendable { case musicBrainz = "MusicBrainz", iTunes = "iTunes", deezer = "Deezer", archive = "archive.org" }
+    enum Source: String, Sendable {
+        case musicBrainz = "MusicBrainz", iTunes = "iTunes", deezer = "Deezer", archive = "archive.org"
+        case names = "Folder and file names"   // a guess made offline
+    }
     var source: Source
     var artist: String
     var album: String

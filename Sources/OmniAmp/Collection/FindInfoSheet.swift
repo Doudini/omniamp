@@ -25,6 +25,9 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
     private var coverTask: Task<Void, Never>?
     /// The folder's own cover file, if it has one.
     private let existingCover: String?
+    /// No artist in the tags: guesses from the names, and the track titles to search for.
+    private let unknownArtist: Bool
+    private let guesses: [ReleaseGuess.Guess]
 
     /// Called on the main thread when done (with a line for the status bar), or with nil when cancelled.
     var onDone: ((String?) -> Void)?
@@ -34,6 +37,10 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         self.tracks = tracks
         self.currentGenre = genre
         existingCover = DetailsReader.folderArtName(in: album.folder)
+        unknownArtist = ["unknown artist", ""].contains(album.artistKey)
+        guesses = unknownArtist ? ReleaseGuess.guesses(folder: album.folder, albumTitle: album.title,
+                                                       fileNames: tracks.map { ($0.path as NSString).lastPathComponent },
+                                                       titles: tracks.map(\.title)) : []
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 520), styleMask: [.titled], backing: .buffered, defer: false)
         w.appearance = NSAppearance(named: .darkAqua)
         super.init(window: w)
@@ -57,7 +64,9 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         let what = Dash.label(album.kind == .show ? "\(album.artist) · \(album.title)" : "\(album.artist) — \(album.title)", Dash.font(13, .medium), Dash.text)
         what.lineBreakMode = .byTruncatingTail
 
-        for (f, v, ph) in [(queryArtist, album.artist, "Artist"), (queryAlbum, album.kind == .show ? "" : album.title, "Album")] {
+        let first = guesses.first
+        for (f, v, ph) in [(queryArtist, first?.artist ?? album.artist, "Artist"),
+                           (queryAlbum, first?.album ?? (album.kind == .show ? "" : album.title), "Album")] {
             f.stringValue = v
             f.placeholderString = ph
             f.font = Dash.font(13)
@@ -161,9 +170,22 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         table.reloadData()
         status.stringValue = "Searching MusicBrainz, iTunes, Deezer" + (album.showDate != nil ? " and archive.org…" : "…")
         let a = queryArtist.stringValue, b = queryAlbum.stringValue, date = album.showDate
+        // No artist in the tags: also the songs themselves (MusicBrainz knows which releases have them), and the guess.
+        let songs = unknownArtist ? ReleaseGuess.searchTitles(tracks.map { ($0.title, $0.duration) }, artist: a.isEmpty ? nil : a) : []
+        if !songs.isEmpty { status.stringValue = "Searching for \(a.isEmpty ? "the release" : a) and for \(min(songs.count, 4)) of your song titles…" }
+        let guessed = guesses.map { g in
+            InfoCandidate(source: .names, artist: g.artist, album: g.album, year: g.year, genre: nil, thumbURL: nil, coverURL: nil,
+                          detail: "a guess \(g.why)", score: 0.3)
+        }
+        let unknown = unknownArtist
         searchTask = Task { @MainActor [weak self] in
             // An empty album field (a show): the date is what's searched for.
-            let found = await MetadataLookup.shared.candidates(artist: a, album: b.isEmpty ? (date ?? "") : b, showDate: date)
+            async let bySongs = MetadataLookup.shared.identify(songs, artistHint: a.isEmpty ? nil : a)
+            let named = a.isEmpty && b.isEmpty ? [] : await MetadataLookup.shared.candidates(artist: a, album: b.isEmpty ? (date ?? "") : b, showDate: date)
+            // Searched by artist alone: any of their albums; the songs tell which.
+            var found = await bySongs + named.map { c in var c = c; if b.isEmpty, unknown { c.score *= 0.6 }; return c }
+            found.sort { $0.score > $1.score }
+            found += guessed
             guard let self, !Task.isCancelled else { return }
             self.candidates = found
             self.table.reloadData()

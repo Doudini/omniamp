@@ -161,6 +161,8 @@ final class ArtistPage: NSScrollView {
     var onRelease: ((LibraryAlbum) -> Void)?
     var onBrowse: ((String) -> Void)?
     var onPlay: (([LibraryTrack]) -> Void)?
+    /// The Shows list at this artist.
+    var onShows: ((String) -> Void)?
     private let stack = NSStackView()
     private var dash = ArtistDashboard()
     private var generation = 0
@@ -192,7 +194,14 @@ final class ArtistPage: NSScrollView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    private var downloadObserver: NSObjectProtocol?
+
     func show(artist key: String) {
+        if downloadObserver == nil {
+            downloadObserver = NotificationCenter.default.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.fillDiscography() }
+            }
+        }
         generation += 1
         let gen = generation
         info = nil
@@ -356,21 +365,91 @@ final class ArtistPage: NSScrollView {
                                     tip: "Their releases on MusicBrainz, bootlegs included",
                                     action: { open(d.artistURL.appendingPathComponent("releases")) }))
         }
-        if let n = d.liveArchive, n > 0 {
-            boots.rows.append(.init(lead: "", main: "Live Music Archive ↗", detail: "\(n.formatted()) recording\(n == 1 ? "" : "s"), free to stream",
-                                    tip: "Their concerts on archive.org (taping-friendly artists)",
-                                    action: { open(MetadataLookup.liveArchiveURL(self.dash.name)) }))
-        }
-        if !boots.rows.isEmpty {
-            let lead = d.bootlegTotal == 0 ? "tapes on archive.org" : "you have \(mine) · the ones you don't, by date"
-            cards.append((StatsPanel("Known bootlegs (\(d.bootlegTotal.formatted()))", boots, note: lead), 1))
+        if d.bootlegTotal > 0 {
+            cards.append((StatsPanel("Bootlegs on MusicBrainz (\(d.bootlegTotal.formatted()))", boots,
+                                     note: "unofficial releases collectors catalogued · you have \(mine) · the others by date"), 1))
         } else {
             cards[0].1 = 2
         }
-        let grid = dashGrid(cards, columns: 2)
-        discoSlot.addArrangedSubview(grid)
-        grid.widthAnchor.constraint(equalTo: discoSlot.widthAnchor).isActive = true
+        for grid in [dashGrid(cards, columns: 2)] + [liveArchiveCard(d)].compactMap({ $0 }) {
+            discoSlot.addArrangedSubview(grid)
+            grid.widthAnchor.constraint(equalTo: discoSlot.widthAnchor).isActive = true
+        }
         Dash.relaxWidth(discoSlot)
+    }
+
+    /// Their concerts on the Live Music Archive: the ones you don't have can be downloaded into the library.
+    private func liveArchiveCard(_ d: ArtistDiscography) -> NSView? {
+        guard let recs = d.liveRecordings, !recs.isEmpty else { return nil }
+        // Test hook: OMNIAMP_LIVE_DOWNLOAD=<archive.org id>[:mp3] downloads that recording once.
+        if let hook = ProcessInfo.processInfo.environment["OMNIAMP_LIVE_DOWNLOAD"], !Self.hookRan {
+            let parts = hook.split(separator: ":")
+            if let r = recs.first(where: { $0.id == parts.first.map(String.init) }) {
+                Self.hookRan = true
+                LiveArchiveDownloads.shared.start(r, artist: dash.name, format: parts.last == "mp3" ? .mp3 : .lossless)
+            }
+        }
+        let owned = Dictionary(dash.releases.compactMap { a in a.showDate.map { ($0, a) } }, uniquingKeysWith: { a, _ in a })
+        let downloads = LiveArchiveDownloads.shared
+        // Up to 40: all of them, or when there are more, the ones you don't have.
+        let missing = recs.filter { $0.date.flatMap { owned[$0] } == nil }
+        let shown = recs.count <= 40 ? recs : Array(missing.prefix(40))
+        let list = RowListChart()
+        list.rows = shown.map { r in
+            let mine = r.date.flatMap { owned[$0] }
+            var detail = [r.city, r.kind].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+            switch downloads.states[r.id] {
+            case .running(let done, let total)?: detail = total == 0 ? "starting download…" : "downloading \(done + 1) of \(total) files…"
+            case .finished?: detail = "downloaded ✓"
+            case .failed(let why)?: detail = "download failed: \(why)"
+            case nil: if mine != nil { detail += " · in your library" }
+            }
+            return .init(lead: r.date ?? "–", main: r.venue ?? r.id, detail: detail, color: mine != nil ? Theme.kind(.show) : Dash.text3,
+                         tip: (r.source.map { "Source: \($0)\n" } ?? "") + (mine != nil ? "You have this show · click to open it or for more"
+                            : "Click to download it into your library, or open it on archive.org"),
+                         action: { [weak self] in self?.liveArchiveMenu(r, owned: mine) }, hollow: mine == nil)
+        }
+        let n = d.liveArchive ?? recs.count
+        if n > shown.count {
+            list.rows.append(.init(lead: "", main: "All \(n.formatted()) on archive.org ↗", detail: "", tip: "Search the Live Music Archive",
+                                   action: { [name = dash.name] in NSWorkspace.shared.open(MetadataLookup.liveArchiveURL(name)) }))
+        }
+        let have = recs.filter { $0.date.flatMap { owned[$0] } != nil }.count
+        let note = "concert tapes the artist allows to share, free · you have \(have)" + (recs.count > 40 ? " · the others by date" : "")
+            + " · click one to download"
+        return StatsPanel("Live Music Archive (\(n.formatted()))", list, note: note)
+    }
+
+    private static var hookRan = false
+
+    private func liveArchiveMenu(_ r: LiveRecording, owned: LibraryAlbum?) {
+        let menu = NSMenu()
+        func item(_ title: String, _ run: @escaping () -> Void) {
+            let i = NSMenuItem(title: title, action: #selector(MenuAction.run(_:)), keyEquivalent: "")
+            let target = MenuAction(run)
+            i.target = target
+            i.representedObject = target   // keeps it alive with the menu
+            menu.addItem(i)
+        }
+        if let owned { item("Open in Library") { [weak self] in self?.onRelease?(owned) } }
+        let name = dash.name
+        if case .running = LiveArchiveDownloads.shared.states[r.id] {
+            item("Downloading…") {}
+            menu.items.last?.isEnabled = false
+        } else {
+            item(owned == nil ? "Download FLAC (lossless)" : "Download FLAC Again (another source?)") {
+                LiveArchiveDownloads.shared.start(r, artist: name, format: .lossless)
+            }
+            item("Download MP3") { LiveArchiveDownloads.shared.start(r, artist: name, format: .mp3) }
+        }
+        menu.addItem(.separator())
+        item("Open on archive.org ↗") { NSWorkspace.shared.open(r.url) }
+        let folder = LiveArchiveDownloads.shared.folder
+        item("Download Folder: " + (folder.map { ($0 as NSString).lastPathComponent } ?? "not chosen yet") + "…") {
+            LiveArchiveDownloads.shared.chooseFolder()
+        }
+        guard let event = NSApp.currentEvent else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
     private func button(_ glyph: String, _ label: String, _ action: Selector, tip: String, prominent: Bool = false) -> Pill {
@@ -520,12 +599,29 @@ final class ArtistPage: NSScrollView {
         albums.tip = { [kinds = d.playedAlbumKinds] b in "\(b.label): \(Int(b.value).formatted()) plays\(kinds[b.id] == nil ? " · not in the library" : "")" }
         var last: [(NSView, Int)] = []
         if !d.playedAlbums.isEmpty { last.append((StatsPanel("Albums you play most", albums, note: "plays, by the release last.fm saw"), 2)) }
-        if !d.showsPerYear.isEmpty {
+        let owned = d.releases.filter { $0.kind == .show }.sorted { ($0.showDate ?? "") < ($1.showDate ?? "") }
+        if owned.count > 0, owned.count <= 12 {
+            // A few shows: the shows themselves.
+            let list = RowListChart()
+            list.rows = owned.map { a in
+                .init(lead: a.showDate ?? a.year.map(String.init) ?? "–", main: a.venue ?? ArtistDiscography.withoutDate(a.title, a.showDate),
+                      detail: "\(a.tracks) tracks", color: Theme.kind(.show), tip: "\(a.title) · click to open it",
+                      action: { [weak self] in self?.onRelease?(a) })
+            }
+            last.append((StatsPanel("Shows you own (\(owned.count))", list, note: "click one to open it"), last.isEmpty ? 3 : 1))
+        } else if !d.showsPerYear.isEmpty {
             let shows = YearsChart()
             shows.unit = "show"
             shows.color = Theme.kind(.show)
             shows.years = d.showsPerYear
-            last.append((StatsPanel("Shows you own", shows, note: "by year of the concert"), last.isEmpty ? 3 : 1))
+            let byYear = Dictionary(grouping: owned) { $0.year ?? 0 }
+            shows.more = { y in
+                let list = (byYear[y] ?? []).map { "\($0.showDate ?? "") \($0.venue ?? $0.title)" }
+                return list.prefix(8).joined(separator: "\n") + (list.count > 8 ? "\n…" : "")
+            }
+            shows.onClick = { [weak self] _ in if let self { self.onShows?(self.dash.key) } }
+            last.append((StatsPanel("Shows you own (\(owned.count))", shows, note: "concert recordings, by year · click for the list"),
+                         last.isEmpty ? 3 : 1))
         }
         if last.count == 1 { last[0].1 = 3 }
         if !last.isEmpty { add(dashGrid(last)) }
@@ -563,4 +659,11 @@ final class ArtistPage: NSScrollView {
         contentView.scroll(to: NSPoint(x: 0, y: y))
         reflectScrolledClipView(contentView)
     }
+}
+
+/// A menu item's action as a closure.
+final class MenuAction: NSObject {
+    private let run: () -> Void
+    init(_ run: @escaping () -> Void) { self.run = run }
+    @objc func run(_ sender: Any?) { run() }
 }

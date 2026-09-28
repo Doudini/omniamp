@@ -75,10 +75,38 @@ final class DiscographyTests: XCTestCase {
         XCTAssertNil(try db.discography("nirvana").0)
         var d = ArtistDiscography(mbid: "m")
         d.official = [release("Nevermind", "1991")]
+        d.liveRecordings = []
         try db.saveDiscography("nirvana", d)
         let (kept, stale) = try db.discography("nirvana")
         XCTAssertEqual(kept, d)
         XCTAssertFalse(stale)
         XCTAssertTrue(try db.discography("nirvana", maxAge: -1).stale)
+    }
+
+    // MARK: Live Music Archive
+
+    func testLiveRecordingNames() {
+        let r = LiveRecording(id: "x", date: "2010-11-10", venue: "KEXP Studios", city: "Seattle, WA",
+                              source: "KEXP-FM Windows Media stream @ 1.4Mbps > Sound Forge Pro 10.0a @ 24 bit/48 kHz")
+        XCTAssertEqual(r.kind, "FM")
+        XCTAssertEqual(r.folderName, "2010-11-10 KEXP Studios, Seattle, WA [FM]")
+        XCTAssertEqual(LiveRecording(id: "x", date: nil, venue: nil, city: nil, source: "Matrix of SBD + AUD").kind, "Matrix")
+        XCTAssertEqual(LiveRecording(id: "x", date: nil, venue: nil, city: nil, source: "SBD").kind, "SBD")
+        XCTAssertEqual(LiveRecording(id: "gd77", date: nil, venue: nil, city: nil, source: nil).folderName, "gd77")
+        XCTAssertEqual(LiveArchiveDownloads.safeName("AC/DC: Live?"), "AC-DC- Live-")
+        XCTAssertEqual(LiveArchiveDownloads.safeName("Cafe\u{301}"), "Café".precomposedStringWithCanonicalMapping)
+    }
+
+    func testPicksFiles() {
+        let files: [[String: Any]] = [
+            ["name": "t02.flac", "format": "Flac", "source": "original"], ["name": "t01.flac", "format": "Flac", "source": "original"],
+            ["name": "t01.mp3", "format": "VBR MP3", "source": "derivative"], ["name": "t01.ogg", "format": "Ogg Vorbis"],
+            ["name": "info.txt", "format": "Text", "source": "original"], ["name": "x.md5", "format": "Checksums"],
+        ]
+        XCTAssertEqual(LiveArchiveDownloads.pick(files, .lossless), ["t01.flac", "t02.flac", "info.txt"])
+        XCTAssertEqual(LiveArchiveDownloads.pick(files, .mp3), ["t01.mp3", "info.txt"])
+        // Only shorten originals: the MP3 copies.
+        XCTAssertEqual(LiveArchiveDownloads.pick([["name": "a.shn", "format": "Shorten"], ["name": "a.mp3", "format": "VBR MP3"]], .lossless), ["a.mp3"])
+        XCTAssertEqual(LiveArchiveDownloads.pick([["name": "a.shn", "format": "Shorten"]], .mp3), [])
     }
 }

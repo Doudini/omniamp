@@ -194,6 +194,8 @@ final class YearsChart: StatsChart {
     var color: NSColor?
     /// A 3-year moving average over the columns.
     var trend = false
+    /// More for a year's tooltip (the shows themselves).
+    var more: ((Int) -> String)?
     override var stretches: Bool { true }
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 170) }
 
@@ -201,7 +203,10 @@ final class YearsChart: StatsChart {
         guard let lo = years.first?.year, let hi = years.last?.year else { return 2000...2001 }
         return lo...max(hi, lo + 1)
     }
-    private var top: Double { Self.niceMax(Double(years.map(\.releases).max() ?? 1)) }
+    private var most: Int { years.map(\.releases).max() ?? 1 }
+    /// Counts are whole: up to 5, a grid line per unit (no "1.5 shows").
+    private var top: Double { most <= 5 ? Double(max(most, 1)) : Self.niceMax(Double(most)) }
+    private var lines: Int? { most <= 5 ? max(most, 1) : nil }
     private var plot: NSRect { NSRect(x: 0, y: 14, width: bounds.width, height: bounds.height - 34) }
     private func area() -> NSRect {
         let full = plot, labelWidth: CGFloat = 34
@@ -214,13 +219,13 @@ final class YearsChart: StatsChart {
         regions = years.map { y in
             let x = p.minX + CGFloat(y.year - span.lowerBound) * s
             return Region(rect: NSRect(x: x, y: p.minY - 14, width: max(s, 3), height: p.height + 14),
-                          tip: "\(y.year): \(y.releases.formatted()) \(unit)\(y.releases == 1 ? "" : "s")",
+                          tip: "\(y.year): \(y.releases.formatted()) \(unit)\(y.releases == 1 ? "" : "s")" + (more.map { "\n" + $0(y.year) } ?? ""),
                           action: onClick.map { f in { f(y.year) } })
         }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let p = Self.grid(in: plot, top: top), s = step
+        let p = Self.grid(in: plot, top: top, lines: lines), s = step
         let gap: CGFloat = s > 6 ? max(1, s * 0.2) : 0.5
         var centres: [NSPoint] = []
         for (i, y) in years.enumerated() {
