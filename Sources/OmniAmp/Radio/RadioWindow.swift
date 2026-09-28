@@ -2,7 +2,8 @@ import AppKit
 
 /// Internet radio browser in the modern look: popular stations, search, genre/country filters, favorites
 /// and station logos. Follows the selected color theme.
-final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
+final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate,
+                                  NSSearchFieldDelegate {
     private let controller: PlayerController
     private var popularButton: ModernButton!
     private var favoritesButton: ModernButton!
@@ -77,6 +78,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
         search.font = Fonts.hack(11)
         search.target = self
         search.action = #selector(searchChanged)
+        search.delegate = self   // Esc in an empty field closes the window
         search.sendsWholeSearchString = true
         if genre.numberOfItems == 0 {
             genre.addItems(withTitles: Self.genres)
@@ -218,6 +220,16 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             return true
         }
     }
+
+    /// Esc clears the search first; in an empty field it closes the window.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        guard sel == #selector(NSResponder.cancelOperation(_:)), search.stringValue.isEmpty else { return false }
+        window?.performClose(nil)
+        return true
+    }
+
+    /// Opened from the menu or ⌘2: start in the station list, so arrows, Return and Esc work right away.
+    func focusList() { window?.makeFirstResponder(table) }
 
     /// ⌘F while this window is in front.
     func focusSearch() {

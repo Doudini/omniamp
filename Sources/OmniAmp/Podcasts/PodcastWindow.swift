@@ -179,6 +179,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         search.font = Fonts.hack(11)
         search.target = self
         search.action = #selector(searchChanged)
+        search.delegate = self   // Esc in an empty field closes the window
         search.sendsWholeSearchString = false   // search as you type (the field waits for a pause)
         search.sendsSearchStringImmediately = false
         if country.numberOfItems == 0 {
@@ -442,9 +443,17 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             showSelectionWork?.perform()   // open the highlighted show now
             focusEpisodes()
             return true
-        default: return false
+        default:
+            // Letters and digits start a directory search (or filter the subscriptions).
+            guard let c = e.characters, c.count == 1, c.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.contains($0) }) else { return false }
+            window?.makeFirstResponder(search)
+            search.currentEditor()?.insertText(c)
+            return true
         }
     }
+
+    /// Opened from the menu or ⌘3: start in the show list, so arrows, Return and Esc work right away.
+    func focusList() { window?.makeFirstResponder(showsTable) }
 
     /// Episode list: ← back to the shows, Return plays, Space pauses / resumes.
     private func episodesKey(_ e: NSEvent) -> Bool {
@@ -625,6 +634,11 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// In the filter: ↓ or Return moves into the (filtered) list.
     func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        // Esc clears a search field first; in an empty one it closes the window (it never does nothing).
+        if sel == #selector(NSResponder.cancelOperation(_:)), (control as? NSTextField)?.stringValue.isEmpty == true {
+            window?.performClose(nil)
+            return true
+        }
         guard control === episodeFilter else { return false }
         if sel == #selector(NSResponder.moveDown(_:)) || sel == #selector(NSResponder.insertNewline(_:)) {
             focusEpisodes()

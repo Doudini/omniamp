@@ -56,7 +56,7 @@ final class EpisodeMarkView: NSView {
 final class KeyTableView: NSTableView {
     var onKey: ((NSEvent) -> Bool)?
     override func keyDown(with event: NSEvent) {
-        if onKey?(event) == true { return }
+        if onKey?(event) == true || handleJumpKey(event) { return }   // same fast jumps as the playlist
         super.keyDown(with: event)
     }
 }

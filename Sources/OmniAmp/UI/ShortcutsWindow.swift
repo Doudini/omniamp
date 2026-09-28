@@ -20,7 +20,7 @@ enum Shortcuts {
             ("⌘/", "This list"), ("Esc", "Close Radio / Podcasts"),
         ]),
         ("Radio and Podcasts", [
-            ("⌘F", "Search"), ("↑  ↓", "Move through the list"), ("←  →", "Shows ↔ episodes (Podcasts)"),
+            ("⌘F", "Search"), ("↑  ↓", "Move through the list"), ("⌘↑  ⌘⇧↑ …", "Jump 10 / 100 rows, page, first / last (as in the playlist)"), ("←  →", "Shows ↔ episodes (Podcasts)"),
             ("Return", "Play"), ("Space", "Play / pause"), ("Type", "Search stations / filter episodes"),
             ("⌥⌘F", "Filter episodes"), ("⌘D", "Add or remove a favorite station"),
         ]),

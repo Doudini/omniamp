@@ -208,12 +208,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if podcasts == nil { podcasts = PodcastWindowController(controller: controller) }
         podcasts?.showWindow(nil)
         podcasts?.window?.makeKeyAndOrderFront(nil)
+        podcasts?.focusList()
     }
 
     @objc private func showRadio(_ sender: Any?) {
         if radio == nil { radio = RadioWindowController(controller: controller) }
         radio?.showWindow(nil)
         radio?.window?.makeKeyAndOrderFront(nil)
+        radio?.focusList()
     }
 
     @objc private func showSettings(_ sender: Any?) {
