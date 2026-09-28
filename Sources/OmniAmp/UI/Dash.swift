@@ -45,6 +45,14 @@ enum Dash {
         NSAttributedString(string: s.uppercased(), attributes: [.font: mono(10, bold: true), .foregroundColor: accent, .kern: 0.6])
     }
 
+    /// Everything in a page gives way sideways (labels truncate, rows clip) instead of setting the window's
+    /// minimum width: text and stack views resist being narrowed more strongly than the window keeps its size.
+    static func relaxWidth(_ view: NSView) {
+        if let stack = view as? NSStackView { stack.setClippingResistancePriority(.defaultLow, for: .horizontal) }
+        if view is NSControl { view.setContentCompressionResistancePriority(.init(240), for: .horizontal) }
+        view.subviews.forEach(relaxWidth)
+    }
+
     static func label(_ s: String, _ font: NSFont, _ color: NSColor) -> NSTextField {
         let l = NSTextField(labelWithString: s)
         l.font = font

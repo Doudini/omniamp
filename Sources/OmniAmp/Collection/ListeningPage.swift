@@ -310,25 +310,26 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         }
         guard let s = stats else { return finish(rows) }
 
-        // Key figures: this year against last.
+        // 1. Key figures: six tiles, this year against last.
         let year = Calendar.current.component(.year, from: Date())
         let perYear = Dictionary(uniqueKeysWithValues: s.years.map { ($0.year, $0.releases) })
         let now = perYear[year] ?? 0, last = perYear[year - 1] ?? 0
         let delta: (String, Bool)? = last > 0 ? (String(format: "%.0f%% vs %d", abs(Double(now - last) / Double(last) * 100), year - 1), now >= last) : nil
         let placed = s.plays > 0 ? Double(s.mappedPlays) / Double(s.plays) : 0
         let since = s.firstPlay.map { Calendar.current.component(.year, from: $0) }
-        rows.append(dashRow([
-            StatTile(s.plays.formatted(), "plays"),
-            StatTile(now.formatted(), "plays in \(year)", delta: delta, spark: (year - 9...year).map { Double(perYear[$0] ?? 0) }),
-            StatTile(s.artists.formatted(), "artists played"),
-            StatTile((showOwned ? s.ownedByCountry : s.playsByCountry).count.formatted(), "countries"),
-            StatTile(since.map(String.init) ?? "–", "listening since",
-                     tip: s.pendingArtists > 0 ? "\(s.pendingArtists) artists still to place on the map" : String(format: "%.0f%% of plays on the map", placed * 100)),
-        ]))
+        let topArtist = s.topArtists.first
+        rows.append(dashGrid([
+            (StatTile(s.plays.formatted(), "plays"), 1),
+            (StatTile(now.formatted(), "plays in \(year)", delta: delta, spark: (year - 9...year).map { Double(perYear[$0] ?? 0) }), 1),
+            (StatTile(s.artists.formatted(), "artists played"), 1),
+            (StatTile((showOwned ? s.ownedByCountry : s.playsByCountry).count.formatted(), "countries",
+                      tip: String(format: "%.0f%% of plays placed on the map", placed * 100)), 1),
+            (StatTile(topArtist.map { Self.short($0.label) } ?? "–", "most played artist",
+                      tip: topArtist.map { "\($0.label): \(Int($0.value).formatted()) plays" }), 1),
+            (StatTile(since.map(String.init) ?? "–", "listening since"), 1),
+        ], columns: 6))
 
-        rows.append(onThisDayCard())
-
-        // Plays over the years, and how much of it you own.
+        // 2. The story: plays per year, and how much of it you own.
         let area = AreaChart()
         area.points = s.years.map { .init(x: Double($0.year), y: Double($0.releases), label: String($0.year)) }
         area.unit = "plays"
@@ -337,16 +338,34 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
                         DonutChart.Slice(label: "Not in your library", value: Double(max(0, s.plays - s.ownedPlays)), color: Dash.accent2)]
         owned.center = (s.plays > 0 ? String(format: "%.0f%%", Double(s.ownedPlays) / Double(s.plays) * 100) : "–", "owned")
         owned.unit = "plays"
-        rows.append(dashRow([panel("Plays per year", area, note: "hover for the figures"),
-                             panel("What you play, do you own it?", owned, note: "by artist")], weights: [1.6, 1]))
+        rows.append(dashGrid([(panel("Plays per year", area, note: "hover for the figures"), 2),
+                              (panel("Do you own what you play?", owned, note: "by artist"), 1)]))
 
+        // 3. Who, through the years.
         let riverChart = RiverChart()
         riverChart.river = river
         riverChart.onArtist = { [weak self] in self?.onArtist?($0) }
-        rows.append(panel("Your top artists through the years", riverChart,
-                          note: "plays per year of your \(river.series.count) most played artists · hover for figures, click for the artist"))
+        rows.append(dashGrid([(panel("Your top artists through the years", riverChart,
+                                     note: "plays per year of your \(river.series.count) most played artists · click a band for the artist"), 3)]))
 
-        // The map, with the country's artists under it.
+        // 4. Most played by period, and when you listen.
+        let clock = ClockChart()
+        clock.clock = s.clock
+        let weekend = s.clock.enumerated().filter { $0.offset == 0 || $0.offset == 6 }.reduce(0) { $0 + $1.element.reduce(0, +) }
+        let week = s.clock.flatMap { $0 }.reduce(0, +) - weekend
+        let days = DonutChart()
+        days.slices = [DonutChart.Slice(label: "Weekdays", value: Double(week), color: Dash.accent),
+                       DonutChart.Slice(label: "Weekends", value: Double(weekend), color: Dash.accent2)]
+        days.center = (week + weekend > 0 ? String(format: "%.0f%%", Double(weekend) / Double(week + weekend) * 100) : "–", "weekends")
+        days.unit = "plays"
+        let when = NSStackView(views: [clock, days])
+        when.orientation = .vertical
+        when.alignment = .leading
+        when.spacing = 16
+        for v in [clock, days] { v.widthAnchor.constraint(equalTo: when.widthAnchor).isActive = true }
+        rows.append(dashGrid([(mostPlayedCard(), 2), (panel("When you listen", when, note: "weekday × hour"), 1)]))
+
+        // 5. Where: the map, then the countries with the chosen one's artists.
         map.values = showOwned ? s.ownedByCountry : s.playsByCountry
         let mapBox = NSStackView(views: [modeButtons(), map])
         mapBox.orientation = .vertical
@@ -354,8 +373,8 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         mapBox.spacing = 10
         map.widthAnchor.constraint(equalTo: mapBox.widthAnchor).isActive = true
         let mapped = showOwned ? s.mappedOwnedTracks : s.mappedPlays, all = showOwned ? s.ownedTracks : s.plays
-        rows.append(panel(showOwned ? "Where the music you own comes from" : "Where the music you play comes from", mapBox,
-                          note: "by artist · \(mapped.formatted()) of \(all.formatted()) \(showOwned ? "tracks" : "plays") placed · click a country"))
+        rows.append(dashGrid([(panel(showOwned ? "Where the music you own comes from" : "Where the music you play comes from", mapBox,
+                                     note: "by artist · \(mapped.formatted()) of \(all.formatted()) \(showOwned ? "tracks" : "plays") placed · click a country"), 3)]))
         if country == nil, let top = (showOwned ? s.ownedByCountry : s.playsByCountry).max(by: { $0.value < $1.value }) {
             country = (top.key, Self.countryName(top.key))
         }
@@ -369,39 +388,33 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         }
         countries.tip = { "\($0.label): \(Int($0.value).formatted()) · click for its artists" }
         countries.onClick = { [weak self] b in self?.select(iso: b.id, name: b.label) }
-        let countryPanel = titledPanel(countryPanelTitle, countryArtists)
-        rows.append(dashRow([panel("Top countries", countries), countryPanel]))
+        countryPanelTitle.font = Dash.font(13)
+        let artistsColumn = NSStackView(views: [countryPanelTitle, countryArtists])
+        artistsColumn.orientation = .vertical
+        artistsColumn.alignment = .leading
+        artistsColumn.spacing = 10
+        countryArtists.widthAnchor.constraint(equalTo: artistsColumn.widthAnchor).isActive = true
+        let split = NSStackView(views: [countries, artistsColumn])
+        split.alignment = .top
+        split.distribution = .fillEqually
+        split.spacing = 28
+        rows.append(dashGrid([(panel("Top countries", split, note: "click a country for its artists"), 3)]))
         loadCountry()
 
-        // Who, and when.
-        let top = mostPlayedCard()
-        let clock = ClockChart()
-        clock.clock = s.clock
-        let weekend = s.clock.enumerated().filter { $0.offset == 0 || $0.offset == 6 }.reduce(0) { $0 + $1.element.reduce(0, +) }
-        let week = s.clock.flatMap { $0 }.reduce(0, +) - weekend
-        let days = DonutChart()
-        days.slices = [DonutChart.Slice(label: "Weekdays", value: Double(week), color: Dash.accent),
-                       DonutChart.Slice(label: "Weekends", value: Double(weekend), color: Dash.accent2)]
-        days.center = (week + weekend > 0 ? String(format: "%.0f%%", Double(weekend) / Double(week + weekend) * 100) : "–", "weekends")
-        days.unit = "plays"
-        let when = NSStackView(views: [panel("When you listen", clock, note: "by weekday and hour"), panel("Weekdays or weekends", days)])
-        when.orientation = .vertical
-        when.spacing = 12
-        for v in when.arrangedSubviews { v.widthAnchor.constraint(equalTo: when.widthAnchor).isActive = true }
-        rows.append(dashRow([top, when]))
-
+        // 6. Nice to know: gaps in the library, and this day in other years.
         let notOwned = BarListChart()
-        notOwned.bars = s.notOwned
+        notOwned.bars = Array(s.notOwned.prefix(10))
         notOwned.color = { _ in Dash.accent2 }
         notOwned.tip = { "\($0.label): \(Int($0.value).formatted()) plays, nothing in the library · click for the artist page" }
         notOwned.onClick = { [weak self] b in self?.onArtist?(b.id) }
         let never = BarListChart()
-        never.bars = s.neverPlayed
+        never.bars = Array(s.neverPlayed.prefix(10))
         never.format = { "\(Int($0))" }
         never.tip = { "\($0.label): \(Int($0.value).formatted()) tracks, never played on last.fm · click for the artist page" }
         never.onClick = { [weak self] in self?.onArtist?($0.id) }
-        rows.append(dashRow([panel("Played a lot, not in your library", notOwned, note: "plays"),
-                             panel("In your library, never played", never, note: "tracks")]))
+        rows.append(dashGrid([(panel("Played a lot, not in your library", notOwned, note: "plays"), 1),
+                              (panel("In your library, never played", never, note: "tracks"), 1),
+                              (onThisDayCard(), 1)]))
         finish(rows)
     }
 
@@ -496,24 +509,32 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         f.setLocalizedDateFormatFromTemplate("d MMMM")
         let dateName = Calendar.current.date(from: DateComponents(year: 2000, month: today.month, day: today.day)).map(f.string) ?? ""
         let shows = RowListChart()
-        shows.empty = "No show in your library was recorded on \(dateName)."
-        shows.rows = today.shows.prefix(8).map { a in
+        shows.empty = "No show you own was recorded on this date."
+        shows.rows = today.shows.prefix(5).map { a in
             let year = a.showDate.map { String($0.prefix(4)) } ?? ""
             return .init(lead: year, main: a.artist, detail: a.venue ?? a.title, color: Theme.kind(.show),
                          tip: "\(a.artist) · \(a.showDate ?? "") \(a.venue ?? "") · click to play",
                          action: { [weak self] in self?.onPlayRelease?(a) })
         }
         let days = RowListChart()
-        days.empty = "No plays on \(dateName) in other years."
-        days.rows = today.days.prefix(8).map { d in
-            .init(lead: String(d.year), main: d.artist, detail: "\(d.title)\(d.plays > 1 ? " · \(d.plays) plays that day" : "")",
-                  tip: "\(d.year): \(d.plays) plays, most of them \(d.artist) · click for the artist page",
+        days.empty = "No plays on this date in other years."
+        days.rows = today.days.prefix(6).map { d in
+            .init(lead: String(d.year), main: d.artist, detail: d.plays > 1 ? "\(d.plays) plays" : d.title,
+                  tip: "\(d.year): \(d.plays) plays that day, most of them \(d.artist) (\(d.title)) · click for the artist page",
                   action: { [weak self] in self?.onArtist?(d.artistKey) })
         }
-        let left = StatsPanel("Shows recorded on \(dateName)", shows, note: today.shows.isEmpty ? nil : "click to play")
-        let right = StatsPanel("You on \(dateName)", days, note: today.days.isEmpty ? nil : "your most played artist each year")
-        return dashRow([left, right])
+        let body = NSStackView(views: [Dash.label("Shows recorded then", Dash.font(12, .medium), Dash.text2), shows,
+                                       Dash.label("What you played", Dash.font(12, .medium), Dash.text2), days])
+        body.orientation = .vertical
+        body.alignment = .leading
+        body.spacing = 6
+        body.setCustomSpacing(14, after: shows)
+        for v in [shows, days] { v.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true }
+        return StatsPanel("On \(dateName)", body, note: "in other years")
     }
+
+    /// A long name, short enough for a tile.
+    private static func short(_ s: String) -> String { s.count > 16 ? String(s.prefix(15)) + "…" : s }
 
     private func note(_ text: String) -> NSView {
         let l = NSTextField(wrappingLabelWithString: text)
@@ -550,6 +571,7 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .vertical)
         stack.addArrangedSubview(spacer)
+        Dash.relaxWidth(stack)
         MainActor.assumeIsolated { updateStatus() }
         if let y = ProcessInfo.processInfo.environment["OMNIAMP_STATS_SCROLL"].flatMap(Double.init) {   // test hook: lower charts
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.documentView?.scroll(NSPoint(x: 0, y: y)) }

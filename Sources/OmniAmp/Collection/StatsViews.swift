@@ -597,10 +597,25 @@ final class Sparkline: NSView {
 /// A key figure: the number big and white, what it counts in grey; optionally the change against before
 /// ("▲ 12% vs 2025") and a sparkline of the trend.
 final class StatTile: NSView {
+    private var valueLabel: NSTextField!
+    private var sparkline: Sparkline?
+
+    /// The figure as large as fits (22 pt down to 13): a narrow window shrinks it rather than cutting it off.
+    override func layout() {
+        super.layout()
+        guard let v = valueLabel, bounds.width > 0 else { return }
+        sparkline?.isHidden = bounds.width < 180   // no room beside the caption
+        let room = bounds.width - 28
+        var size: CGFloat = 22
+        while size > 13, (v.stringValue as NSString).size(withAttributes: [.font: Dash.mono(size, bold: true)]).width > room { size -= 1 }
+        if v.font?.pointSize != size { v.font = Dash.mono(size, bold: true) }
+    }
+
     init(_ value: String, _ caption: String, tip: String? = nil, delta: (text: String, up: Bool)? = nil, spark: [Double]? = nil) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         let v = Dash.label(value, Dash.mono(22, bold: true), Dash.text)
+        valueLabel = v
         let c = Dash.label(caption, Dash.font(12), Dash.text2)
         var rows: [NSView] = [v, c]
         if let delta {
@@ -615,11 +630,13 @@ final class StatTile: NSView {
         NSLayoutConstraint.activate([
             s.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14), s.topAnchor.constraint(equalTo: topAnchor, constant: 12),
             s.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -12),
-            s.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
+            // Exactly the tile's width (with widths relaxed, "at most" let it collapse and cut the figure off).
+            s.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             heightAnchor.constraint(greaterThanOrEqualToConstant: delta == nil ? 72 : 88),
         ])
         if let spark, spark.count > 1 {
             let line = Sparkline()
+            sparkline = line
             line.values = spark
             line.translatesAutoresizingMaskIntoConstraints = false
             addSubview(line, positioned: .below, relativeTo: s)
@@ -652,7 +669,8 @@ final class StatsPanel: NSView {
             content.topAnchor.constraint(equalTo: t.bottomAnchor, constant: 12),
             content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
+            // At most: a card stretched to its row's height keeps its content at the top.
+            content.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -14),
         ])
         // Charts are exactly as tall as their content (the page is rebuilt when the figures change).
         let h = content.intrinsicContentSize.height
@@ -665,6 +683,32 @@ final class StatsPanel: NSView {
 /// A flipped container, so the page scrolls from the top.
 final class FlippedView: NSView {
     override var isFlipped: Bool { true }
+}
+
+/// A row of the page grid: each card spans `span` of `columns` equal columns (12 pt gaps), so cards line up
+/// with the rows above and below; all as tall as the tallest, their content at the top.
+func dashGrid(_ items: [(NSView, Int)], columns: Int = 3, gap: CGFloat = 12) -> NSView {
+    let row = NSView()
+    row.translatesAutoresizingMaskIntoConstraints = false
+    var previous: NSView?
+    for (v, span) in items {
+        v.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(v)
+        let s = CGFloat(span), c = CGFloat(columns)
+        // span × column + the gaps inside it; a column is (row − all gaps) / columns.
+        NSLayoutConstraint.activate([
+            v.topAnchor.constraint(equalTo: row.topAnchor),
+            v.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+            v.leadingAnchor.constraint(equalTo: previous?.trailingAnchor ?? row.leadingAnchor, constant: previous == nil ? 0 : gap),
+            v.widthAnchor.constraint(equalTo: row.widthAnchor, multiplier: s / c, constant: (s - 1) * gap - gap * (c - 1) * s / c),
+        ])
+        previous = v
+    }
+    // As short as the tallest card allows.
+    let hug = row.heightAnchor.constraint(equalToConstant: 0)
+    hug.priority = .init(200)
+    hug.isActive = true
+    return row
 }
 
 /// A row of cards; `weights` share the width (default equal).
@@ -765,15 +809,16 @@ final class StatsPage: NSScrollView {
         let delta: (String, Bool)? = before > 0 ? (String(format: "%.0f%% vs %d", abs(Double(added - before) / Double(before) * 100), thisYear - 1),
                                                    added >= before) : nil
         let spark = (thisYear - 9...thisYear).map { Double(perYear[$0] ?? 0) }
-        rows.append(dashRow([
-            StatTile(s.tracks.formatted(), "tracks",
-                     tip: s.unplayable > 0 ? "\(s.unplayable.formatted()) of them in formats OmniAmp can't play" : nil),
-            StatTile(s.releases.formatted(), "releases"),
-            StatTile(s.artists.formatted(), "artists"),
-            StatTile(days >= 1 ? String(format: "%.1f d", days) : Self.hours(s.seconds / 3600), "of music",
-                     tip: "\(Int(s.seconds / 3600).formatted()) hours: that long to play everything once"),
-            StatTile(added.formatted(), "tracks added in \(thisYear)", tip: "by the date of the files", delta: delta, spark: spark),
-        ]))
+        rows.append(dashGrid([
+            (StatTile(s.tracks.formatted(), "tracks",
+                      tip: s.unplayable > 0 ? "\(s.unplayable.formatted()) of them in formats OmniAmp can't play" : nil), 1),
+            (StatTile(s.releases.formatted(), "releases"), 1),
+            (StatTile(s.artists.formatted(), "artists"), 1),
+            (StatTile(days >= 1 ? String(format: "%.1f d", days) : Self.hours(s.seconds / 3600), "of music",
+                      tip: "\(Int(s.seconds / 3600).formatted()) hours: that long to play everything once"), 1),
+            (StatTile(Self.size(s.bytes), "on disk"), 1),
+            (StatTile(added.formatted(), "added in \(thisYear)", tip: "tracks, by the date of the files", delta: delta, spark: spark), 1),
+        ], columns: 6))
 
         // Release years, and what kind of recordings.
         let totalYears = s.years.reduce(0) { $0 + $1.releases }
@@ -792,11 +837,11 @@ final class StatsPage: NSScrollView {
         kinds.center = (s.releases.formatted(), "releases")
         kinds.unit = "releases"
         let official = s.kinds.filter { Int($0.id).flatMap(ReleaseKind.init(rawValue:))?.isOfficial ?? false }.reduce(0) { $0 + $1.value }
-        rows.append(dashRow([
-            StatsPanel("Release years", years, note: (decade.map { "most from the \($0.key)s" } ?? "") + (early > 0 ? " · \(early) earlier not shown" : "")
-                       + " · line: 3-year average · click a year"),
-            StatsPanel("Kinds of recordings", kinds, note: s.releases > 0 ? String(format: "%.0f%% official", official / Double(s.releases) * 100) : nil),
-        ], weights: [1.6, 1]))
+        rows.append(dashGrid([
+            (StatsPanel("Release years", years, note: (decade.map { "most from the \($0.key)s" } ?? "") + (early > 0 ? " · \(early) earlier not shown" : "")
+                        + " · line: 3-year average · click a year"), 2),
+            (StatsPanel("Kinds of recordings", kinds, note: s.releases > 0 ? String(format: "%.0f%% official", official / Double(s.releases) * 100) : nil), 1),
+        ]))
 
         // Growth, and how it's stored.
         let growth = GrowthChart()
@@ -808,12 +853,13 @@ final class StatsPage: NSScrollView {
             + (s.unplayable > 0 ? [DonutChart.Slice(label: "Can't play", value: Double(s.unplayable), color: Dash.text3)] : [])
         formats.center = (String(format: "%.0f%%", lossless * 100), "lossless")
         formats.unit = "tracks"
-        let formatList = s.formats.prefix(4).map { "\($0.label) \(Int($0.value).formatted())" }.joined(separator: " · ")
-        rows.append(dashRow([
-            StatsPanel("Collection over time", growth, note: "tracks, by file date"),
-            StatsPanel("Lossless or lossy", formats, note: formatList),
-        ], weights: [1.6, 1]))
+        let formatList = s.formats.prefix(3).map { "\($0.label) \(Int($0.value).formatted())" }.joined(separator: " · ")
+        rows.append(dashGrid([
+            (StatsPanel("Collection over time", growth, note: "tracks, by file date"), 2),
+            (StatsPanel("Lossless or lossy", formats, note: formatList), 1),
+        ]))
 
+        // Lists in thirds.
         let genres = BarListChart()
         genres.bars = Array(s.genres.prefix(12))
         genres.tip = { "\($0.label): \(Int($0.value).formatted()) tracks, \($0.detail) · click to open" }
@@ -821,26 +867,26 @@ final class StatsPage: NSScrollView {
         if s.otherGenres > 0 { genres.footnote = "+ \(s.otherGenres) more genres" }
         let songs = BarListChart()
         songs.bars = s.songs.map { .init(id: $0.artistKey + "\u{1}" + $0.titleKey, label: "\($0.title) — \($0.artist)", value: Double($0.versions),
-                                         detail: $0.unofficial > 0 ? "\($0.unofficial) unofficial" : "") }
+                                         detail: $0.unofficial > 0 ? "\($0.unofficial) unoff." : "") }
         songs.format = { "\(Int($0))×" }
         songs.tip = { "\($0.label): on \(Int($0.value)) releases\($0.detail.isEmpty ? "" : ", \($0.detail)") · click to see them all" }
         songs.onClick = { [weak self] b in
             let parts = b.id.components(separatedBy: "\u{1}")
             if parts.count == 2 { self?.onSong?(parts[0], parts[1]) }
         }
-        rows.append(dashRow([StatsPanel("Genres", genres, note: s.genres.isEmpty ? "no genre tags yet" : "tracks"),
-                             StatsPanel("Songs with the most versions", songs, note: s.songs.isEmpty ? "none on 3+ releases yet" : "releases")]))
-
         let artists = BarListChart()
         artists.bars = s.topArtists
         artists.format = { Self.hours($0) }
         artists.tip = { "\($0.label): \(Self.hours($0.value)) · \($0.detail) · click for the artist page" }
         artists.onClick = { [weak self] in self?.onArtist?($0.id) }
+        rows.append(dashGrid([(StatsPanel("Genres", genres, note: s.genres.isEmpty ? "no genre tags yet" : "tracks"), 1),
+                              (StatsPanel("Most versions", songs, note: s.songs.isEmpty ? "none on 3+ releases yet" : "releases"), 1),
+                              (StatsPanel("Most hours of music", artists, note: "by artist"), 1)]))
+
         let calendar = ShowCalendar()
         calendar.months = s.showMonths
         calendar.onClick = { [weak self] in self?.onYear?($0) }
-        rows.append(dashRow([StatsPanel("Most hours of music", artists, note: "by artist"),
-                             StatsPanel("Shows by date of the concert", calendar, note: "\(s.shows.formatted()) shows")]))
+        rows.append(dashGrid([(StatsPanel("Shows by date of the concert", calendar, note: "\(s.shows.formatted()) shows · click a year"), 3)]))
 
         for r in rows {
             stack.addArrangedSubview(r)
@@ -848,6 +894,7 @@ final class StatsPage: NSScrollView {
             r.setContentHuggingPriority(.required, for: .vertical)
         }
         stack.setCustomSpacing(16, after: rows[0])
+        Dash.relaxWidth(stack)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .vertical)
         stack.addArrangedSubview(spacer)

@@ -140,13 +140,13 @@ extension CollectionDB {
         }
         try db.query("""
             SELECT p.country, count(*), count(DISTINCT s.artist_key) FROM scrobbles s JOIN artist_places p ON p.artist_key = s.artist_key
-            WHERE p.country IS NOT NULL GROUP BY p.country
+            WHERE p.country IS NOT NULL AND p.country NOT IN ('XE', 'XW', 'XG', 'XU') GROUP BY p.country
             """) { r in
             s.playsByCountry[r.text(0)] = Double(r.int(1)); s.playedArtistsByCountry[r.text(0)] = r.int(2); s.mappedPlays += r.int(1)
         }
         try db.query("""
             SELECT p.country, count(*), count(DISTINCT f.artist_key) FROM files f JOIN artist_places p ON p.artist_key = f.artist_key
-            WHERE p.country IS NOT NULL GROUP BY p.country
+            WHERE p.country IS NOT NULL AND p.country NOT IN ('XE', 'XW', 'XG', 'XU') GROUP BY p.country
             """) { r in
             s.ownedByCountry[r.text(0)] = Double(r.int(1)); s.ownedArtistsByCountry[r.text(0)] = r.int(2); s.mappedOwnedTracks += r.int(1)
         }
@@ -189,11 +189,11 @@ extension CollectionDB {
         let sql = owned
             ? """
               SELECT f.artist_key, min(f.album_artist), count(*) AS n FROM files f JOIN artist_places p ON p.artist_key = f.artist_key
-              WHERE p.country = ? GROUP BY f.artist_key ORDER BY n DESC LIMIT 20
+              WHERE p.country = ? GROUP BY f.artist_key ORDER BY n DESC LIMIT 12
               """
             : """
               SELECT s.artist_key, min(s.artist), count(*) AS n FROM scrobbles s JOIN artist_places p ON p.artist_key = s.artist_key
-              WHERE p.country = ? GROUP BY s.artist_key ORDER BY n DESC LIMIT 20
+              WHERE p.country = ? GROUP BY s.artist_key ORDER BY n DESC LIMIT 12
               """
         try db.query(sql, [country]) { r in out.append(.init(id: r.text(0), label: r.text(1), value: Double(r.int(2)))) }
         return out

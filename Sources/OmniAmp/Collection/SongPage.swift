@@ -309,16 +309,13 @@ final class SongPage: NSScrollView {
         }
         let rightColumn = NSStackView(views: right)
         rightColumn.orientation = .vertical
-        rightColumn.spacing = 10
+        rightColumn.spacing = 12
         for v in right { v.widthAnchor.constraint(equalTo: rightColumn.widthAnchor).isActive = true }
-        let row = NSStackView(views: [StatsPanel("Length of each version", lengths, note: "oldest first · click to play"), rightColumn])
-        row.distribution = .fillEqually
-        row.alignment = .top
-        row.spacing = 10
-        add(row)
+        add(dashGrid([(StatsPanel("Length of each version", lengths, note: "oldest first · click to play"), 2), (rightColumn, 1)]))
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .vertical)
         stack.addArrangedSubview(spacer)
+        Dash.relaxWidth(stack)
     }
 
     private func add(_ v: NSView) {

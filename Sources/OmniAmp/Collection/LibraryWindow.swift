@@ -130,6 +130,18 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         if let hook = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_SONG"]?.components(separatedBy: "|"), hook.count == 2 {
             DispatchQueue.main.async { [weak self] in self?.showSong(artist: Keys.artist(hook[0]), titleKey: Keys.title(hook[1])) }
         }
+        // Test hook: OMNIAMP_DEBUG logs how small the window's content can get (pages must not force a large minimum).
+        if ProcessInfo.processInfo.environment["OMNIAMP_DEBUG"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                guard let v = self?.window?.contentView else { return }
+                let probe = v.widthAnchor.constraint(equalToConstant: 100)
+                probe.priority = .init(499)
+                probe.isActive = true
+                v.layoutSubtreeIfNeeded()
+                NSLog("OmniAmp: DEBUG library minimum content %@", NSStringFromSize(v.fittingSize))
+                probe.isActive = false
+            }
+        }
         // Test hook: OMNIAMP_LIBRARY_FIND=1 opens Find Missing Info for the selected release.
         if ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_FIND"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.findInfo() }

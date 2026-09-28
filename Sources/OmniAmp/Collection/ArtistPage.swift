@@ -300,43 +300,41 @@ final class ArtistPage: NSScrollView {
         recorded.format = { "\(Int($0))×" }
         recorded.tip = { "\($0.label): \(Int($0.value)) recordings · click to see them all" }
         recorded.onClick = { [weak self] b in if let self { self.onSong?(self.dash.key, b.id) } }
-        add(row([StatsPanel("Your top songs", top15, note: d.topSongs.isEmpty ? "no last.fm plays yet" : "plays"),
-                 d.mostRecorded.isEmpty ? NSView() : StatsPanel("Songs you have most versions of", recorded, note: "recordings")]))
+        // Their songs you play, the ones you have most versions of, and what you own of them.
+        let kinds = DonutChart()
+        let byKind = Dictionary(grouping: d.releases, by: \.kind)
+        kinds.slices = ReleaseKind.allCases.compactMap { k in
+            byKind[k].map { DonutChart.Slice(label: k.title, value: Double($0.count), color: Theme.kind(k)) }
+        }
+        kinds.center = (d.releases.count.formatted(), d.releases.count == 1 ? "release" : "releases")
+        kinds.unit = "releases"
+        var thirds: [(NSView, Int)] = [(StatsPanel("Your top songs", top15, note: d.topSongs.isEmpty ? "no last.fm plays yet" : "plays"), 1)]
+        if !d.mostRecorded.isEmpty { thirds.append((StatsPanel("Most versions", recorded, note: "recordings"), 1)) }
+        if !d.releases.isEmpty { thirds.append((StatsPanel("What you own of them", kinds, note: "by kind"), 1)) }
+        if thirds.count == 1 { thirds[0].1 = 3 } else if thirds.count == 2 { thirds[0].1 = 2 }
+        add(dashGrid(thirds))
 
         let albums = BarListChart()
         albums.bars = d.playedAlbums
         // Owned: its kind's color; not in the library: neutral (never a kind's color).
         albums.color = { [kinds = d.playedAlbumKinds] in kinds[$0.id].map(Theme.kind) ?? Dash.text3 }
         albums.tip = { "\($0.label): \(Int($0.value).formatted()) plays\($0.detail.isEmpty ? "" : " · \($0.detail)")" }
-        var right: [NSView] = []
-        if !d.releases.isEmpty {
-            // What of theirs you own, by kind of recording.
-            let kinds = DonutChart()
-            let byKind = Dictionary(grouping: d.releases, by: \.kind)
-            kinds.slices = ReleaseKind.allCases.compactMap { k in
-                byKind[k].map { DonutChart.Slice(label: k.title, value: Double($0.count), color: Theme.kind(k)) }
-            }
-            kinds.center = (d.releases.count.formatted(), d.releases.count == 1 ? "release" : "releases")
-            kinds.unit = "releases"
-            right.append(StatsPanel("What you own of them", kinds, note: "by kind"))
-        }
+        var last: [(NSView, Int)] = []
+        if !d.playedAlbums.isEmpty { last.append((StatsPanel("Albums you play most", albums, note: "plays, by the release last.fm saw"), 2)) }
         if !d.showsPerYear.isEmpty {
             let shows = YearsChart()
             shows.unit = "show"
             shows.color = Theme.kind(.show)
             shows.years = d.showsPerYear
-            right.append(StatsPanel("Shows you own", shows, note: "by year of the concert"))
+            last.append((StatsPanel("Shows you own", shows, note: "by year of the concert"), last.isEmpty ? 3 : 1))
         }
-        let rightColumn = NSStackView(views: right)
-        rightColumn.orientation = .vertical
-        rightColumn.spacing = 12
-        for v in right { v.widthAnchor.constraint(equalTo: rightColumn.widthAnchor).isActive = true }
-        add(row([StatsPanel("Albums you play most", albums, note: d.playedAlbums.isEmpty ? "no last.fm plays yet" : "plays, by the release last.fm saw")]
-                + (right.isEmpty ? [NSView()] : [rightColumn])))
+        if last.count == 1 { last[0].1 = 3 }
+        if !last.isEmpty { add(dashGrid(last)) }
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .vertical)
         stack.addArrangedSubview(spacer)
+        Dash.relaxWidth(stack)
     }
 
     private func row(_ views: [NSView]) -> NSStackView {
