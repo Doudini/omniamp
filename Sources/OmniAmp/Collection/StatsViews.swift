@@ -57,10 +57,10 @@ class StatsChart: NSView, NSViewToolTipOwner {
         NSAttributedString(string: s, attributes: [.font: Fonts.hack(size, bold: bold), .foregroundColor: color])
     }
 
-    /// A bar with rounded ends, in the phosphor color (brighter when hovered).
-    static func bar(_ r: NSRect, strength: CGFloat = 0.85, hot: Bool) {
+    /// A bar with rounded ends, in the phosphor color unless given one (brighter when hovered).
+    static func bar(_ r: NSRect, color: NSColor? = nil, strength: CGFloat = 0.85, hot: Bool) {
         guard r.width > 0.5, r.height > 0.5 else { return }
-        Theme.phosphor.withAlphaComponent(hot ? 1 : strength).setFill()
+        (color ?? Theme.phosphor).withAlphaComponent(hot ? 1 : strength).setFill()
         let radius = min(2, r.width / 2, r.height / 2)
         NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius).fill()
     }
@@ -72,6 +72,8 @@ final class BarListChart: StatsChart {
     var format: (Double) -> String = { Int($0).formatted() }
     var tip: (LibraryStats.Bar) -> String = { "\($0.label): \(Int($0.value).formatted())" }
     var onClick: ((LibraryStats.Bar) -> Void)?
+    /// A color per bar (what kind of recording it is); nil: the phosphor.
+    var color: ((LibraryStats.Bar) -> NSColor?)?
     var footnote: String? { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
     static let rowHeight: CGFloat = 20
 
@@ -101,7 +103,7 @@ final class BarListChart: StatsChart {
             }
             let label = Self.text(b.label, 10.5, hot ? Theme.current : Theme.playlistText)
             label.draw(with: NSRect(x: 4, y: y + 3, width: labelWidth - 4, height: 15), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
-            Self.bar(NSRect(x: barX, y: y + 6, width: barW * CGFloat(b.value / most), height: 8), hot: hot)
+            Self.bar(NSRect(x: barX, y: y + 6, width: barW * CGFloat(b.value / most), height: 8), color: color?(b), hot: hot)
             let value = NSMutableAttributedString(attributedString: Self.text(format(b.value), 10, Theme.playlistText))
             if !b.detail.isEmpty { value.append(Self.text("  " + b.detail, 9, LibraryStyle.dim)) }
             value.draw(with: NSRect(x: bounds.width - valueWidth, y: y + 3, width: valueWidth - 2, height: 15),
@@ -404,6 +406,8 @@ final class StatsPage: NSScrollView {
     var onYear: ((Int) -> Void)?
     var onArtist: ((String) -> Void)?
     var onSearch: ((String) -> Void)?
+    /// A song: its artist key and title key.
+    var onSong: ((String, String) -> Void)?
     private let stack = NSStackView()
 
     init() {
@@ -506,6 +510,7 @@ final class StatsPage: NSScrollView {
         let kinds = BarListChart()
         kinds.bars = s.kinds
         kinds.tip = { "\($0.label): \(Int($0.value).formatted()) releases, \($0.detail)" }
+        kinds.color = { Int($0.id).flatMap(ReleaseKind.init(rawValue:)).map(Theme.kind) }
         let kindPanel = StatsPanel("What kind of recordings", kinds, note: "releases")
         let formats = BarListChart()
         formats.bars = Array(s.formats.prefix(8))
@@ -514,11 +519,14 @@ final class StatsPage: NSScrollView {
         rows.append(row([genrePanel, column([kindPanel, formatPanel])]))
 
         let songs = BarListChart()
-        songs.bars = s.songs.map { .init(id: $0.title, label: "\($0.title) — \($0.artist)", value: Double($0.versions),
+        songs.bars = s.songs.map { .init(id: $0.artistKey + "\u{1}" + $0.titleKey, label: "\($0.title) — \($0.artist)", value: Double($0.versions),
                                          detail: $0.unofficial > 0 ? "\($0.unofficial) unofficial" : "") }
         songs.format = { "\(Int($0))×" }
-        songs.tip = { "\($0.label): on \(Int($0.value)) releases\($0.detail.isEmpty ? "" : ", \($0.detail)") · click to find them" }
-        songs.onClick = { [weak self] in self?.onSearch?($0.id) }
+        songs.tip = { "\($0.label): on \(Int($0.value)) releases\($0.detail.isEmpty ? "" : ", \($0.detail)") · click to see them all" }
+        songs.onClick = { [weak self] b in
+            let parts = b.id.components(separatedBy: "\u{1}")
+            if parts.count == 2 { self?.onSong?(parts[0], parts[1]) }
+        }
         let songPanel = StatsPanel("Songs you have most versions of", songs, note: s.songs.isEmpty ? "none on 3+ releases yet" : "releases")
 
         let artists = BarListChart()

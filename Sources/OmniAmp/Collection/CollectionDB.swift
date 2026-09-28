@@ -487,30 +487,65 @@ final class CollectionDB {
         return f.string(from: d)
     }
 
+    /// The columns a LibraryTrack is read from (files table, alias f).
+    private static let trackColumns = """
+        f.id, f.key, f.path, f.size, f.mtime, f.cue_start, f.cue_end, f.cue_number, f.title, f.artist, f.album, f.album_key, f.disc_no,
+        f.track_no, f.duration, f.bit_depth, f.sample_rate, f.bitrate, f.playable
+        """
+
+    private static func track(_ s: Statement) -> LibraryTrack {
+        let path = s.text(2)
+        return LibraryTrack(id: s.int64(0), key: s.text(1), path: path, size: s.int64(3), mtime: s.double(4), cueStart: s.optDouble(5),
+                            cueEnd: s.optDouble(6), cueNumber: s.optInt(7), title: s.text(8), artist: s.text(9), album: s.text(10),
+                            albumKey: s.text(11), disc: s.optInt(12), number: s.optInt(13), duration: s.optDouble(14),
+                            format: format(path, bitDepth: s.optInt(15), rate: s.optInt(16), kbps: s.optInt(17)), playable: s.int(18) == 1)
+    }
+
     /// An album's tracks in order. With a search, only the matching ones.
     func tracks(album: String, matching query: String? = nil) throws -> [LibraryTrack] {
         var out: [LibraryTrack] = []
-        var sql = """
-            SELECT id, key, path, size, mtime, cue_start, cue_end, cue_number, title, artist, album, album_key, disc_no, track_no,
-                   duration, bit_depth, sample_rate, bitrate, playable FROM files WHERE album_key = ?
-            """
+        var sql = "SELECT \(Self.trackColumns) FROM files f WHERE f.album_key = ?"
         var args: [SQLValue?] = [album]
         if let q = query, !q.trimmingCharacters(in: .whitespaces).isEmpty {
             let (m, margs) = matchSQL(q)
-            sql += " AND id IN (\(m))"
+            sql += " AND f.id IN (\(m))"
             args += margs
         }
-        sql += " ORDER BY disc_no, track_no, cue_start, path"
-        try db.query(sql, args) { s in
-            let path = s.text(2)
-            out.append(LibraryTrack(id: s.int64(0), key: s.text(1), path: path, size: s.int64(3), mtime: s.double(4),
-                                    cueStart: s.optDouble(5), cueEnd: s.optDouble(6), cueNumber: s.optInt(7), title: s.text(8),
-                                    artist: s.text(9), album: s.text(10), albumKey: s.text(11), disc: s.optInt(12), number: s.optInt(13),
-                                    duration: s.optDouble(14),
-                                    format: Self.format(path, bitDepth: s.optInt(15), rate: s.optInt(16), kbps: s.optInt(17)),
-                                    playable: s.int(18) == 1))
-        }
+        sql += " ORDER BY f.disc_no, f.track_no, f.cue_start, f.path"
+        try db.query(sql, args) { out.append(Self.track($0)) }
         return out
+    }
+
+    /// Every recording of one song by one artist (versions folded by title key), oldest first.
+    func versions(artist: String, titleKey: String) throws -> [SongVersion] {
+        var out: [SongVersion] = []
+        try db.query("""
+            SELECT \(Self.trackColumns), a.kind, a.title, a.year, a.show_date, a.venue, f.date, a.first_path, a.folder
+            FROM files f JOIN albums a ON a.key = f.album_key WHERE f.artist_key = ? AND f.title_key = ?
+            """, [artist, titleKey]) { s in
+            out.append(SongVersion(track: Self.track(s), kind: ReleaseKind(rawValue: s.int(19)) ?? .album, release: s.text(20),
+                                   year: s.optInt(21), showDate: s.optText(22), venue: s.optText(23), date: s.optText(24),
+                                   artPath: s.text(25), folder: s.text(26)))
+        }
+        return out.sorted { ($0.when ?? .infinity, $0.release) < ($1.when ?? .infinity, $1.release) }
+    }
+
+    /// An artist's plays of one song, from the last.fm history: per album name, per year, and the first one.
+    func songPlays(artist: String, titleKey: String) throws -> SongPlays {
+        var p = SongPlays()
+        var years: [Int: Int] = [:]
+        try db.query("SELECT ts, album, title FROM scrobbles WHERE artist_key = ?", [artist]) { s in
+            guard Keys.title(s.text(2)) == titleKey else { return }
+            let ts = s.int(0)
+            p.total += 1
+            p.byAlbum[Keys.fold(s.text(1)), default: 0] += 1
+            let d = Date(timeIntervalSince1970: TimeInterval(ts))
+            years[Calendar.current.component(.year, from: d), default: 0] += 1
+            if p.first.map({ d < $0 }) ?? true { p.first = d }
+            if p.last.map({ d > $0 }) ?? true { p.last = d }
+        }
+        p.byYear = years.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+        return p
     }
 
     /// The genre most of an album's tracks have (nil when none has one).
@@ -530,5 +565,51 @@ final class CollectionDB {
             return "\(ext) \(b)/\(k == k.rounded() ? String(Int(k)) : String(format: "%.1f", k))"
         }
         return kbps.map { "\(ext) \($0)" } ?? ext
+    }
+}
+
+/// One recording of a song: the track, and what release it's on.
+struct SongVersion: Equatable {
+    let track: LibraryTrack
+    let kind: ReleaseKind
+    let release: String
+    let year: Int?
+    let showDate: String?
+    let venue: String?
+    /// The DATE tag ("1991", "1991-11-25").
+    let date: String?
+    let artPath: String
+    let folder: String
+
+    /// A point in time for the timeline: the concert date, the full DATE tag, or the middle of the year.
+    var when: Double? {
+        for d in [showDate, date] {
+            guard let d, d.count >= 10 else { continue }
+            let parts = d.prefix(10).split(separator: "-").compactMap { Int($0) }
+            if parts.count == 3, let y = parts.first {
+                return Double(y) + (Double(parts[1] - 1) * 30.5 + Double(parts[2] - 1)) / 366
+            }
+        }
+        return year.map { Double($0) + 0.5 }
+    }
+
+    /// "1991-11-25 Paradiso, Amsterdam", "Bleach (1989)".
+    var label: String {
+        if kind == .show, let d = showDate { return [d, venue].compactMap { $0 }.joined(separator: " ") }
+        return release + (year.map { " (\($0))" } ?? "")
+    }
+}
+
+/// Last.fm plays of one song.
+struct SongPlays: Equatable {
+    var total = 0
+    /// Folded album name → plays (scrobbles carry the album they were played from).
+    var byAlbum: [String: Int] = [:]
+    var byYear: [(year: Int, releases: Int)] = []
+    var first: Date?
+    var last: Date?
+
+    static func == (a: SongPlays, b: SongPlays) -> Bool {
+        a.total == b.total && a.byAlbum == b.byAlbum && a.first == b.first && a.last == b.last
     }
 }

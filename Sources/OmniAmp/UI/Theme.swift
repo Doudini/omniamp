@@ -93,6 +93,20 @@ enum Theme {
         return t < 0.6 ? a.blended(withFraction: t / 0.6, of: b)! : b.blended(withFraction: (t - 0.6) / 0.4, of: c)!
     }
 
+    /// The kind of a recording, the same in every theme. From AAP-64 (Adigun A. Polack, lospec.com), chosen so the
+    /// five stay apart on the LCD for colour-blind eyes too: blues for official studio releases, green for official
+    /// live albums, red (a recorder's REC light) for shows and bootlegs, magenta for demos and unreleased tracks.
+    /// Identity only: amounts stay in the phosphor color, and text stays in text colors.
+    static func kind(_ k: ReleaseKind) -> NSColor {
+        switch k {
+        case .album: ThemePalette.rgb(0x28 / 255, 0x5C / 255, 0xC4 / 255)
+        case .single, .compilation: ThemePalette.rgb(0x24 / 255, 0x9F / 255, 0xDE / 255)
+        case .live: ThemePalette.rgb(0x14 / 255, 0xA0 / 255, 0x2E / 255)
+        case .show: ThemePalette.rgb(0xB4 / 255, 0x20 / 255, 0x2A / 255)
+        case .unreleased: ThemePalette.rgb(0xBC / 255, 0x4A / 255, 0x9B / 255)
+        }
+    }
+
     static func mono(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
         Fonts.hack(size, bold: weight.rawValue >= NSFont.Weight.semibold.rawValue)
     }

@@ -12,6 +12,8 @@ struct LibraryStats: Sendable {
     struct Song: Sendable, Equatable {
         let title: String
         let artist: String
+        let artistKey: String
+        let titleKey: String
         let versions: Int
         let unofficial: Int
     }
@@ -93,13 +95,14 @@ extension CollectionDB {
         // Songs with the most recordings: the same title (versions folded) by the same artist on several releases.
         try db.query("""
             SELECT min(f.title), min(a.artist), count(DISTINCT f.album_key) AS n,
-                   count(DISTINCT CASE WHEN a.kind > \(ReleaseKind.live.rawValue) THEN f.album_key END)
+                   count(DISTINCT CASE WHEN a.kind > \(ReleaseKind.live.rawValue) THEN f.album_key END), f.artist_key, f.title_key
             FROM files f JOIN albums a ON a.key = f.album_key WHERE \(f) AND length(f.title_key) >= 3
             GROUP BY f.artist_key, f.title_key HAVING n >= 3 ORDER BY n DESC LIMIT 60
             """) { r in
             let title = r.text(0)
             guard !Self.isPlaceholderTitle(title) else { return }
-            s.songs.append(.init(title: title, artist: r.text(1), versions: r.int(2), unofficial: r.int(3)))
+            s.songs.append(.init(title: title, artist: r.text(1), artistKey: r.text(4), titleKey: r.text(5), versions: r.int(2),
+                                 unofficial: r.int(3)))
         }
         s.songs = Array(s.songs.prefix(12))
 

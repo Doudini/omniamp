@@ -37,7 +37,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// A row in the albums pane.
     private enum Item: Equatable {
-        case header(String)
+        case header(String, ReleaseKind?)
         case album(LibraryAlbum)
     }
 
@@ -78,6 +78,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var refreshPending = false
     private let statsPage = StatsPage()
     private let listeningPage = ListeningPage()
+    private let songPage = SongPage()
+    /// The song shown over the lists (artist key, title key), if any.
+    private var song: (artist: String, title: String)?
     private var statsGeneration = 0
 
     init(controller: PlayerController) {
@@ -118,6 +121,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             entry = hook.split(separator: ":", maxSplits: 1).dropFirst().first.map { e in s == .artists || s == .shows ? Keys.artist(String(e)) : String(e) }
         }
         reloadAll(keepEntry: entry, keepAlbum: Self.lastState?.album)
+        // Test hook: OMNIAMP_LIBRARY_SONG="Artist|Title" opens that song's page.
+        if let hook = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_SONG"]?.components(separatedBy: "|"), hook.count == 2 {
+            DispatchQueue.main.async { [weak self] in self?.showSong(artist: Keys.artist(hook[0]), titleKey: Keys.title(hook[1])) }
+        }
         // Test hook: OMNIAMP_LIBRARY_FIND=1 opens Find Missing Info for the selected release.
         if ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_FIND"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.findInfo() }
@@ -223,7 +230,12 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             self.searchChanged()
         }
         listeningPage.onArtist = { [weak self] a in self?.open(.artists, a) }
-        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage]
+        statsPage.onSong = { [weak self] a, t in self?.showSong(artist: a, titleKey: t) }
+        songPage.onBack = { [weak self] in self?.closeSong() }
+        songPage.onArtist = { [weak self] a in self?.closeSong(); self?.open(.artists, a) }
+        songPage.onPlay = { [weak self] list in self?.play(list) }
+        songPage.onAdd = { [weak self] list in self?.enqueue(list) }
+        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage]
             as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
@@ -274,6 +286,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             statsPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
             statsPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
             statsPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            songPage.topAnchor.constraint(equalTo: side.topAnchor),
+            songPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
+            songPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
+            songPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             listeningPage.topAnchor.constraint(equalTo: side.topAnchor),
             listeningPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
             listeningPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
@@ -345,6 +361,32 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
     }
 
+    // MARK: Song page
+
+    /// Every version of a song, over whatever section is showing (Back returns to it).
+    private func showSong(artist: String, titleKey: String) {
+        song = (artist, titleKey)
+        for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, statsPage, listeningPage] as [NSView] { v.isHidden = true }
+        songPage.isHidden = false
+        songPage.show(artist: artist, titleKey: titleKey)
+        window?.makeFirstResponder(songPage)
+    }
+
+    private func closeSong() {
+        song = nil
+        songPage.isHidden = true
+        reloadAll()
+    }
+
+    /// Right-click on a track: all recordings of that song by that artist.
+    @objc private func showVersions() {
+        let r = trackTable.clickedRow >= 0 ? trackTable.clickedRow : trackTable.selectedRow
+        guard r >= 0, r < tracks.count else { return }
+        let t = tracks[r]
+        let artist = t.albumKey.components(separatedBy: "\u{1}").first ?? Keys.artist(t.artist)
+        showSong(artist: artist, titleKey: Keys.title(t.title))
+    }
+
     /// From a chart: the library at that genre, year or artist.
     private func open(_ s: Section, _ entry: String) {
         section = s
@@ -353,6 +395,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private func loadEntries(keep: String?, keepAlbum: String? = nil) {
+        if song != nil, !searching { return }   // the song page stays until Back
+        songPage.isHidden = true
+        song = nil
         statsPage.isHidden = !showingStats
         listeningPage.isHidden = !showingListening
         for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingPage }
@@ -450,7 +495,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             let g = grouping(list[i])
             var j = i
             while j < list.count, grouping(list[j]) == g { j += 1 }
-            if !g.isEmpty { items.append(.header("\(g) · \(j - i)")) }
+            // Groups by kind carry its color; year groups (shows) are all one kind: the same.
+            if !g.isEmpty { items.append(.header("\(g) · \(j - i)", list[i].kind)) }
             items += list[i..<j].map { .album($0) }
             i = j
         }
@@ -499,7 +545,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         if showingPage { empty.isHidden = true; return }
         if let err = library.openError {
             empty.stringValue = "The library database couldn't be opened:\n\(err)"
-        } else if library.roots.isEmpty {
+        } else if library.roots.isEmpty, entries.isEmpty {
             empty.stringValue = "Point OmniAmp at your music.\n\nFOLDERS → Add Folder… (a NAS share is fine). The library keeps itself up to date and sorts out albums, live recordings, shows and unreleased tracks from the tags and folder names."
         } else if entries.isEmpty {
             empty.stringValue = library.progress.running ? "Reading your music…" : (searching ? "Nothing matches “\(query)”." : "Nothing here with these filters.")
@@ -815,6 +861,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         add("Replace Playlist and Play", #selector(replaceAndPlay))
         menu.addItem(.separator())
         if t === albumTable, selectedAlbums.count == 1 { add("Find Missing Info…", #selector(findInfo)) }
+        if t === trackTable, trackTable.selectedRowIndexes.count == 1 { add("Show All Versions", #selector(showVersions)) }
         add("Show in Finder", #selector(showInFinder))
     }
 
@@ -849,7 +896,15 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard let t = n.object as? NSTableView else { return }
         switch t {
         case sidebar:
-            guard !searching, let s = Section(rawValue: sidebar.selectedRow), s != section else { return }
+            guard !searching, let s = Section(rawValue: sidebar.selectedRow) else { return }
+            if song != nil {   // leaving the song page
+                song = nil
+                songPage.isHidden = true
+                section = s
+                loadEntries(keep: nil)
+                return
+            }
+            guard s != section else { return }
             section = s
             loadEntries(keep: nil)
         case middle:
@@ -882,9 +937,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         case albumTable:
             guard row < items.count else { return nil }
             switch items[row] {
-            case .header(let text):
+            case .header(let text, let kind):
                 let h = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("header"), owner: nil) as? HeaderCell) ?? HeaderCell()
-                h.show(text)
+                h.show(text, kind: kind)
                 return h
             case .album(let a):
                 let c = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("album"), owner: nil) as? AlbumCell) ?? AlbumCell()

@@ -169,6 +169,8 @@ final class AlbumCell: NSTableCellView {
     private let title = NSTextField(labelWithString: "")
     private let sub = NSTextField(labelWithString: "")
     private let badge = NSTextField(labelWithString: "")
+    /// A thin stripe in the kind's color beside the cover.
+    private let stripe = NSView()
     private var album: LibraryAlbum?
     private var token = -1
 
@@ -183,12 +185,19 @@ final class AlbumCell: NSTableCellView {
             addSubview(f)
         }
         addSubview(art)
+        stripe.translatesAutoresizingMaskIntoConstraints = false
+        stripe.wantsLayer = true
+        stripe.layer?.cornerRadius = 1
+        addSubview(stripe)
         badge.alignment = .right
         badge.setContentCompressionResistancePriority(.required, for: .horizontal)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         sub.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
-            art.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            stripe.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 1),
+            stripe.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stripe.widthAnchor.constraint(equalToConstant: 3), stripe.heightAnchor.constraint(equalToConstant: 36),
+            art.leadingAnchor.constraint(equalTo: stripe.trailingAnchor, constant: 5),
             art.centerYAnchor.constraint(equalTo: centerYAnchor),
             art.widthAnchor.constraint(equalToConstant: 36), art.heightAnchor.constraint(equalToConstant: 36),
             title.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 8),
@@ -206,6 +215,8 @@ final class AlbumCell: NSTableCellView {
     func show(_ a: LibraryAlbum, withArtist: Bool) {
         if let old = album, old.folder != a.folder { LibraryArt.shared.cancel(old, token: token) }
         album = a
+        stripe.layer?.backgroundColor = Theme.kind(a.kind).cgColor
+        stripe.toolTip = a.kind.title
         let isShow = a.kind == .show && a.showDate != nil
         title.stringValue = isShow ? [a.showDate, a.venue].compactMap { $0 }.joined(separator: "  ") : a.title
         title.font = Fonts.hack(12, bold: true)
@@ -242,22 +253,33 @@ final class AlbumCell: NSTableCellView {
 /// A group title in the albums list ("SHOWS & BOOTLEGS · 42").
 final class HeaderCell: NSTableCellView {
     private let label = NSTextField(labelWithString: "")
+    private let swatch = NSView()
+    private var labelLeading: NSLayoutConstraint!
     init() {
         super.init(frame: .zero)
         identifier = NSUserInterfaceItemIdentifier("header")
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
+        for v in [label, swatch] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        swatch.wantsLayer = true
+        swatch.layer?.cornerRadius = 2
+        labelLeading = label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            swatch.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            swatch.centerYAnchor.constraint(equalTo: label.centerYAnchor),
+            swatch.widthAnchor.constraint(equalToConstant: 8), swatch.heightAnchor.constraint(equalToConstant: 8),
+            labelLeading,
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(_ text: String) {
+    /// `kind`: the group's kind of recording, shown as its color.
+    func show(_ text: String, kind: ReleaseKind? = nil) {
         label.stringValue = text.uppercased()
         label.font = Fonts.hack(9.5, bold: true)
         label.textColor = LibraryStyle.header
+        swatch.isHidden = kind == nil
+        swatch.layer?.backgroundColor = kind.map { Theme.kind($0).cgColor }
+        labelLeading.constant = kind == nil ? 4 : 17
     }
 }
 
@@ -321,7 +343,7 @@ final class LibraryTimeline: NSView {
     private var span: ClosedRange<Int> = 2000...2001
     private var undated = 0
     static let laneHeight: CGFloat = 13
-    private let labelWidth: CGFloat = 44
+    private let labelWidth: CGFloat = 54
     private let axisHeight: CGFloat = 14
 
     override var isFlipped: Bool { true }
@@ -377,13 +399,15 @@ final class LibraryTimeline: NSView {
         let label: [NSAttributedString.Key: Any] = [.font: Fonts.hack(8, bold: true), .foregroundColor: LibraryStyle.header]
         for (i, kind) in lanes.enumerated() {
             let y = p.minY + CGFloat(i) * Self.laneHeight
-            NSAttributedString(string: Self.short(kind), attributes: label).draw(at: NSPoint(x: 4, y: y + 1))
+            Theme.kind(kind).setFill()
+            NSBezierPath(roundedRect: NSRect(x: 3, y: y + 3, width: 6, height: 6), xRadius: 1.5, yRadius: 1.5).fill()
+            NSAttributedString(string: Self.short(kind), attributes: label).draw(at: NSPoint(x: 12, y: y + 1))
             Theme.phosphorDim.withAlphaComponent(0.15).setFill()
             NSRect(x: p.minX, y: y + Self.laneHeight / 2, width: p.width, height: 1).fill()
             for (year, list) in cells[kind] ?? [:] {
                 let strength = 0.35 + 0.65 * CGFloat(list.count) / CGFloat(most)
                 let r = NSRect(x: x(year) - yearW / 2, y: y + 2, width: yearW, height: Self.laneHeight - 4)
-                (kind.isOfficial ? Theme.phosphor : Theme.warning).withAlphaComponent(strength).setFill()
+                Theme.kind(kind).withAlphaComponent(strength).setFill()
                 NSBezierPath(roundedRect: r, xRadius: 1.5, yRadius: 1.5).fill()
                 if let sel = selectedKey, list.contains(where: { $0.key == sel }) {
                     Theme.current.setStroke()
