@@ -50,7 +50,10 @@ enum Dash {
     static func relaxWidth(_ view: NSView) {
         if let stack = view as? NSStackView { stack.setClippingResistancePriority(.defaultLow, for: .horizontal) }
         // Pills keep their size (squeezed, their labels ran into each other); text gives way.
-        if view is NSControl, !(view is Pill) { view.setContentCompressionResistancePriority(.init(240), for: .horizontal) }
+        // Only ever lowered: a view meant to give way first (a card's note) keeps its lower priority.
+        if view is NSControl, !(view is Pill), view.contentCompressionResistancePriority(for: .horizontal).rawValue > 240 {
+            view.setContentCompressionResistancePriority(.init(240), for: .horizontal)
+        }
         view.subviews.forEach(relaxWidth)
     }
 

@@ -117,6 +117,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         observers.append(nc.addObserver(forName: MusicCollection.progressChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }
         })
+        observers.append(nc.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateStatus() }
+        })
         library.start()
         // Test hook: OMNIAMP_LIBRARY=section[:entry] opens on a section and entry ("shows:Grateful Dead", "years:1997").
         var entry = Self.lastState?.entry
@@ -714,6 +717,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 + (days >= 1 ? String(format: "%.1f days", days) : String(format: "%.1f hours", sum.duration / 3600))
         } else {
             status.stringValue = ""
+        }
+        // Downloads from the Live Music Archive keep going wherever you are: shown first.
+        if let d = LiveArchiveDownloads.shared.summary {
+            status.stringValue = "⤓ " + d + (status.stringValue.isEmpty ? "" : "   ·   " + status.stringValue)
         }
         showEmpty()
     }

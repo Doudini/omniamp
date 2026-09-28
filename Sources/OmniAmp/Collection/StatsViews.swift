@@ -626,8 +626,11 @@ final class StatsPanel: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         Dash.styleCard(self)
         let t = NSTextField(labelWithAttributedString: Dash.title(title))
+        t.maximumNumberOfLines = 1
+        t.lineBreakMode = .byTruncatingTail
         let n = Dash.label(note ?? "", Dash.font(11), Dash.text3)
-        n.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // The note gives way first (below the 240 that relaxWidth gives labels), then the title.
+        n.setContentCompressionResistancePriority(.init(200), for: .horizontal)
         for v in [t, n, content] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         NSLayoutConstraint.activate([
             t.topAnchor.constraint(equalTo: topAnchor, constant: 14), t.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),

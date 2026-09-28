@@ -55,8 +55,10 @@ extension MetadataLookup {
     }
 }
 
-/// Downloads from the Live Music Archive into a library folder, one recording at a time per click; the
-/// library picks them up when they're done. Nothing starts without a click.
+/// Downloads from the Live Music Archive into a library folder. Nothing starts without a click; downloads
+/// keep going when the page closes (the library window's status bar shows them), and can be cancelled.
+/// Files land in a temporary folder first and move into the library when the show is complete, so the
+/// library never picks up half a show.
 @MainActor
 final class LiveArchiveDownloads {
     static let shared = LiveArchiveDownloads()
@@ -68,7 +70,27 @@ final class LiveArchiveDownloads {
         case finished
         case failed(String)
     }
-    private(set) var states: [String: State] = [:]
+    struct Job {
+        let recording: LiveRecording
+        let artist: String
+        var state: State
+        var task: Task<Void, Never>?
+    }
+    private(set) var jobs: [String: Job] = [:]
+    private var order: [String] = []
+    var states: [String: State] { jobs.mapValues(\.state) }
+
+    /// For a status bar: what's downloading ("Sharon Van Etten, 2008-06-06 Piano's: 3 of 10 files · 1 more"), nil when nothing is.
+    var summary: String? {
+        let running = order.compactMap { id -> Job? in
+            guard let j = jobs[id], case .running = j.state else { return nil }
+            return j
+        }
+        guard let first = running.first, case .running(let done, let total) = first.state else { return nil }
+        let what = "\(first.artist), \([first.recording.date, first.recording.venue].compactMap { $0 }.joined(separator: " "))"
+        return "Downloading \(what): " + (total == 0 ? "starting…" : "\(done + 1) of \(total) files")
+            + (running.count > 1 ? " · \(running.count - 1) more" : "")
+    }
 
     /// Where downloads go; asks the first time (a library folder, so they show up in the library).
     var folder: String? { UserDefaults.standard.string(forKey: Pref.liveArchiveFolder) }
@@ -88,32 +110,66 @@ final class LiveArchiveDownloads {
         return url.path
     }
 
+    func isRunning(_ id: String) -> Bool {
+        if case .running = jobs[id]?.state { return true }
+        return false
+    }
+
     func start(_ r: LiveRecording, artist: String, format: Format) {
-        if case .running = states[r.id] { return }
-        guard let base = folder ?? chooseFolder() else { return }
+        guard !isRunning(r.id), let base = folder ?? chooseFolder() else { return }
         let dest = base + "/" + Self.safeName(artist) + "/" + r.folderName
-        set(r.id, .running(done: 0, total: 0))
-        Task {
+        let staging = FileManager.default.temporaryDirectory.appendingPathComponent("OmniAmp-LiveArchive/\(Self.safeName(r.id))", isDirectory: true)
+        jobs[r.id] = Job(recording: r, artist: artist, state: .running(done: 0, total: 0))
+        order.removeAll { $0 == r.id }
+        order.append(r.id)
+        changed()
+        jobs[r.id]?.task = Task { [weak self] in
             do {
+                try? FileManager.default.removeItem(at: staging)
+                try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
                 let files = try await Self.files(r.id, format)
-                try FileManager.default.createDirectory(at: URL(exactPath: dest, isDirectory: true), withIntermediateDirectories: true)
                 for (i, name) in files.enumerated() {
-                    set(r.id, .running(done: i, total: files.count))
-                    try await Self.download(r.id, name, into: dest)
+                    try Task.checkCancellation()
+                    self?.set(r.id, .running(done: i, total: files.count))
+                    try await Self.download(r.id, name, into: staging.path)
                 }
-                set(r.id, .finished)
+                try Task.checkCancellation()
+                // Complete: into the library in one go.
+                let target = URL(exactPath: dest, isDirectory: true)
+                try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+                for f in try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil) {
+                    let to = target.appendingExact(f.lastPathComponent)
+                    try? FileManager.default.removeItem(at: to)
+                    try FileManager.default.moveItem(at: f, to: to)
+                }
+                try? FileManager.default.removeItem(at: staging)
+                self?.set(r.id, .finished)
                 if MusicCollection.shared.roots.contains(where: { dest.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }) {
                     MusicCollection.shared.rescan(folder: dest)
                 }
             } catch {
+                try? FileManager.default.removeItem(at: staging)
+                if Task.isCancelled || (error as? URLError)?.code == .cancelled || error is CancellationError {
+                    self?.jobs[r.id] = nil
+                    self?.changed()
+                    return
+                }
                 NSLog("OmniAmp: Live Music Archive download of %@ failed: %@", r.id, "\(error)")
-                set(r.id, .failed((error as? Failure)?.message ?? error.localizedDescription))
+                self?.set(r.id, .failed((error as? Failure)?.message ?? error.localizedDescription))
             }
         }
     }
 
+    func cancel(_ id: String) {
+        jobs[id]?.task?.cancel()
+    }
+
     private func set(_ id: String, _ s: State) {
-        states[id] = s
+        jobs[id]?.state = s
+        changed()
+    }
+
+    private func changed() {
         NotificationCenter.default.post(name: Self.changed, object: nil)
     }
 

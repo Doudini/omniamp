@@ -367,7 +367,7 @@ final class ArtistPage: NSScrollView {
         }
         if d.bootlegTotal > 0 {
             cards.append((StatsPanel("Bootlegs on MusicBrainz (\(d.bootlegTotal.formatted()))", boots,
-                                     note: "unofficial releases collectors catalogued · you have \(mine) · the others by date"), 1))
+                                     note: "unofficial releases · you have \(mine)"), 1))
         } else {
             cards[0].1 = 2
         }
@@ -392,22 +392,30 @@ final class ArtistPage: NSScrollView {
         let owned = Dictionary(dash.releases.compactMap { a in a.showDate.map { ($0, a) } }, uniquingKeysWith: { a, _ in a })
         let downloads = LiveArchiveDownloads.shared
         // Up to 40: all of them, or when there are more, the ones you don't have.
-        let missing = recs.filter { $0.date.flatMap { owned[$0] } == nil }
+        // Downloads (running or done this session) always stay in the list, even once they're in the library.
+        let missing = recs.filter { $0.date.flatMap { owned[$0] } == nil || downloads.states[$0.id] != nil }
         let shown = recs.count <= 40 ? recs : Array(missing.prefix(40))
         let list = RowListChart()
         list.rows = shown.map { r in
             let mine = r.date.flatMap { owned[$0] }
             var detail = [r.city, r.kind].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+            var button: String? = mine == nil ? "⤓ Download" : nil
+            let name = dash.name
+            var press: () -> Void = { LiveArchiveDownloads.shared.start(r, artist: name, format: .lossless) }
             switch downloads.states[r.id] {
-            case .running(let done, let total)?: detail = total == 0 ? "starting download…" : "downloading \(done + 1) of \(total) files…"
-            case .finished?: detail = "downloaded ✓"
-            case .failed(let why)?: detail = "download failed: \(why)"
+            case .running(let done, let total)?:
+                detail = total == 0 ? "starting download…" : "downloading \(done + 1) of \(total) files…"
+                button = "Cancel"
+                press = { LiveArchiveDownloads.shared.cancel(r.id) }
+            case .finished?: detail = "downloaded ✓ · in your library"; button = nil
+            case .failed(let why)?: detail = "download failed: \(why)"; button = "Retry"
             case nil: if mine != nil { detail += " · in your library" }
             }
             return .init(lead: r.date ?? "–", main: r.venue ?? r.id, detail: detail, color: mine != nil ? Theme.kind(.show) : Dash.text3,
                          tip: (r.source.map { "Source: \($0)\n" } ?? "") + (mine != nil ? "You have this show · click to open it or for more"
-                            : "Click to download it into your library, or open it on archive.org"),
-                         action: { [weak self] in self?.liveArchiveMenu(r, owned: mine) }, hollow: mine == nil)
+                            : "Download: FLAC (lossless) into your library · click the row for MP3 or archive.org"),
+                         action: { [weak self] in self?.liveArchiveMenu(r, owned: mine) }, hollow: mine == nil,
+                         button: button, buttonAction: press)
         }
         let n = d.liveArchive ?? recs.count
         if n > shown.count {
@@ -416,7 +424,7 @@ final class ArtistPage: NSScrollView {
         }
         let have = recs.filter { $0.date.flatMap { owned[$0] } != nil }.count
         let note = "concert tapes the artist allows to share, free · you have \(have)" + (recs.count > 40 ? " · the others by date" : "")
-            + " · click one to download"
+            + ""
         return StatsPanel("Live Music Archive (\(n.formatted()))", list, note: note)
     }
 
@@ -433,9 +441,8 @@ final class ArtistPage: NSScrollView {
         }
         if let owned { item("Open in Library") { [weak self] in self?.onRelease?(owned) } }
         let name = dash.name
-        if case .running = LiveArchiveDownloads.shared.states[r.id] {
-            item("Downloading…") {}
-            menu.items.last?.isEnabled = false
+        if LiveArchiveDownloads.shared.isRunning(r.id) {
+            item("Cancel Download") { LiveArchiveDownloads.shared.cancel(r.id) }
         } else {
             item(owned == nil ? "Download FLAC (lossless)" : "Download FLAC Again (another source?)") {
                 LiveArchiveDownloads.shared.start(r, artist: name, format: .lossless)

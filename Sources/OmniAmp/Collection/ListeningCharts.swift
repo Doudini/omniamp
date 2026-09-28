@@ -163,11 +163,41 @@ final class RowListChart: StatsChart {
         var action: (() -> Void)? = nil
         /// The marker as an outline: something you don't have.
         var hollow = false
+        /// A small button at the end of the row ("Download"), with its own action.
+        var button: String? = nil
+        var buttonAction: (() -> Void)? = nil
     }
     var rows: [Row] = [] { didSet { invalidateIntrinsicContentSize(); needsLayout = true; needsDisplay = true } }
     var empty = "Nothing."
     static let rowHeight: CGFloat = 28
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: max(28, CGFloat(rows.count) * Self.rowHeight)) }
+
+    private var mouse: NSPoint? { didSet { needsDisplay = true } }
+
+    private func buttonText(_ r: Row) -> NSAttributedString? {
+        r.button.map { Self.sans($0, 11.5, Dash.text, .medium) }
+    }
+
+    /// The row's button, right-aligned.
+    private func buttonRect(_ i: Int) -> NSRect? {
+        guard i < rows.count, let t = buttonText(rows[i]) else { return nil }
+        let w = t.size().width + 22
+        return NSRect(x: bounds.width - w - 4, y: CGFloat(i) * Self.rowHeight + 3, width: w, height: Self.rowHeight - 6)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        mouse = convert(event.locationInWindow, from: nil)
+        super.mouseMoved(with: event)
+    }
+    override func mouseExited(with event: NSEvent) {
+        mouse = nil
+        super.mouseExited(with: event)
+    }
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let i = rows.indices.first(where: { buttonRect($0)?.contains(p) ?? false }), let a = rows[i].buttonAction { a(); return }
+        super.mouseDown(with: event)
+    }
 
     override func layoutRegions() {
         regions = rows.enumerated().map { i, r in
@@ -204,7 +234,19 @@ final class RowListChart: StatsChart {
             x += max(46, lead.size().width + 12)
             let text = NSMutableAttributedString(attributedString: Self.sans(r.main, 12.5, Dash.text, .medium))
             if !r.detail.isEmpty { text.append(Self.sans("   " + r.detail, 11.5, Dash.text2)) }
-            text.draw(with: NSRect(x: x, y: y + 5, width: bounds.width - x - 8, height: 18), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            var right = bounds.width - 8
+            if let b = buttonRect(i), let t = buttonText(r) {
+                let over = mouse.map(b.contains) ?? false
+                (over ? Dash.accent.withAlphaComponent(0.25) : Dash.cardRaised).setFill()
+                let pill = NSBezierPath(roundedRect: b, xRadius: b.height / 2, yRadius: b.height / 2)
+                pill.fill()
+                (over ? Dash.accent.withAlphaComponent(0.6) : Dash.border).setStroke()
+                pill.lineWidth = 1
+                pill.stroke()
+                t.draw(at: NSPoint(x: b.midX - t.size().width / 2, y: b.midY - t.size().height / 2))
+                right = b.minX - 10
+            }
+            text.draw(with: NSRect(x: x, y: y + 5, width: right - x, height: 18), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }
     }
 }
