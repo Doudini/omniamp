@@ -47,9 +47,26 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             self?.build()
             self?.table.reloadData()
         }
+        if let st = Self.lastState {
+            // Reopened after being closed (the window is freed when closed): same view and filters.
+            showingFavorites = st.favorites
+            search.stringValue = st.query
+            genre.selectItem(at: st.genre)
+            country.selectItem(at: st.country)
+        }
         load()
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    private static var lastState: (favorites: Bool, query: String, genre: Int, country: Int)?
+    /// Closed: the app drops this controller (its lists and logos go with it).
+    var onClose: (() -> Void)?
+
+    func windowWillClose(_ notification: Notification) {
+        Self.lastState = (showingFavorites, search.stringValue, max(0, genre.indexOfSelectedItem), max(0, country.indexOfSelectedItem))
+        loadTask?.cancel()
+        onClose?()
+    }
 
     deinit { themeObserver.map(NotificationCenter.default.removeObserver) }
 

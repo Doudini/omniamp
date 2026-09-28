@@ -210,44 +210,57 @@ enum XMLRepair {
         "auml": "#228", "ouml": "#246", "uuml": "#252", "Auml": "#196", "Ouml": "#214", "Uuml": "#220", "szlig": "#223",
         "eacute": "#233", "egrave": "#232", "agrave": "#224", "ccedil": "#231", "iacute": "#237", "oacute": "#243",
     ]
-    private static let entity = try! NSRegularExpression(pattern: "&(#?[A-Za-z0-9]{0,31};?)")
+    private static let predefined: Set<String> = ["amp", "lt", "gt", "quot", "apos"]
 
+    /// Works on the bytes: no String or UTF-16 copies of a feed that can be several MB, and no copy at all when
+    /// nothing needs fixing. CDATA is taken literally by the parser, so those blocks are left as they are.
     static func repair(_ data: Data) -> Data {
-        guard data.firstIndex(of: UInt8(ascii: "&")) != nil, let s = String(data: data, encoding: .utf8) else { return data }
-        // CDATA is taken literally by the parser: copy those blocks as they are, fix only the text between.
-        var out = "", rest = Substring(s)
-        while let open = rest.range(of: "<![CDATA[") {
-            out += fix(String(rest[..<open.lowerBound]))
-            guard let close = rest.range(of: "]]>", range: open.upperBound..<rest.endIndex) else {
-                out += rest[open.lowerBound...]
-                return Data(out.utf8)
-            }
-            out += rest[open.lowerBound..<close.upperBound]
-            rest = rest[close.upperBound...]
+        let b = [UInt8](data)
+        let amp = UInt8(ascii: "&"), lt = UInt8(ascii: "<"), semi = UInt8(ascii: ";"), hash = UInt8(ascii: "#")
+        let cdOpen = Array("<![CDATA[".utf8), cdClose = Array("]]>".utf8)
+        func starts(_ seq: [UInt8], at i: Int) -> Bool {
+            i + seq.count <= b.count && b[i..<(i + seq.count)].elementsEqual(seq)
         }
-        out += fix(String(rest))
-        return Data(out.utf8)
-    }
-
-    private static func fix(_ s: String) -> String {
-        guard s.contains("&") else { return s }
-        let ns = s as NSString
-        var out = "", last = 0
-        for m in entity.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
-            out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
-            let body = ns.substring(with: m.range(at: 1))   // "nbsp;", "#160;", "amp;", or "" for a bare &
-            if body.hasSuffix(";") {
-                let name = String(body.dropLast())
-                if ["amp", "lt", "gt", "quot", "apos"].contains(name) || (name.hasPrefix("#") && name.count > 1) { out += "&" + body }
-                else if let n = named[name] { out += "&" + n + ";" }
-                else { out += "&amp;" + body }   // unknown entity: keep it as text
+        func isNameByte(_ c: UInt8) -> Bool { (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) }
+        var out: [UInt8]?     // made on the first fix
+        var copied = 0        // b[..<copied] is already in `out` (or unchanged)
+        func replace(_ range: Range<Int>, with bytes: [UInt8]) {
+            if out == nil { out = []; out!.reserveCapacity(b.count + 1024) }
+            out!.append(contentsOf: b[copied..<range.lowerBound])
+            out!.append(contentsOf: bytes)
+            copied = range.upperBound
+        }
+        var i = 0
+        while i < b.count {
+            let c = b[i]
+            if c == lt, starts(cdOpen, at: i) {
+                var j = i + cdOpen.count
+                while j < b.count, !starts(cdClose, at: j) { j += 1 }
+                i = min(b.count, j + cdClose.count)
+                continue
+            }
+            guard c == amp else { i += 1; continue }
+            var j = i + 1
+            if j < b.count, b[j] == hash { j += 1 }
+            while j < b.count, j - i <= 32, isNameByte(b[j]) { j += 1 }
+            if j < b.count, b[j] == semi, j > i + 1 {
+                let name = String(decoding: b[(i + 1)..<j], as: UTF8.self)
+                if predefined.contains(name) || (name.hasPrefix("#") && name.count > 1) {
+                    // fine as it is
+                } else if let n = named[name] {
+                    replace(i..<(j + 1), with: Array("&\(n);".utf8))
+                } else {
+                    replace(i..<(i + 1), with: Array("&amp;".utf8))   // unknown entity: keep it as text
+                }
+                i = j + 1
             } else {
-                out += "&amp;" + body            // a bare & (or one without ;)
+                replace(i..<(i + 1), with: Array("&amp;".utf8))       // a bare &
+                i += 1
             }
-            last = m.range.location + m.range.length
         }
-        out += ns.substring(from: last)
-        return out
+        guard var fixed = out else { return data }
+        fixed.append(contentsOf: b[copied...])
+        return Data(fixed)
     }
 }
 
@@ -273,7 +286,7 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
         let x = XMLParser(data: XMLRepair.repair(data))
         x.delegate = p
         x.shouldProcessNamespaces = false
-        p.failed = !x.parse()
+        p.failed = !autoreleasepool { x.parse() }
         return p
     }
 
@@ -308,7 +321,9 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
             case "title", "pubdate", "itunes:duration", "description", "itunes:summary", "content:encoded", "itunes:season", "itunes:episode":
                 if item?[n] == nil, !value.isEmpty { item?[n] = value }
             case "item":
-                if let it = item, let url = itemURL, Self.isAudio(url: url, type: itemType) {
+                // Each episode's notes go through several text passes: free their temporaries per episode,
+                // not at the end of a feed of 800 (that pile-up doubled the app's memory while parsing).
+                if let it = item, let url = itemURL, Self.isAudio(url: url, type: itemType) { autoreleasepool {
                     let notes = it["description"] ?? it["itunes:summary"] ?? it["content:encoded"]
                     let links = notes.map(Self.links) ?? []
                     episodes.append(PodcastEpisode(title: it["title"] ?? "Untitled episode", url: url,
@@ -319,7 +334,7 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
                                                    season: it["itunes:season"].flatMap { Int($0) },
                                                    number: it["itunes:episode"].flatMap { Int($0) },
                                                    links: links.isEmpty ? nil : links))
-                }
+                } }
                 item = nil
             default: break
             }
@@ -552,6 +567,8 @@ final class PodcastLibrary {
         let c = FeedCache(fetched: Date().timeIntervalSince1970, episodes: eps)
         feeds[show.feedURL] = c
         try? JSONEncoder().encode(c).write(to: feedFile(show.feedURL), options: .atomic)
+        keepInMemory(show.feedURL)
+        MemoryTrim.soon()   // parsing and saving a big feed leaves freed memory behind
         completeSubscription(show.feedURL, title: channel.title, author: channel.author, artwork: channel.artwork, newest: eps.first?.published)
         return eps
     }
@@ -592,6 +609,20 @@ final class PodcastLibrary {
         guard isSubscribed(show) else { return 0 }
         let since = seen[show.feedURL] ?? .infinity
         return cachedEpisodes(show).filter { ($0.published ?? 0) > since && !isPlayed($0.url) }.count
+    }
+
+    /// Feeds of shows you don't subscribe to stay in memory only while recent (they're on disk anyway):
+    /// browsing the charts would otherwise keep every show's episodes and notes for the whole session.
+    private var recentFeeds: [String] = []
+    private func keepInMemory(_ feed: String) {
+        recentFeeds.removeAll { $0 == feed }
+        recentFeeds.append(feed)
+        let subscribed = Set(subscriptions.map(\.feedURL))
+        let others = recentFeeds.filter { !subscribed.contains($0) }
+        for f in others.dropLast(3) {
+            feeds.removeValue(forKey: f)
+            recentFeeds.removeAll { $0 == f }
+        }
     }
 
     /// Mark many episodes played at once (one save).

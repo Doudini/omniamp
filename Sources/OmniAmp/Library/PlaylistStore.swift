@@ -299,7 +299,7 @@ final class PlaylistStore {
     private func flush() {
         pendingLock.lock()
         let batch = pending
-        pending.removeAll(keepingCapacity: true)
+        pending.removeAll(keepingCapacity: activeLoads > 0)   // don't hold a big buffer once loading is done
         pendingLock.unlock()
         guard !batch.isEmpty else { return }
 

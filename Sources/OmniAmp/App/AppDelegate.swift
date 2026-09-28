@@ -205,7 +205,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var podcasts: PodcastWindowController?
 
     @objc private func showPodcasts(_ sender: Any?) {
-        if podcasts == nil { podcasts = PodcastWindowController(controller: controller) }
+        if podcasts == nil {
+            podcasts = PodcastWindowController(controller: controller)
+            // Closing frees the window and its lists: they're rebuilt (from caches) when it opens again.
+            podcasts?.onClose = { [weak self] in
+                DispatchQueue.main.async { self?.podcasts = nil; MemoryTrim.soon() }
+            }
+        }
         podcasts?.showWindow(nil)
         podcasts?.window?.makeKeyAndOrderFront(nil)
         podcasts?.focusList()
@@ -227,7 +233,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func showRadio(_ sender: Any?) {
-        if radio == nil { radio = RadioWindowController(controller: controller) }
+        if radio == nil {
+            radio = RadioWindowController(controller: controller)
+            radio?.onClose = { [weak self] in
+                DispatchQueue.main.async { self?.radio = nil; MemoryTrim.soon() }
+            }
+        }
         radio?.showWindow(nil)
         radio?.window?.makeKeyAndOrderFront(nil)
         radio?.focusList()

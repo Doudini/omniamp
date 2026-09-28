@@ -67,7 +67,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     init(controller: PlayerController) {
         self.controller = controller
-        showingSubscriptions = !PodcastLibrary.shared.subscriptions.isEmpty
+        showingSubscriptions = Self.lastState?.subscriptions ?? !PodcastLibrary.shared.subscriptions.isEmpty
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 580),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView], backing: .buffered, defer: false)
         w.title = "Podcasts"
@@ -93,10 +93,20 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         downloadsObserver = NotificationCenter.default.addObserver(forName: PodcastDownloads.changed, object: nil, queue: .main) { [weak self] n in
             self?.downloadChanged(n.object as? String)
         }
+        if let st = Self.lastState {
+            // Reopened after being closed (the window is freed when closed): same view, search and show.
+            search.stringValue = st.query
+            if let s = st.show { open(s) }
+        }
         load()
         refreshSubscriptions()
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// What to restore when the window is opened again (it is freed on close to give its memory back).
+    private static var lastState: (subscriptions: Bool, query: String, show: PodcastShow?)?
+    /// Closed: the app drops this controller.
+    var onClose: (() -> Void)?
 
     deinit {
         themeObserver.map(NotificationCenter.default.removeObserver)
@@ -114,6 +124,10 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     func windowWillClose(_ notification: Notification) {
         progressTimer?.invalidate()
         progressTimer = nil
+        Self.lastState = (showingSubscriptions, search.stringValue, currentShow)
+        loadTask?.cancel()
+        episodesTask?.cancel()
+        onClose?()
     }
 
     /// The playing episode that has been added to Continue listening (once it's past 30 s).

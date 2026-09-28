@@ -64,6 +64,16 @@ final class ArtworkStore {
     /// Decode compressed image bytes directly at a bounded size.
     static func image(_ data: Data, maxPixels: Int) -> CGImage? {
         guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        return thumbnail(src, maxPixels: maxPixels)
+    }
+
+    /// Straight from a file: ImageIO reads what it needs, the whole file never sits in memory.
+    static func image(contentsOf url: URL, maxPixels: Int) -> CGImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        return thumbnail(src, maxPixels: maxPixels)
+    }
+
+    private static func thumbnail(_ src: CGImageSource, maxPixels: Int) -> CGImage? {
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,

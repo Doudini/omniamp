@@ -8,6 +8,9 @@ final class LogoStore {
 
     private var memory: [String: CGImage] = [:]
     private var order: [String] = []
+    /// Decoded images are held up to this many bytes (a 280 px logo is ~300 KB, a row thumbnail ~16 KB).
+    private var memoryBytes = 0
+    private let maxBytes = 20 * 1024 * 1024
     private var waiting: [String: [(CGImage?) -> Void]] = [:]
     /// When a logo last failed: not asked again for a while (a dead link), but retried later (offline, a server hiccup).
     private var failed: [String: Date] = [:]
@@ -17,8 +20,25 @@ final class LogoStore {
     private static var dir: URL = {
         let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("OmniAmp/logos", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        DispatchQueue.global(qos: .background).async { trimDisk(d) }
         return d
     }()
+
+    /// The logo and cover files are kept up to 200 MB; the least recently used go first.
+    private static func trimDisk(_ d: URL, limit: Int = 200 * 1024 * 1024) {
+        let keys: [URLResourceKey] = [.fileSizeKey, .contentAccessDateKey]
+        guard let files = try? FileManager.default.contentsOfDirectory(at: d, includingPropertiesForKeys: keys) else { return }
+        let info = files.map { f -> (URL, Int, Date) in
+            let v = try? f.resourceValues(forKeys: Set(keys))
+            return (f, v?.fileSize ?? 0, v?.contentAccessDate ?? .distantPast)
+        }
+        var total = info.reduce(0) { $0 + $1.1 }
+        guard total > limit else { return }
+        for (f, size, _) in info.sorted(by: { $0.2 < $1.2 }) where total > limit {
+            try? FileManager.default.removeItem(at: f)
+            total -= size
+        }
+    }
 
     private static func file(for url: String) -> URL {
         dir.appendingPathComponent(Insecure.SHA1.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined())
@@ -45,40 +65,74 @@ final class LogoStore {
         if let img = memory[key] { completion(img); return }
         if waiting[key] != nil { waiting[key]!.append(completion); return }
         waiting[key] = [completion]
+        let maxPixels = size == .small ? 72 : ArtworkStore.thumbPixels   // 36 pt rows on Retina
+        enqueue { [weak self] in self?.fetch(url, remote: remote, key: key, maxPixels: maxPixels) }
+    }
+
+    // A few at a time, newest first: scrolling a long episode list mustn't start hundreds of downloads (episode
+    // art is often a multi-MB original), and the rows on screen now matter more than those scrolled past.
+    private var running = 0
+    private let maxRunning = 4
+    private var queued: [() -> Void] = []
+
+    private func enqueue(_ job: @escaping () -> Void) {
+        if running < maxRunning { running += 1; job() } else { queued.append(job) }
+    }
+
+    private func jobDone() {
+        running -= 1
+        if !queued.isEmpty { running += 1; queued.removeLast()() }
+    }
+
+    private static let maxFileBytes = 20 * 1024 * 1024
+
+    private func fetch(_ url: String, remote: URL, key: String, maxPixels: Int) {
         Task.detached(priority: .utility) {
             let disk = Self.file(for: url)
-            var data = try? Data(contentsOf: disk)
-            if data == nil {
+            var tooBig = false
+            if !FileManager.default.fileExists(atPath: disk.path) {
+                // To a file, not into memory: then ImageIO decodes a small thumbnail straight from it.
                 var req = URLRequest(url: remote)
                 req.setValue("OmniAmp/1.0", forHTTPHeaderField: "User-Agent")
-                req.timeoutInterval = 10
-                if let (d, r) = try? await URLSession.shared.data(for: req), (r as? HTTPURLResponse)?.statusCode ?? 200 < 400, d.count < 5_000_000 {
-                    data = d
-                    try? d.write(to: disk, options: .atomic)
+                req.timeoutInterval = 15
+                if let (tmp, r) = try? await URLSession.shared.download(for: req), (r as? HTTPURLResponse)?.statusCode ?? 200 < 400 {
+                    let bytes = (try? tmp.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    if bytes > Self.maxFileBytes { tooBig = true; try? FileManager.default.removeItem(at: tmp) }
+                    else { try? FileManager.default.removeItem(at: disk); try? FileManager.default.moveItem(at: tmp, to: disk) }
                 }
             }
-            let img = data.flatMap { Self.decode($0, maxPixels: size == .small ? 64 : ArtworkStore.thumbPixels) }
+            let img = autoreleasepool { Self.decode(disk, maxPixels: maxPixels) }
             if img == nil { try? FileManager.default.removeItem(at: disk) }   // don't keep serving an unreadable file
-            await MainActor.run { self.finish(url, key: key, img) }
+            let permanent = tooBig
+            await MainActor.run {
+                self.finish(url, key: key, img, permanent: permanent)
+                self.jobDone()
+            }
         }
     }
 
-    /// PNG/JPEG/ICO/GIF via ImageIO at ≤ 280 px; anything else NSImage understands (e.g. SVG) as a fallback.
-    private static func decode(_ data: Data, maxPixels: Int) -> CGImage? {
-        if let img = ArtworkStore.image(data, maxPixels: maxPixels) { return img }
-        guard let ns = NSImage(data: data) else { return nil }
+    /// PNG/JPEG/ICO/GIF via ImageIO at display size; anything else NSImage understands (e.g. SVG) as a fallback.
+    private static func decode(_ file: URL, maxPixels: Int) -> CGImage? {
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        if let img = ArtworkStore.image(contentsOf: file, maxPixels: maxPixels) { return img }
+        guard let ns = NSImage(contentsOf: file) else { return nil }
         var rect = NSRect(x: 0, y: 0, width: maxPixels, height: maxPixels)
         return ns.cgImage(forProposedRect: &rect, context: nil, hints: nil)
     }
 
-    private func finish(_ url: String, key: String, _ img: CGImage?) {
+    /// `permanent`: never ask again this session (an image too big to be worth it).
+    private func finish(_ url: String, key: String, _ img: CGImage?, permanent: Bool = false) {
         if let img {
             memory[key] = img
             failed.removeValue(forKey: url)
             order.append(key)
-            if order.count > capacity { memory.removeValue(forKey: order.removeFirst()) }
+            memoryBytes += img.bytesPerRow * img.height
+            // Oldest out first, by size and by count.
+            while (memoryBytes > maxBytes || order.count > capacity), !order.isEmpty {
+                if let old = memory.removeValue(forKey: order.removeFirst()) { memoryBytes -= old.bytesPerRow * old.height }
+            }
         } else {
-            failed[url] = Date()
+            failed[url] = permanent ? .distantFuture : Date()
         }
         waiting.removeValue(forKey: key)?.forEach { $0(img) }
     }
