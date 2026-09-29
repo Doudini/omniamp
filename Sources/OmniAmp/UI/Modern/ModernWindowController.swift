@@ -112,7 +112,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         root.addSubview(titleLabel)
 
         table.headerView = nil
-        table.backgroundColor = .black
+        table.backgroundColor = Theme.playlistBackground
         table.rowHeight = PlaylistStyle.rowHeight
         observers.append(NotificationCenter.default.addObserver(forName: PlaylistStyle.changed, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
@@ -152,13 +152,13 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         scroll.hasVerticalScroller = true
         scroll.scrollerStyle = .overlay
         scroll.drawsBackground = true
-        scroll.backgroundColor = .black
+        scroll.backgroundColor = Theme.playlistBackground
         scroll.automaticallyAdjustsContentInsets = false
         scroll.contentInsets = NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
         scroll.wantsLayer = true
         scroll.layer?.cornerRadius = 4
         scroll.layer?.borderWidth = 1
-        scroll.layer?.borderColor = NSColor.black.cgColor
+        scroll.layer?.borderColor = Theme.lcdEdge.cgColor
         scroll.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(scroll)
         drawerHost.translatesAutoresizingMaskIntoConstraints = false

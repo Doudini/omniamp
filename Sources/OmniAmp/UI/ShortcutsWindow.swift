@@ -28,6 +28,8 @@ enum Shortcuts {
 }
 
 final class ShortcutsWindowController: NSWindowController {
+    private var themeObserver: NSObjectProtocol?
+
     init() {
         // A normal window, not a panel: it stays open next to other apps while you learn the keys.
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 520), styleMask: [.titled, .closable],
@@ -38,8 +40,13 @@ final class ShortcutsWindowController: NSWindowController {
         super.init(window: w)
         build()
         w.center()
+        // The list is an LCD screen in the theme's color.
+        themeObserver = NotificationCenter.default.addObserver(forName: Theme.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.build() }
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
+    deinit { themeObserver.map(NotificationCenter.default.removeObserver) }
 
     override func cancelOperation(_ sender: Any?) { window?.close() }   // Esc
 

@@ -53,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if ProcessInfo.processInfo.environment["OMNIAMP_BACKGROUND"] == nil { NSApp.activate(ignoringOtherApps: true) }
         // Test hook: OMNIAMP_SETTINGS=1 opens the Settings window at launch.
         if ProcessInfo.processInfo.environment["OMNIAMP_SETTINGS"] != nil { showSettings(nil) }
+        if ProcessInfo.processInfo.environment["OMNIAMP_ABOUT"] != nil { showAbout(nil) }
         if ProcessInfo.processInfo.environment["OMNIAMP_RADIO"] != nil { showRadio(nil) }
         if ProcessInfo.processInfo.environment["OMNIAMP_PODCASTS"] != nil { showPodcasts(nil) }
         if ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY"] != nil { showLibrary(nil) }
@@ -310,6 +311,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if !wasOpen { radio?.focusList() }
     }
 
+    /// The standard About panel with the crew's message and greetings under the version.
+    @objc private func showAbout(_ sender: Any?) {
+        let center = NSMutableParagraphStyle()
+        center.alignment = .center
+        center.paragraphSpacing = 6
+        let base: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor,
+                                                   .paragraphStyle: center]
+        let credits = NSMutableAttributedString()
+        func add(_ s: String, _ extra: [NSAttributedString.Key: Any] = [:]) {
+            credits.append(NSAttributedString(string: s, attributes: base.merging(extra) { $1 }))
+        }
+        add("Made by Pirates. For Pirates!\n", [.font: NSFont.boldSystemFont(ofSize: 12)])
+        add("© 2026 OMNIKORP KOLLEKTIV\n")
+        add("www.microbot.ch", [.link: URL(string: "https://www.microbot.ch")!])
+        add("\n\nGreetings: rarz, jesar, wes21, Hiroshi Takeda, hund, rtz23, daeil kim, paul, seth, noriko, lgr, popolon",
+            [.foregroundColor: NSColor.secondaryLabelColor])
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc private func showSettings(_ sender: Any?) {
         if settings == nil { settings = SettingsWindowController() }
         settings?.refresh()
@@ -354,6 +375,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func pickTheme(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, id != Theme.palette.id else { return }
         Theme.select(id)
+        rebuildModern()
+    }
+
+    @objc private func pickFinish(_ sender: NSMenuItem) {
+        guard let f = Finish(rawValue: sender.representedObject as? String ?? ""), f != Theme.finish else { return }
+        Theme.selectFinish(f)
+        rebuildModern()
+    }
+
+    private func rebuildModern() {
         guard mode == .modern, let old = look as? ModernWindowController else { return }
         // The rebuilt window picks up where you were: the same rows selected, the list focused.
         let picked = old.selectedTrackIndices
@@ -400,12 +431,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             it.keyEquivalentModifierMask = [.command, .control]
         }
         m.addItem(.separator())
-        let themeItem = NSMenuItem(title: "Modern Theme", action: nil, keyEquivalent: "")
-        let themes = NSMenu(title: "Modern Theme")
+        // The display's color, then the finish of the windows around it.
+        let themeItem = NSMenuItem(title: "Theme", action: nil, keyEquivalent: "")
+        let themes = NSMenu(title: "Theme")
         for t in ThemePalette.all {
             let it = themes.addItem(withTitle: t.name, action: #selector(pickTheme(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = t.id
+        }
+        themes.addItem(.separator())
+        for f in Finish.allCases {
+            let it = themes.addItem(withTitle: f.name, action: #selector(pickFinish(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = f.rawValue
         }
         themeItem.submenu = themes
         m.addItem(themeItem)
@@ -503,6 +541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if item.action == #selector(pickPlaylistFont(_:)) { item.state = (item.representedObject as? String) == PlaylistStyle.font.rawValue ? .on : .off }
         if item.action == #selector(toggleNumbers(_:)) { item.state = PlaylistStyle.showNumbers ? .on : .off }
         if item.action == #selector(pickTheme(_:)) { item.state = (item.representedObject as? String) == Theme.palette.id ? .on : .off }
+        if item.action == #selector(pickFinish(_:)) { item.state = (item.representedObject as? String) == Theme.finish.rawValue ? .on : .off }
         if item.action == #selector(setScale(_:)) { item.state = Int(SkinLibrary.scale) == item.tag ? .on : .off }
         if item.action == #selector(pickInstalledSkin(_:)) {
             item.state = (item.representedObject as? URL)?.standardizedFileURL.path == SkinLibrary.active?.standardizedFileURL.path ? .on : .off
@@ -839,7 +878,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About OmniAmp", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About OmniAmp", action: #selector(showAbout(_:)), keyEquivalent: "").target = self
         appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(showSettings(_:)), keyEquivalent: ",").target = self

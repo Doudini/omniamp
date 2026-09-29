@@ -5,6 +5,7 @@ enum Pref {
     static let uiMode = "uiMode"
     static let skinPath = "skinPath"
     static let modernTheme = "modernTheme"
+    static let modernFinish = "modernFinish"
     static let modernDrawer = "modernDrawer"
     static let modernInfoHeight = "modernInfoHeight"
     static let modernEQVisible = "modernEQVisible"

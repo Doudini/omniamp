@@ -385,13 +385,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private func applyTheme() {
-        // Only the accent follows the theme (the cards don't): redrawing is enough.
+        // Dash's colors follow the theme by themselves: cards painted again and a redraw are enough, so every
+        // page (hidden ones too) keeps its scroll and lists.
         window?.backgroundColor = Dash.page
+        if let v = window?.contentView { Dash.restyle(v) }
         [sidebar, middle, albumTable, trackTable].forEach { $0.reloadData() }
-        status.textColor = Dash.text2
-        empty.textColor = Dash.text2
-        letters.needsDisplay = true
-        timeline.needsDisplay = true
     }
 
     // MARK: Loading

@@ -22,6 +22,7 @@ Ideas we want but have deferred. Roughly ordered by value within each group.
 - **Shaped windows** for skins that ship a `region.txt`.
 
 ## Bigger items
+- **Hardware finishes for the player**: make the modern player look like a small old-school stereo, as more finishes next to Tinted, Hardware and Studio: materials (brushed aluminium, black anodized, walnut side panels, 80s silver plastic), displays (VFD, backlit LCD with ghosted segments), button styles (piano keys, rubber, metal toggles, lit buttons), maybe layouts of their own. Needs the remaining inline highlight, shadow and knob values in `UI/Modern/*` turned into finish tokens first.
 - **Milkdrop visualizations** (projectM).
 - **More formats**: Ogg Vorbis/Opus, APE/WavPack, and tracker/chiptune formats (MOD/XM/IT/SID). These need external libraries.
 - **Playlist tabs**: several open playlists, foobar2000-style.

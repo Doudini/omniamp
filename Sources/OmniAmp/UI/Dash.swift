@@ -10,29 +10,35 @@ enum Dash {
         NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
     }
 
-    // Surfaces.
-    static let page = rgb(0x0D1519)
-    static let card = rgb(0x152127)
-    static let cardRaised = rgb(0x1B2A31)
-    static let border = rgb(0x24353D)
+    /// A color that follows the theme: it's looked up each time it's drawn, so a label or table given it once
+    /// changes with the theme without being set again.
+    private static func live(_ color: @escaping () -> NSColor) -> NSColor {
+        NSColor(name: nil) { _ in color() }
+    }
+
+    // Surfaces (the theme's finish).
+    static let page = live { Theme.surfaces.page }
+    static let card = live { Theme.surfaces.card }
+    static let cardRaised = live { Theme.surfaces.cardRaised }
+    static let border = live { Theme.surfaces.border }
     static let grid = NSColor.white.withAlphaComponent(0.06)
 
     // Text.
-    static let text = rgb(0xE6ECEE)
-    static let text2 = rgb(0x93A3AA)
-    static let text3 = rgb(0x5E6F76)
+    static let text = live { Theme.surfaces.text }
+    static let text2 = live { Theme.surfaces.text2 }
+    static let text3 = live { Theme.surfaces.text3 }
 
     // Accents.
-    static var accent: NSColor { Theme.phosphor }
+    static let accent = live { Theme.phosphor }
     /// Complementary to the theme: for a second series.
-    static var accent2: NSColor {
+    static let accent2 = live {
         switch Theme.palette.id {
         case "amber": rgb(0x4FC3C7)
         case "blue", "cyan": rgb(0xF2B84B)
         default: rgb(0x6FA8DC)
         }
     }
-    static var selection: NSColor { accent.withAlphaComponent(0.16) }
+    static let selection = live { Theme.phosphor.withAlphaComponent(0.16) }
 
     /// Categorical colors for artists (the dataviz reference palette, dark steps), checked on our cards: neighbours
     /// stay apart for color-blind eyes too. Fixed order; a ninth artist folds into "other" (gray).
@@ -95,8 +101,26 @@ enum Dash {
         v.layer?.cornerRadius = 8
         v.layer?.masksToBounds = true
         v.layer?.borderWidth = 1
-        v.layer?.borderColor = border.cgColor
-        if !(v is NSScrollView) { v.layer?.backgroundColor = color.cgColor }
+        // Layers keep a fixed copy of a color: the card remembers its fill so a theme change can paint it again.
+        v.layer?.setValue(color, forKey: cardFill)
+        paintCard(v)
+    }
+
+    private static let cardFill = "dashCardFill"
+
+    private static func paintCard(_ v: NSView) {
+        guard let layer = v.layer, let fill = layer.value(forKey: cardFill) as? NSColor else { return }
+        layer.borderColor = border.cgColor
+        if !(v is NSScrollView) { layer.backgroundColor = fill.cgColor }
+    }
+
+    /// After a theme change: cards and list fades painted again, everything redrawn (the rest of the colors
+    /// follow the theme by themselves). Pages keep their state; nothing is rebuilt.
+    static func restyle(_ root: NSView) {
+        paintCard(root)
+        (root as? ScrollFades)?.recolor()
+        root.needsDisplay = true
+        root.subviews.forEach(restyle)
     }
 }
 
@@ -185,6 +209,7 @@ final class Pill: NSControl {
 /// each edge only while there's more to scroll to that way. Clicks go through.
 final class ScrollFades: NSView {
     private weak var scroll: NSScrollView?
+    private let color: NSColor
     private let top = CAGradientLayer(), bottom = CAGradientLayer()
     static let height: CGFloat = 18
 
@@ -200,11 +225,12 @@ final class ScrollFades: NSView {
 
     private init(scroll: NSScrollView, color: NSColor) {
         self.scroll = scroll
+        self.color = color
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        recolor()
         for (g, down) in [(top, true), (bottom, false)] {
-            g.colors = [color.cgColor, color.withAlphaComponent(0).cgColor]
             // Layer y runs up: the top fade is solid at its top, the bottom one at its bottom.
             g.startPoint = CGPoint(x: 0.5, y: down ? 1 : 0)
             g.endPoint = CGPoint(x: 0.5, y: down ? 0 : 1)
@@ -216,6 +242,12 @@ final class ScrollFades: NSView {
         NotificationCenter.default.addObserver(self, selector: #selector(update), name: NSView.frameDidChangeNotification, object: scroll.documentView)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Gradients hold fixed colors: painted again after a theme change.
+    func recolor() {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        for g in [top, bottom] { g.colors = [c.cgColor, c.withAlphaComponent(0).cgColor] }
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 

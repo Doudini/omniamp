@@ -230,7 +230,7 @@ final class ModernInfoView: NSView {
         g.cornerRadius = 4
         g.masksToBounds = true
         g.borderWidth = 1
-        g.borderColor = NSColor.black.cgColor
+        g.borderColor = Theme.lcdEdge.cgColor
     }
 
     /// Wrapping label: up to `lines` lines, the last one truncated if the text is longer still.

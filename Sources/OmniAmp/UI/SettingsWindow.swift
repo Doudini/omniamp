@@ -25,6 +25,7 @@ final class SettingsWindowController: NSWindowController {
                          backing: .buffered, defer: false)
         w.title = "OmniAmp Settings"
         w.appearance = NSAppearance(named: .darkAqua)
+        w.backgroundColor = Dash.page
         w.isReleasedWhenClosed = false
         super.init(window: w)
         build()

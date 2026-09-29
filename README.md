@@ -13,12 +13,17 @@ It's written in Swift with AppKit and AVAudioEngine and has no third-party depen
 
 ## The modern look
 
-A resizable native window with an LCD-style display, album art and the Hack Nerd Font. Pick one of five color themes inspired by old monochrome monitors:
+A resizable native window with an LCD-style display, album art and the Hack Nerd Font. **View → Theme** has two choices. The color comes in five themes inspired by old monochrome monitors:
 - Green (default)
 - Amber
 - Blue
 - Cyan/Teal
 - Monochrome
+
+The finish sets the windows around the display, and it applies to the Music Library, Radio, Podcasts and Settings windows too:
+- **Tinted** (default): dark greys that lean towards the color.
+- **Hardware**: neutral grey.
+- **Studio**: slate blue-green.
 
 The **INFO** drawer shows full tags, the file format, the album and cover art. The **EQ** drawer has the 10-band equalizer with presets.
 
