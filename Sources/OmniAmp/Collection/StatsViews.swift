@@ -198,18 +198,26 @@ final class YearsChart: StatsChart {
     var trend = false
     /// More for a year's tooltip (the shows themselves).
     var more: ((Int) -> String)?
+    /// Each column's value written above it (where there's room; else the best and the last year's).
+    var valueLabels = false
+    /// A year still going: its column is what's there so far, a dashed outline where it's heading at this pace.
+    var pace: (year: Int, projected: Int)? { didSet { needsDisplay = true } }
     override var stretches: Bool { true }
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 170) }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: valueLabels ? 190 : 170) }
 
     private var span: ClosedRange<Int> {
         guard let lo = years.first?.year, let hi = years.last?.year else { return 2000...2001 }
         return lo...max(hi, lo + 1)
     }
-    private var most: Int { years.map(\.releases).max() ?? 1 }
+    private var most: Int { max(years.map(\.releases).max() ?? 1, pace?.projected ?? 0) }
     /// Counts are whole: up to 5, a grid line per unit (no "1.5 shows").
     private var top: Double { most <= 5 ? Double(max(most, 1)) : Self.niceMax(Double(most)) }
     private var lines: Int? { most <= 5 ? max(most, 1) : nil }
-    private var plot: NSRect { NSRect(x: 0, y: 14, width: bounds.width, height: bounds.height - 34) }
+    private var plot: NSRect {
+        // Room above the tallest column for its label.
+        let head: CGFloat = valueLabels ? 16 : 0
+        return NSRect(x: 0, y: 14 + head, width: bounds.width, height: bounds.height - 34 - head)
+    }
     private func area() -> NSRect {
         let full = plot, labelWidth: CGFloat = 34
         return NSRect(x: full.minX + labelWidth, y: full.minY, width: full.width - labelWidth, height: full.height)
@@ -229,6 +237,8 @@ final class YearsChart: StatsChart {
     override func draw(_ dirtyRect: NSRect) {
         let p = Self.grid(in: plot, top: top, lines: lines), s = step
         let gap: CGFloat = s > 6 ? max(1, s * 0.2) : 0.5
+        // Every column labelled when the widest label fits over it; else the best and the last year's only.
+        let allLabels = valueLabels && (years.map { Self.text(Self.short(Double($0.releases)), 9, Dash.text2).size().width }.max() ?? 0) <= s - 2
         var centres: [NSPoint] = []
         for (i, y) in years.enumerated() {
             let h = max(2, p.height * CGFloat(Double(y.releases) / top))
@@ -241,9 +251,23 @@ final class YearsChart: StatsChart {
             let path = NSBezierPath(roundedRect: r, xRadius: rad, yRadius: rad)
             path.append(NSBezierPath(rect: NSRect(x: r.minX, y: r.maxY - rad, width: r.width, height: rad)))
             path.fill()
-            if hot {
-                let v = Self.text(y.releases.formatted(), 10, Dash.text, bold: true)
-                v.draw(at: NSPoint(x: min(max(p.minX, r.midX - v.size().width / 2), bounds.width - v.size().width), y: r.minY - 15))
+            var labelTop = r.minY
+            // The year still going: a dashed outline up to where it's heading.
+            if let pace, pace.year == y.year, pace.projected > y.releases {
+                let ph = max(2, p.height * CGFloat(Double(pace.projected) / top))
+                let outline = NSBezierPath(roundedRect: NSRect(x: r.minX + 0.5, y: p.maxY - ph + 0.5, width: r.width - 1, height: ph - 1),
+                                           xRadius: rad, yRadius: rad)
+                outline.setLineDash([3, 2], count: 2, phase: 0)
+                outline.lineWidth = 1
+                (color ?? Dash.accent).withAlphaComponent(0.7).setStroke()
+                outline.stroke()
+                labelTop = p.maxY - ph
+            }
+            let best = y.releases == years.map(\.releases).max()
+            if hot || (valueLabels && (allLabels || best || i == years.count - 1)) {
+                let value = pace?.year == y.year && valueLabels && !hot ? "~" + Self.short(Double(pace!.projected)) : (hot ? y.releases.formatted() : Self.short(Double(y.releases)))
+                let v = Self.text(value, hot ? 10 : 9, hot || best ? Dash.text : Dash.text2, bold: hot || best)
+                v.draw(at: NSPoint(x: min(max(p.minX, r.midX - v.size().width / 2), bounds.width - v.size().width), y: labelTop - 14))
             }
             centres.append(NSPoint(x: r.midX, y: 0))
         }
@@ -261,12 +285,16 @@ final class YearsChart: StatsChart {
             line.lineWidth = 2
             line.stroke()
         }
-        // Decades (or every year when there are few).
-        let every = span.count <= 12 ? 1 : span.count <= 30 ? 5 : 10
+        // Decades (or every year when there are few, or when each column has room for its year).
+        let yearWidth = Self.text("2000", 8.5, Dash.text3).size().width, shortWidth = Self.text("’00", 8.5, Dash.text3).size().width
+        let perColumn = valueLabels && s - 2 >= shortWidth, shortYears = perColumn && s - 2 < yearWidth
+        let every = span.count <= 12 || perColumn ? 1 : span.count <= 30 ? 5 : 10
         var y0 = (span.lowerBound + every - 1) / every * every
         while y0 <= span.upperBound {
             let x = p.minX + CGFloat(y0 - span.lowerBound) * s
-            Self.text(every == 10 ? "\(y0)s" : "\(y0)", 8.5, Dash.text3).draw(at: NSPoint(x: x, y: p.maxY + 5))
+            let t = Self.text(every == 10 ? "\(y0)s" : shortYears ? String(format: "’%02d", y0 % 100) : "\(y0)", 8.5, Dash.text3)
+            // A year per column: under its middle; decades and every fifth year: from where they start.
+            t.draw(at: NSPoint(x: every == 1 ? x + s / 2 - t.size().width / 2 : x, y: p.maxY + 5))
             y0 += every
         }
     }

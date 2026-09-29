@@ -17,6 +17,8 @@ struct ListeningStats: Sendable {
     var ownedTracks = 0, mappedOwnedTracks = 0
     var topArtists: [LibraryStats.Bar] = []
     var years: [(year: Int, releases: Int)] = []   // plays per year (named like the Stats chart's input)
+    /// Each year's most played artist and their plays that year.
+    var topArtistByYear: [Int: (name: String, plays: Int)] = [:]
     /// Plays by weekday (0 = Sunday) and hour, local time.
     var clock: [[Int]] = Array(repeating: Array(repeating: 0, count: 24), count: 7)
     var notOwned: [LibraryStats.Bar] = []
@@ -227,6 +229,13 @@ extension CollectionDB {
             s.firstPlay = r.optInt(2).map { Date(timeIntervalSince1970: TimeInterval($0)) }
             s.lastPlay = r.optInt(3).map { Date(timeIntervalSince1970: TimeInterval($0)) }
         }
+        try db.query("""
+            SELECT year, artist, n FROM (
+                SELECT year, min(artist) AS artist, count(*) AS n,
+                       row_number() OVER (PARTITION BY year ORDER BY count(*) DESC) AS rank
+                FROM scrobbles WHERE year IS NOT NULL GROUP BY year, artist_key)
+            WHERE rank = 1
+            """) { r in s.topArtistByYear[r.int(0)] = (r.text(1), r.int(2)) }
         let today = Calendar.current.dateComponents([.year, .month, .day], from: Date())
         let md = String(format: "%02d-%02d", today.month ?? 1, today.day ?? 1)
         s.lastYearToDate = Int(try db.scalar("SELECT count(*) FROM scrobbles WHERE year = ? AND md <= ?", [(today.year ?? 2000) - 1, md]) ?? 0)

@@ -332,15 +332,36 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         rows.append(dashGrid([(display, 1)], columns: 1))
 
         // 2. The story: plays per year, and how much of it you own.
-        let area = AreaChart()
-        area.points = s.years.map { .init(x: Double($0.year), y: Double($0.releases), label: String($0.year)) }
-        area.unit = "plays"
+        // Every year's total written on its column; this year so far, with where it's heading at this pace.
+        let area = YearsChart()
+        area.years = s.years
+        area.unit = "play"
+        area.valueLabels = true
+        if let so = perYear[year], so > 0, let start = Calendar.current.date(from: DateComponents(year: year, month: 1, day: 1)),
+           let end = Calendar.current.date(from: DateComponents(year: year + 1, month: 1, day: 1)) {
+            let done = Date().timeIntervalSince(start) / end.timeIntervalSince(start)
+            if done > 0.05, done < 1 { area.pace = (year, Int((Double(so) / done).rounded())) }
+        }
+        let paceNow = area.pace
+        area.more = { [top = s.topArtistByYear] y in
+            var lines: [String] = []
+            if let prev = perYear[y - 1], prev > 0, let n = perYear[y], y != paceNow?.year {
+                let change = Double(n - prev) / Double(prev) * 100
+                lines.append(String(format: "%@%.0f%% vs %d", change >= 0 ? "▲ " : "▼ ", abs(change), y - 1))
+            }
+            if let p = paceNow, p.year == y { lines.append("so far · on pace for ~\(p.projected.formatted())") }
+            if let t = top[y] { lines.append("most played: \(t.name) (\(t.plays.formatted()))") }
+            lines.append("click for that year's most played")
+            return lines.joined(separator: "\n")
+        }
+        area.onClick = { [weak self] y in self?.showYear(y) }
         let owned = DonutChart()
         owned.slices = [DonutChart.Slice(label: "Artists in your library", value: Double(s.ownedPlays), color: Dash.accent),
                         DonutChart.Slice(label: "Not in your library", value: Double(max(0, s.plays - s.ownedPlays)), color: Dash.accent2)]
         owned.center = (s.plays > 0 ? String(format: "%.0f%%", Double(s.ownedPlays) / Double(s.plays) * 100) : "–", "owned")
         owned.unit = "plays"
-        rows.append(dashGrid([(panel("Plays per year", area, note: "hover for the figures"), 2),
+        rows.append(dashGrid([(panel("Plays per year", area, note: paceNow == nil ? "hover for more · click a year"
+                                                                  : "\(year): so far, dashed: at this pace · click a year"), 2),
                               (panel("Do you own what you play?", owned, note: "by artist"), 1)]))
 
         // 3. Who, through the years.
@@ -472,6 +493,14 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         period = p
         updatePeriodControls()
         loadTop()
+    }
+
+    /// A year from the chart: the "Most played" card at that year, scrolled into view.
+    private func showYear(_ y: Int) {
+        period = .year(y)
+        updatePeriodControls()
+        loadTop()
+        topChart.scrollToVisible(topChart.bounds.insetBy(dx: 0, dy: -60))
     }
 
     @objc private func yearChosen() {
