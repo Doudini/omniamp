@@ -467,7 +467,8 @@ final class LibraryTimeline: NSView {
     private let side: CGFloat = 10
     private var shelfTop: CGFloat { 16 }
     private var titleTop: CGFloat { shelfTop + Self.cover + 5 }
-    private var lineY: CGFloat { shelf.isEmpty ? 14 : titleTop + 30 }
+    /// No covers (only concerts and demos): room above the line for the counts over the dots.
+    private var lineY: CGFloat { shelf.isEmpty ? 26 : titleTop + 30 }
     private var axisY: CGFloat { lineY + 10 }
 
     override var isFlipped: Bool { true }
