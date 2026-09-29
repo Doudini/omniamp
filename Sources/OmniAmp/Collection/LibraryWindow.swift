@@ -105,6 +105,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         if let st = Self.lastState {
             section = st.section; filter = st.filter; query = st.query
         }
+        if let q = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_SEARCH"] { query = q }   // test hook
         build()
         search.stringValue = query
         let nc = NotificationCenter.default
@@ -523,7 +524,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private func loadEntries(keep: String?, keepAlbum: String? = nil) {
-        if !pages.isEmpty, !searching { return }   // a page stays until Back
+        // An open page stays until Back or a click elsewhere: refreshes (new files, a finished download) only
+        // update the lists under it. A new search closes it in searchChanged.
+        if !pages.isEmpty { return }
         songPage.isHidden = true
         artistPage.isHidden = true
         pages = []
@@ -677,7 +680,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private func showEmpty() {
-        if showingPage { empty.isHidden = true; return }
+        if showingPage || !pages.isEmpty { empty.isHidden = true; return }
         if let err = library.openError {
             empty.stringValue = "The library database couldn't be opened:\n\(err)"
         } else if library.roots.isEmpty, entries.isEmpty {
@@ -747,6 +750,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     @objc private func searchChanged() {
         guard search.stringValue != query else { return }
         query = search.stringValue
+        // Typing a search: its results replace an open page.
+        pages = []
+        songPage.isHidden = true
+        artistPage.isHidden = true
         reloadAll(keepEntry: nil)
     }
 
