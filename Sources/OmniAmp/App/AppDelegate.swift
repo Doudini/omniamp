@@ -54,6 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Test hook: OMNIAMP_SETTINGS=1 opens the Settings window at launch.
         if ProcessInfo.processInfo.environment["OMNIAMP_SETTINGS"] != nil { showSettings(nil) }
         if ProcessInfo.processInfo.environment["OMNIAMP_ABOUT"] != nil { showAbout(nil) }
+        // Test hook: OMNIAMP_PLAY=<row> plays that playlist row (from 1) at launch, e.g. for screenshots.
+        if let row = ProcessInfo.processInfo.environment["OMNIAMP_PLAY"].flatMap(Int.init), row > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.controller.play(index: row - 1) }
+        }
         if ProcessInfo.processInfo.environment["OMNIAMP_RADIO"] != nil { showRadio(nil) }
         if ProcessInfo.processInfo.environment["OMNIAMP_PODCASTS"] != nil { showPodcasts(nil) }
         if ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY"] != nil { showLibrary(nil) }

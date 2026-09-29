@@ -54,6 +54,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
             genre.selectItem(at: st.genre)
             country.selectItem(at: st.country)
         }
+        if ProcessInfo.processInfo.environment["OMNIAMP_RADIO"] == "favorites" { showingFavorites = true }   // test hook
         load()
     }
     required init?(coder: NSCoder) { fatalError() }

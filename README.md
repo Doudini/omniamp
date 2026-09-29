@@ -1,11 +1,11 @@
 # OmniAmp
 
-OmniAmp is a tiny, simple music player for macOS, inspired by Winamp.
+OmniAmp is a music player for macOS inspired by Winamp. It opens huge folders instantly, has real Winamp skins, and comes with a music library made for collectors, bootlegs and live shows included.
 
 It's written in Swift with AppKit and AVAudioEngine and has no third-party dependencies.
 
 <p align="center">
-  <img src="docs/modern.png" alt="OmniAmp's modern look in the Blue theme: 7-segment time display, spectrum, album art, hi-fi keys and playlist" width="330">
+  <img src="docs/modern.png" alt="OmniAmp's modern look in the Green theme: 7-segment time display, spectrum, album art, hi-fi keys and playlist" width="330">
   &nbsp;&nbsp;
   <img src="docs/classic.png" alt="OmniAmp's classic look with the original Winamp 2.91 base skin: main window, equalizer and playlist" width="337">
 </p>
@@ -27,7 +27,7 @@ The finish sets the windows around the display, and it applies to the Music Libr
 
 The **INFO** drawer shows full tags, the file format, the album and cover art. The **EQ** drawer has the 10-band equalizer with presets.
 
-<p align="center"><img src="docs/themes.png" alt="Green, Amber, Cyan and Monochrome themes with the INFO and EQ drawers"></p>
+<p align="center"><img src="docs/themes.png" alt="Four themes: Green and Amber with the Tinted finish, Blue with Studio and Monochrome with Hardware, with the INFO and EQ drawers"></p>
 
 ## The classic look
 
@@ -35,6 +35,28 @@ Real Winamp 2.x skins: pixel-exact main, equalizer and playlist windows at 1×�
 - **Built-in skin:** OmniAmp ships with the original Winamp 2.91 base skin.
 - **Your own skins:** drag any `.wsz` onto the window, or use View → Skins → Load Skin….
 - **Where to find more:** thousands of skins are at the [Winamp Skin Museum](https://skins.webamp.org).
+
+## Music Library
+
+Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (⌥⌘L). OmniAmp turns them into a collection you can browse, even when it's big and loosely organized.
+
+<p align="center"><img src="docs/library-artist.png" alt="An artist page: photo and bio, every release on a timeline above your own plays, your top songs" width="820"></p>
+
+- **Artist pages:** a photo and bio, every release on a timeline next to your own listening, your top songs, and the albums you don't have yet.
+- **Shows and bootlegs:** live recordings are recognized and sorted by date and venue, apart from the official albums. Missing shows can be downloaded from the [Live Music Archive](https://archive.org/details/etree).
+- **Browse** by artist, show, year or genre, see what's new, and search artists, albums, songs and venues.
+- **Stats:** your collection at a glance, from release years to lossless versus lossy.
+- **Listening:** connect [Last.fm](https://www.last.fm) to see your whole history: plays per year, your top artists through the years, and where your music comes from.
+- **Needs Attention:** finds files with missing tags, duplicates and artists spelled several ways, and helps you fix them.
+
+<p align="center">
+  <img src="docs/library-browse.png" alt="Browsing an artist: releases as a cover shelf by year, albums and tracks" width="49%">
+  <img src="docs/library-shows.png" alt="Shows: an artist's live recordings by date and venue" width="49%">
+</p>
+<p align="center">
+  <img src="docs/library-stats.png" alt="Collection stats: key figures, release years, kinds of recordings" width="49%">
+  <img src="docs/library-listening.png" alt="Listening history from Last.fm: plays per year, how much of what you play you own, top artists through the years" width="49%">
+</p>
 
 ## Internet radio
 
@@ -121,6 +143,7 @@ OmniAmp works without a mouse. **Help → Keyboard Shortcuts (⌘/)** lists ever
 | ⇧V | Stop after current | | `I` / `E` | INFO drawer / equalizer |
 | ⌘1 / ⌘2 / ⌘3 | Player / radio / podcasts | | ⌘O / ⌘L | Add files / add URL |
 | ⌃⌘1 / ⌃⌘2 | Modern / classic look | | ⌘/ | All shortcuts |
+| ⌥⌘L | Music Library | | ⌘, | Settings |
 
 ## Get it
 
@@ -193,6 +216,6 @@ Then `./scripts/release.sh 0.3` builds the DMG and publishes the GitHub release 
 - **Classic skin:** the base skin is Winamp 2.91's original skin by Nullsoft.
 - **Radio directory:** provided by the community-run [radio-browser.info](https://www.radio-browser.info).
 - **Podcast directory:** Apple's podcast search and charts.
-- **Screenshots:** the albums shown are fictional; their audio and covers were generated for these images.
+- **Screenshots:** the albums in the player screenshots are fictional; their audio and covers were generated for these images. The Music Library screenshots show a real collection.
 
 OmniAmp is an independent project and is not affiliated with Winamp or Nullsoft.
