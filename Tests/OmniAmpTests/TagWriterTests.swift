@@ -196,6 +196,17 @@ final class TagWriterTests: XCTestCase {
 
     // MARK: Find Missing Info: applying
 
+    /// A release sharing its folder with others: its cover is kept for it alone, no cover.jpg for all of them.
+    func testApplyCoverForReleaseInSharedFolder() throws {
+        let jpeg = Data([0xFF, 0xD8]) + Data(repeating: 9, count: 2000)
+        let release = "scout niblett\u{1}calcination-\(UUID().uuidString)"
+        let msg = FindInfoSheet.write(BasicTags(), paths: [], cover: jpeg, folder: tmp.path, release: release)
+        XCTAssertEqual(msg, "Cover kept for this release.")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.appendingPathComponent("cover.jpg").path))
+        XCTAssertEqual(try Data(contentsOf: LibraryArt.chosenFile(release: release)), jpeg)
+        try? FileManager.default.removeItem(at: LibraryArt.chosenFile(release: release))
+    }
+
     func testApplyWritesTagsAndCover() throws {
         let a = try mp3(frame("TIT2", "One"), padding: 256), b = try mp3([], padding: 0)
         let wma = tmp.appendingPathComponent("c.wma")

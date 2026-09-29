@@ -33,20 +33,26 @@ final class LibraryArt {
 
     private init() { memory.countLimit = 600 }
 
-    func cached(_ album: LibraryAlbum) -> CGImage?? { memory.object(forKey: album.folder as NSString).map { $0.image } }
+    /// Whose cover it is: the folder's, or in a folder shared with other releases, this release's own.
+    nonisolated static func key(_ a: LibraryAlbum) -> String { a.sharedFolder ? a.folder + "\u{1}" + a.key : a.folder }
+    /// The keys handed out per folder, so a new cover there reaches every release in it.
+    private var keysByFolder: [String: Set<String>] = [:]
+
+    func cached(_ album: LibraryAlbum) -> CGImage?? { memory.object(forKey: Self.key(album) as NSString).map { $0.image } }
 
     /// Calls back on the main queue (right away when in memory). Returns a token for `cancel`.
     @discardableResult
     func load(_ album: LibraryAlbum, completion: @escaping (CGImage?) -> Void) -> Int {
-        let key = album.folder
+        let key = Self.key(album), folder = album.folder
+        keysByFolder[folder, default: []].insert(key)
         if let box = memory.object(forKey: key as NSString) { completion(box.image); return -1 }
         nextToken += 1
         let token = nextToken
         if waiting[key] != nil { waiting[key]![token] = completion; return token }
         waiting[key] = [token: completion]
-        let firstPath = album.firstPath
+        let firstPath = album.firstPath, own = album.sharedFolder ? album.key : nil
         let op = BlockOperation {
-            let img = autoreleasepool { Self.thumbnail(folder: key, firstPath: firstPath) }
+            let img = autoreleasepool { Self.thumbnail(folder: folder, release: own, firstPath: firstPath) }
             DispatchQueue.main.async { MainActor.assumeIsolated { self.finish(key, img) } }
         }
         operations[key] = op
@@ -55,7 +61,7 @@ final class LibraryArt {
     }
 
     func cancel(_ album: LibraryAlbum, token: Int) {
-        let key = album.folder
+        let key = Self.key(album)
         guard token >= 0, waiting[key]?.removeValue(forKey: token) != nil else { return }
         if waiting[key]?.isEmpty == true {
             waiting[key] = nil
@@ -68,14 +74,29 @@ final class LibraryArt {
 
     /// A folder got a new cover: forget the old one (memory and disk), and say so.
     func forget(folder: String) {
-        memory.removeObject(forKey: folder as NSString)
-        try? FileManager.default.removeItem(at: Self.cacheFile(folder))
+        for key in keysByFolder[folder, default: []].union([folder]) { memory.removeObject(forKey: key as NSString) }
+        // The folder's thumbnail and every release's in it ("<folder>-<release>.png").
+        let prefix = Self.hash(folder)
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: Self.directory.path)) ?? [] where name.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent(name))
+        }
         NotificationCenter.default.post(name: Self.coverChanged, object: folder)
     }
 
-    nonisolated private static func cacheFile(_ folder: String) -> URL {
-        let name = SHA256.hash(data: Data(folder.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
-        return directory.appendingPathComponent(name + ".png")
+    nonisolated private static func hash(_ s: String) -> String {
+        SHA256.hash(data: Data(s.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
+    }
+
+    nonisolated private static func cacheFile(_ folder: String, release: String?) -> URL {
+        directory.appendingPathComponent(hash(folder) + (release.map { "-" + hash($0) } ?? "") + ".png")
+    }
+
+    /// A cover picked for one release whose folder holds others too (Find Missing Info): kept here, not as
+    /// the folder's cover.jpg, which would be every release's there.
+    nonisolated static func chosenFile(release: String) -> URL {
+        let d = directory.appendingPathComponent("Chosen", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d.appendingPathComponent(hash(release))
     }
 
     private func finish(_ key: String, _ img: CGImage?) {
@@ -86,13 +107,20 @@ final class LibraryArt {
     }
 
     /// From the disk cache, else read and shrunk (and cached; "none" is cached too, as an empty file).
-    nonisolated private static func thumbnail(folder: String, firstPath: String) -> CGImage? {
-        let file = cacheFile(folder)
+    /// `release`: set when the folder holds other releases too. Then its chosen cover, else the art in its own
+    /// files; never the folder's cover.jpg, which can't tell whose it is (it was often saved for a neighbour).
+    nonisolated private static func thumbnail(folder: String, release: String?, firstPath: String) -> CGImage? {
+        let file = cacheFile(folder, release: release)
         if let attrs = try? FileManager.default.attributesOfItem(atPath: file.path) {
             if (attrs[.size] as? Int ?? 0) == 0 { return nil }
             return ArtworkStore.image(contentsOf: file, maxPixels: pixels)
         }
-        let data = DetailsReader.folderArt(for: firstPath)?.0 ?? DetailsReader.read(path: firstPath).artwork
+        let data: Data?
+        if let release {
+            data = (try? Data(contentsOf: chosenFile(release: release))) ?? DetailsReader.read(path: firstPath, folderArt: false).artwork
+        } else {
+            data = DetailsReader.folderArt(for: firstPath)?.0 ?? DetailsReader.read(path: firstPath).artwork
+        }
         guard let data, let img = ArtworkStore.image(data, maxPixels: pixels) else {
             // No cover (or the share is away): remember only when the folder is really there.
             if ExactPath.exists(folder) { FileManager.default.createFile(atPath: file.path, contents: nil) }
@@ -290,7 +318,7 @@ final class AlbumCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 
     func show(_ a: LibraryAlbum, withArtist: Bool) {
-        if let old = album, old.folder != a.folder { LibraryArt.shared.cancel(old, token: token) }
+        if let old = album, LibraryArt.key(old) != LibraryArt.key(a) { LibraryArt.shared.cancel(old, token: token) }
         album = a
         stripe.layer?.backgroundColor = Theme.kind(a.kind).cgColor
         stripe.toolTip = a.kind.title
@@ -471,9 +499,11 @@ final class LibraryTimeline: NSView {
         if coverObserver == nil {
             coverObserver = NotificationCenter.default.addObserver(forName: LibraryArt.coverChanged, object: nil, queue: .main) { [weak self] n in
                 MainActor.assumeIsolated {
-                    guard let self, let folder = n.object as? String, let a = self.official.first(where: { $0.folder == folder }) else { return }
-                    self.covers[folder] = nil
-                    self.loadCover(a)
+                    guard let self, let folder = n.object as? String else { return }
+                    for a in self.official where a.folder == folder {
+                        self.covers[LibraryArt.key(a)] = nil
+                        self.loadCover(a)
+                    }
                 }
             }
         }
@@ -482,7 +512,7 @@ final class LibraryTimeline: NSView {
     }
 
     private func loadCover(_ a: LibraryAlbum) {
-        let key = a.folder
+        let key = LibraryArt.key(a)
         let t = LibraryArt.shared.load(a) { [weak self] img in
             guard let self, let img else { return }
             self.covers[key] = img
@@ -638,7 +668,7 @@ final class LibraryTimeline: NSView {
             let clip = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
             NSGraphicsContext.saveGraphicsState()
             clip.addClip()
-            if let img = covers[a.folder] {
+            if let img = covers[LibraryArt.key(a)] {
                 NSImage(cgImage: img, size: r.size).draw(in: r)
             } else {
                 Dash.cardRaised.setFill()

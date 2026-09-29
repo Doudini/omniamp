@@ -22,7 +22,8 @@ struct TrackDetails {
 /// Full-tag reader: ID3v2 (MP3, and inside WAV/AIFF), FLAC metadata blocks, MP4 ilst. Reads whole tags,
 /// including pictures, so it is only used for the one or two tracks on screen.
 enum DetailsReader {
-    static func read(path: String) -> TrackDetails {
+    /// `folderArt`: fall back to the folder's cover image when the file has none.
+    static func read(path: String, folderArt useFolder: Bool = true) -> TrackDetails {
         var d = TrackDetails()
         guard let fh = try? FileHandle(forReadingFrom: URL(exactPath: path)) else { return d }
         defer { try? fh.close() }
@@ -66,7 +67,7 @@ enum DetailsReader {
                 }
             }
         }
-        if d.artwork == nil, let (data, name) = folderArt(for: path) {
+        if useFolder, d.artwork == nil, let (data, name) = folderArt(for: path) {
             d.artwork = data
             d.artworkSource = name
         }

@@ -44,6 +44,8 @@ struct LibraryAlbum: Equatable {
     /// Tracks in formats OmniAmp can't play, and which format that is ("WMA").
     var unplayable = 0
     var unplayableFormat: String?
+    /// Other releases are in the same folder (loose files, told apart by their tags): a folder cover isn't its own.
+    var sharedFolder = false
 }
 
 struct LibraryTrack: Equatable {
@@ -139,6 +141,7 @@ final class CollectionDB {
         try addColumn("files", "playable", "INTEGER NOT NULL DEFAULT 1")
         try addColumn("albums", "unplayable", "INTEGER NOT NULL DEFAULT 0")
         try addColumn("albums", "unplayable_format", "TEXT")
+        try db.exec("CREATE INDEX IF NOT EXISTS albums_folder ON albums(folder)")   // releases sharing a folder
         try ensureListeningTables()
         // Song keys follow Keys.title: recomputed from the stored titles when its rules change (no files read).
         if (try db.scalar("SELECT value FROM meta WHERE key = 'songKeys'") ?? 1) < songKeyVersion {
@@ -189,6 +192,7 @@ final class CollectionDB {
             CREATE INDEX IF NOT EXISTS albums_year ON albums(year);
             CREATE INDEX IF NOT EXISTS albums_added ON albums(added);
             CREATE INDEX IF NOT EXISTS albums_show ON albums(show_date);
+            CREATE INDEX IF NOT EXISTS albums_folder ON albums(folder);
             CREATE TABLE IF NOT EXISTS artists(
                 key TEXT PRIMARY KEY, name TEXT, sort_name TEXT, letter TEXT, mbid TEXT, country TEXT, begin_year INTEGER);
             CREATE INDEX IF NOT EXISTS artists_sort ON artists(sort_name COLLATE NOCASE);
@@ -365,7 +369,8 @@ final class CollectionDB {
 
     private static let albumColumns = """
         a.key, a.artist_key, a.artist, a.title, a.year, a.kind, a.folder, a.tracks, a.duration, a.first_path, a.lossless, a.added,
-        a.show_date, a.venue, a.unplayable, a.unplayable_format
+        a.show_date, a.venue, a.unplayable, a.unplayable_format,
+        (SELECT count(*) FROM albums b WHERE b.folder = a.folder) > 1
         """
 
     /// Albums matching a condition on `a` (the albums table), in an order.
@@ -379,7 +384,8 @@ final class CollectionDB {
             out.append(LibraryAlbum(key: s.text(0), artistKey: s.text(1), artist: s.text(2), title: s.text(3), year: s.optInt(4),
                                     kind: ReleaseKind(rawValue: s.int(5)) ?? .album, folder: s.text(6), tracks: s.int(7),
                                     duration: s.double(8), firstPath: s.text(9), lossless: s.int(10) == 1, added: s.double(11),
-                                    showDate: s.optText(12), venue: s.optText(13), unplayable: s.int(14), unplayableFormat: s.optText(15)))
+                                    showDate: s.optText(12), venue: s.optText(13), unplayable: s.int(14), unplayableFormat: s.optText(15),
+                                    sharedFolder: s.int(16) == 1))
         }
         return out
     }

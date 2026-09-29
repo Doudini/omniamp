@@ -110,8 +110,14 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         writeTags.title = files == 0 ? "No MP3 or FLAC files to write tags into" : "Write into the \(files) MP3/FLAC file\(files == 1 ? "" : "s")"
         writeTags.state = files > 0 ? .on : .off
         writeTags.isEnabled = files > 0
-        saveCover.title = existingCover.map { "Replace \($0) with this cover" } ?? "Save the cover as cover.jpg in the folder"
-        saveCover.state = existingCover == nil ? .on : .off
+        if album.sharedFolder {
+            // A cover.jpg would be every release's in that folder: this one's is kept in OmniAmp instead.
+            saveCover.title = "Use this cover for this release (its folder holds others, so no cover.jpg)"
+            saveCover.state = .on
+        } else {
+            saveCover.title = existingCover.map { "Replace \($0) with this cover" } ?? "Save the cover as cover.jpg in the folder"
+            saveCover.state = existingCover == nil ? .on : .off
+        }
         for b in [writeTags, saveCover] {
             b.font = Dash.font(12)
         }
@@ -256,7 +262,7 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         let tags = BasicTags(artist: value(artist), album: value(albumField), year: value(year), genre: value(genre))
         let paths = writeTags.state == .on
             ? Array(Set(tracks.map(\.path).filter { ["mp3", "flac"].contains(($0 as NSString).pathExtension.lowercased()) })).sorted() : []
-        let folder = album.folder
+        let folder = album.folder, release = album.sharedFolder ? album.key : nil
         let wantCover = saveCover.state == .on
         let pendingCover = coverTask
         let chosenURL = table.selectedRow >= 0 && table.selectedRow < candidates.count ? candidates[table.selectedRow].coverURL : nil
@@ -271,15 +277,16 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
                 if data == nil { data = await MetadataLookup.shared.image(url) }
             }
             let coverBytes = wantCover ? data : nil
-            let result = await Task.detached { FindInfoSheet.write(tags, paths: paths, cover: coverBytes, folder: folder) }.value
+            let result = await Task.detached { FindInfoSheet.write(tags, paths: paths, cover: coverBytes, folder: folder, release: release) }.value
             if coverBytes != nil { LibraryArt.shared.forget(folder: folder) }
             MusicCollection.shared.rescan(folder: folder)
             self.onDone?(result)
         }
     }
 
-    /// Off the main thread: tags into the files, the cover into the folder. Returns a line for the status bar.
-    nonisolated static func write(_ tags: BasicTags, paths: [String], cover: Data?, folder: String) -> String {
+    /// Off the main thread: tags into the files, the cover into the folder (or for a `release` sharing its folder
+    /// with others, into OmniAmp's own store). Returns a line for the status bar.
+    nonisolated static func write(_ tags: BasicTags, paths: [String], cover: Data?, folder: String, release: String? = nil) -> String {
         var written = 0, failed: [String] = [], skipped: [String] = []
         if !tags.isEmpty {
             for p in paths {
@@ -293,7 +300,13 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         }
         var parts: [String] = []
         if written > 0 { parts.append("tags written into \(written) file\(written == 1 ? "" : "s")") }
-        if let cover {
+        if let cover, let release {
+            if (try? cover.write(to: LibraryArt.chosenFile(release: release), options: .atomic)) != nil {
+                parts.append("cover kept for this release")
+            } else {
+                failed.append("couldn't keep the cover")
+            }
+        } else if let cover {
             let ext = cover.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "png" : "jpg"
             if (try? cover.write(to: URL(exactPath: folder + "/cover." + ext), options: .atomic)) != nil {
                 parts.append("saved cover.\(ext)")

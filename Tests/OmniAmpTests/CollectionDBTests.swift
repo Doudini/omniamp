@@ -192,6 +192,21 @@ final class CollectionDBTests: XCTestCase {
         XCTAssertEqual(a.total, a.groups.reduce(0) { $0 + $1.total })
     }
 
+    func testReleasesSharingAFolder() throws {
+        let d = try db()
+        var a = row(1, artist: "Scout Niblett", album: "Calcination", title: "a"), b = row(2, artist: "Scout Niblett", album: "Emma", title: "b")
+        // Loose files in one folder, told apart by their tags.
+        for i in [0, 1] {
+            var r = i == 0 ? a : b
+            r.result = .init(kind: .album, artist: "Scout Niblett", album: i == 0 ? "Calcination" : "Emma", year: 2010, showDate: nil, venue: nil,
+                             albumFolder: "/m/scout niblett")
+            if i == 0 { a = r } else { b = r }
+        }
+        try d.upsert([a, b, row(3, artist: "Scout Niblett", album: "I Am", title: "c")])
+        let shared = try d.albums(artist: Keys.artist("Scout Niblett"), LibraryFilter()).map { ($0.title, $0.sharedFolder) }
+        XCTAssertEqual(shared.sorted { $0.0 < $1.0 }.map(\.1), [true, true, false])   // Calcination, Emma, I Am
+    }
+
     func testRetagMovesTrackBetweenAlbums() throws {
         let d = try db()
         try d.upsert([row(1, artist: "A", album: "X", title: "t")])
