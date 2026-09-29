@@ -143,6 +143,19 @@ final class CollectionDB {
         try addColumn("albums", "unplayable_format", "TEXT")
         try db.exec("CREATE INDEX IF NOT EXISTS albums_folder ON albums(folder)")   // releases sharing a folder
         try db.exec("CREATE INDEX IF NOT EXISTS files_folder ON files(folder)")     // a folder's tracks (compilations)
+        // The search index follows only the columns it holds: marking files for a re-read (mtime) or regrouping
+        // them no longer rewrites their search entries.
+        var trigger = ""
+        try db.query("SELECT sql FROM sqlite_master WHERE name = 'files_au'") { trigger = $0.text(0) }
+        if hasFTS, !trigger.isEmpty, !trigger.contains("UPDATE OF") {
+            try db.exec("""
+                DROP TRIGGER files_au;
+                CREATE TRIGGER files_au AFTER UPDATE OF title, artist, album, venue ON files BEGIN
+                    INSERT INTO fts(fts, rowid, title, artist, album, venue) VALUES ('delete', old.id, old.title, old.artist, old.album, old.venue);
+                    INSERT INTO fts(rowid, title, artist, album, venue) VALUES (new.id, new.title, new.artist, new.album, new.venue);
+                END;
+                """)
+        }
         try ensureListeningTables()
         // Song keys follow Keys.title: recomputed from the stored titles when its rules change (no files read).
         if (try db.scalar("SELECT value FROM meta WHERE key = 'songKeys'") ?? 1) < songKeyVersion {
@@ -212,7 +225,7 @@ final class CollectionDB {
                 CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
                     INSERT INTO fts(fts, rowid, title, artist, album, venue) VALUES ('delete', old.id, old.title, old.artist, old.album, old.venue);
                 END;
-                CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE ON files BEGIN
+                CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE OF title, artist, album, venue ON files BEGIN
                     INSERT INTO fts(fts, rowid, title, artist, album, venue) VALUES ('delete', old.id, old.title, old.artist, old.album, old.venue);
                     INSERT INTO fts(rowid, title, artist, album, venue) VALUES (new.id, new.title, new.artist, new.album, new.venue);
                 END;

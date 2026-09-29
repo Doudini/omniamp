@@ -16,12 +16,27 @@ extension LibraryAlbum {
 /// An artist's releases (lanes by kind, a mark per release) over your plays of them (a column per month), on
 /// one time axis: when they made what, and when you listened.
 final class CareerChart: StatsChart {
-    var releases: [LibraryAlbum] = [] { didSet { invalidateIntrinsicContentSize(); needsLayout = true; needsDisplay = true } }
-    var months: [(month: String, plays: Int)] = [] { didSet { needsLayout = true; needsDisplay = true } }
+    var releases: [LibraryAlbum] = [] { didSet { measure(); invalidateIntrinsicContentSize(); needsLayout = true; needsDisplay = true } }
+    var months: [(month: String, plays: Int)] = [] { didSet { measure(); needsLayout = true; needsDisplay = true } }
     var onRelease: ((LibraryAlbum) -> Void)?
     private static let laneH: CGFloat = 22, labelW: CGFloat = 92, playsH: CGFloat = 90, axisH: CGFloat = 18, gap: CGFloat = 12, r: CGFloat = 3.5
 
-    private var lanes: [VersionLane] { VersionLane.allCases.filter { l in releases.contains { VersionLane($0.kind) == l } } }
+    // Worked out when the data changes (and the marks per width), not on every hover redraw: an artist can have
+    // thousands of shows.
+    private var lanes: [VersionLane] = []
+    private var span: ClosedRange<Double> = 2000...2001
+    private var cachedMarks: (width: CGFloat, marks: [(LibraryAlbum, NSPoint)])?
+
+    private func measure() {
+        lanes = VersionLane.allCases.filter { l in releases.contains { VersionLane($0.kind) == l } }
+        let ws = releases.compactMap(\.when) + months.compactMap { Self.monthValue($0.month) }
+        if let lo = ws.min(), let hi = ws.max() {
+            span = (floor(lo) - 0.2)...(max(ceil(hi) + 0.2, floor(lo) + 3))
+        } else {
+            span = 2000...2001
+        }
+        cachedMarks = nil
+    }
     private var lanesH: CGFloat { CGFloat(lanes.count) * Self.laneH }
 
     override var intrinsicContentSize: NSSize {
@@ -33,12 +48,6 @@ final class CareerChart: StatsChart {
         return p.count == 2 ? Double(p[0]) + Double(p[1] - 1) / 12 : nil
     }
 
-    private var span: ClosedRange<Double> {
-        let ws = releases.compactMap(\.when) + months.compactMap { Self.monthValue($0.month) }
-        guard let lo = ws.min(), let hi = ws.max() else { return 2000...2001 }
-        return (floor(lo) - 0.2)...(max(ceil(hi) + 0.2, floor(lo) + 3))
-    }
-
     private func x(_ w: Double) -> CGFloat {
         let left = Self.labelW, width = bounds.width - left - 6
         return left + width * CGFloat((w - span.lowerBound) / (span.upperBound - span.lowerBound))
@@ -46,6 +55,7 @@ final class CareerChart: StatsChart {
 
     /// Release marks, packed like the song page's dots (three rows per lane, then overlapping).
     private func marks() -> [(LibraryAlbum, NSPoint)] {
+        if let c = cachedMarks, c.width == bounds.width { return c.marks }
         var out: [(LibraryAlbum, NSPoint)] = []
         var placed: [VersionLane: [NSPoint]] = [:]
         let d = Self.r * 2 + 1
@@ -53,16 +63,20 @@ final class CareerChart: StatsChart {
             let lane = VersionLane(a.kind)
             guard let row = lanes.firstIndex(of: lane), let w = a.when else { continue }
             let cx = x(w), mid = CGFloat(row) * Self.laneH + Self.laneH / 2
-            let taken = placed[lane] ?? []
-            let spot = [0, -d, d].map { NSPoint(x: cx, y: mid + $0) }.first { p in !taken.contains { hypot($0.x - p.x, $0.y - p.y) < d } }
+            // In date order, so only the last few marks can be that close.
+            let near = (placed[lane] ?? []).reversed().prefix { cx - $0.x < d }
+            let spot = [0, -d, d].map { NSPoint(x: cx, y: mid + $0) }.first { p in !near.contains { hypot($0.x - p.x, $0.y - p.y) < d } }
                 ?? NSPoint(x: cx, y: mid)
             placed[lane, default: []].append(spot)
             out.append((a, spot))
         }
+        cachedMarks = (bounds.width, out)
         return out
     }
 
     private var playsTop: CGFloat { lanesH + Self.gap }
+    private static let monthIn: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM"; return f }()
+    private static let monthOut: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; return f }()
 
     private func monthRect(_ i: Int, most: Int) -> NSRect? {
         guard let m = Self.monthValue(months[i].month) else { return nil }
@@ -78,9 +92,7 @@ final class CareerChart: StatsChart {
                           action: onRelease.map { f in { f(a) } })
         }
         let most = months.map(\.plays).max() ?? 0
-        let f = DateFormatter(), out = DateFormatter()
-        f.dateFormat = "yyyy-MM"
-        out.dateFormat = "MMMM yyyy"
+        let f = Self.monthIn, out = Self.monthOut
         for i in months.indices {
             guard let r = monthRect(i, most: most) else { continue }
             let label = f.date(from: months[i].month).map(out.string) ?? months[i].month
@@ -195,6 +207,7 @@ final class ArtistPage: NSScrollView {
     required init?(coder: NSCoder) { fatalError() }
 
     private var downloadObserver: NSObjectProtocol?
+    deinit { downloadObserver.map(NotificationCenter.default.removeObserver) }
 
     /// Its lookups (photo, discography, more recordings): cancelled when another artist opens or the page hides,
     /// so nothing keeps asking MusicBrainz for a page that's gone.
@@ -213,7 +226,7 @@ final class ArtistPage: NSScrollView {
         liveLoadingMore = false
         if downloadObserver == nil {
             downloadObserver = NotificationCenter.default.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.fillDiscography() }
+                MainActor.assumeIsolated { if self?.isHidden == false { self?.fillDiscography() } }
             }
         }
         generation += 1

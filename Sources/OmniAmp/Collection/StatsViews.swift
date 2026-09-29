@@ -279,7 +279,14 @@ class AreaChart: StatsChart {
         /// For the tooltip: "March 2008".
         let label: String
     }
-    var points: [Point] = [] { didSet { needsLayout = true; needsDisplay = true } }
+    var points: [Point] = [] {
+        didSet {
+            // The scale, once per data (pos() runs for every point on every hover redraw).
+            top = Self.niceMax(points.map(\.y).max() ?? 1)
+            if let lo = points.first?.x, let hi = points.last?.x, hi > lo { xSpan = lo...hi } else { xSpan = 0...1 }
+            needsLayout = true; needsDisplay = true
+        }
+    }
     var unit = "plays"
     var height: CGFloat = 170 { didSet { invalidateIntrinsicContentSize() } }
     var color: NSColor?
@@ -288,11 +295,8 @@ class AreaChart: StatsChart {
     override var stretches: Bool { true }
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: height) }
 
-    private var top: Double { Self.niceMax(points.map(\.y).max() ?? 1) }
-    private var xSpan: ClosedRange<Double> {
-        guard let lo = points.first?.x, let hi = points.last?.x, hi > lo else { return 0...1 }
-        return lo...hi
-    }
+    private var top: Double = 1
+    private var xSpan: ClosedRange<Double> = 0...1
     private var frameRect: NSRect { NSRect(x: 0, y: 16, width: bounds.width - 8, height: bounds.height - 36) }
     private var plotRect: NSRect {
         let f = frameRect
@@ -792,7 +796,7 @@ final class StatsPage: NSScrollView {
             if y == thisYear - 1, let m = Int(g.month.dropFirst(5).prefix(2)), m <= thisMonth { lastYearSoFar += n }
         }
         let added = perYear[thisYear] ?? 0, before = lastYearSoFar
-        let delta: (String, Bool)? = before > 0 ? (String(format: "%.0f%% vs %d so far", abs(Double(added - before) / Double(before) * 100), thisYear - 1),
+        let delta: (String, Bool)? = before > 0 ? (String(format: "%.0f%% vs %d", abs(Double(added - before) / Double(before) * 100), thisYear - 1),
                                                    added >= before) : nil
         let spark = (thisYear - 9...thisYear).map { Double(perYear[$0] ?? 0) }
         let display = HiFiDisplay()
@@ -805,7 +809,9 @@ final class StatsPage: NSScrollView {
             .init(value: days >= 1 ? String(format: "%.1f", days) : String(format: "%.1f", s.seconds / 3600), label: days >= 1 ? "days of music" : "hours of music",
                   tip: "\(Int(s.seconds / 3600).formatted()) hours: that long to play everything once"),
             .init(value: gb >= 1000 ? String(format: "%.2f", gb / 1000) : String(format: "%.1f", gb), label: gb >= 1000 ? "TB on disk" : "GB on disk"),
-            .init(value: added.formatted(), label: "added \(thisYear)", tip: "\(added.formatted()) tracks added in \(thisYear), by the date of the files",
+            .init(value: added.formatted(), label: "added \(thisYear)",
+                  tip: "\(added.formatted()) tracks added in \(thisYear), by the date of the files"
+                    + (before > 0 ? " · \(before.formatted()) by this month of \(thisYear - 1)" : ""),
                   meter: spark, delta: delta),
         ]
         rows.append(dashGrid([(display, 1)], columns: 1))

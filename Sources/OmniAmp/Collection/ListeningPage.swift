@@ -124,15 +124,16 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         map.describe = { [weak self] name, iso in self?.tip(name: name, iso: iso) ?? name }
         map.onSelect = { [weak self] iso, name in self?.select(iso: iso, name: name) }
         countryArtists.onClick = { [weak self] in self?.onArtist?($0.id) }
-        NotificationCenter.default.addObserver(forName: ListeningHistory.changed, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reload() }
-        }
-        NotificationCenter.default.addObserver(forName: MusicCollection.changed, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { if self?.isHidden == false { self?.reload() } }
+        // Only while on screen: appear() reloads when it's shown again (lookups change the figures every few seconds).
+        for name in [ListeningHistory.changed, MusicCollection.changed] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { if self?.isHidden == false { self?.reload() } }
+            })
         }
     }
     required init?(coder: NSCoder) { fatalError() }
-    deinit { NotificationCenter.default.removeObserver(self) }
+    private var observers: [NSObjectProtocol] = []
+    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
     /// Shown: figures now, and an update from last.fm if it's been a while.
     @MainActor func appear() {
@@ -342,14 +343,16 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         let perYear = Dictionary(uniqueKeysWithValues: s.years.map { ($0.year, $0.releases) })
         // This year so far against last year up to the same date (not all of last year).
         let now = perYear[year] ?? 0, last = s.lastYearToDate
-        let delta: (String, Bool)? = last > 0 ? (String(format: "%.0f%% vs %d so far", abs(Double(now - last) / Double(last) * 100), year - 1), now >= last) : nil
+        let delta: (String, Bool)? = last > 0 ? (String(format: "%.0f%% vs %d", abs(Double(now - last) / Double(last) * 100), year - 1), now >= last) : nil
         let placed = s.plays > 0 ? Double(s.mappedPlays) / Double(s.plays) : 0
         let since = s.firstPlay.map { Calendar.current.component(.year, from: $0) }
         let topArtist = s.topArtists.first
         let display = HiFiDisplay()
         display.items = [
             .init(value: s.plays.formatted(), label: "plays"),
-            .init(value: now.formatted(), label: "plays \(year)", meter: (year - 9...year).map { Double(perYear[$0] ?? 0) }, delta: delta),
+            .init(value: now.formatted(), label: "plays \(year)",
+                  tip: last > 0 ? "\(now.formatted()) plays in \(year) so far, \(last.formatted()) by this date in \(year - 1)" : nil,
+                  meter: (year - 9...year).map { Double(perYear[$0] ?? 0) }, delta: delta),
             .init(value: s.artists.formatted(), label: "artists"),
             .init(value: (showOwned ? s.ownedByCountry : s.playsByCountry).count.formatted(), label: "countries",
                   tip: String(format: "%.0f%% of plays placed on the map", placed * 100)),

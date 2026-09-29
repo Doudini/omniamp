@@ -726,6 +726,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Written during a scan: refresh at most every two seconds (the lists stay put under the mouse).
     private func libraryChanged() {
+        // Genres, Stats and Needs Attention count over the whole library: once the scan is done, not every 2 s of it.
+        if library.progress.running, pages.isEmpty, !searching, [.genres, .stats, .attention].contains(section) {
+            refreshAfterScan = true
+            return
+        }
         guard !refreshPending else { return }
         refreshPending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
@@ -739,8 +744,15 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
     }
 
+    /// A heavy section's refresh held back until the running scan ends.
+    private var refreshAfterScan = false
+
     private func updateStatus() {
         let p = library.progress
+        if !p.running, refreshAfterScan {
+            refreshAfterScan = false
+            libraryChanged()
+        }
         if p.running {
             var s = "Scanning… \(p.found.formatted()) files"
             if p.toRead > 0 { s += " · reading tags \(p.read.formatted()) of \(p.toRead.formatted())" }

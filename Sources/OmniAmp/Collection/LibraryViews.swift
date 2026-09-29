@@ -455,6 +455,7 @@ final class LibraryTimeline: NSView {
     private var official: [LibraryAlbum] = []
     private var shelfKinds: [ReleaseKind] = []
     private var coverObserver: NSObjectProtocol?
+    deinit { coverObserver.map(NotificationCenter.default.removeObserver) }
     /// Dots: per kind, per year.
     private var dots: [(kind: ReleaseKind, year: Int, list: [LibraryAlbum])] = []
     private var dotKinds: [ReleaseKind] = []

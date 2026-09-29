@@ -103,23 +103,38 @@ final class WorldMapView: NSView {
         return Swift.min(4, Int(t * 5))
     }
 
-    override func draw(_ dirtyRect: NSRect) {
+    /// The outlines fitted to the view, kept per size (hovering redraws often; the shapes don't change).
+    private var fitted: (size: NSSize, paths: [NSBezierPath])?
+
+    private func paths() -> [NSBezierPath] {
+        if let f = fitted, f.size == bounds.size { return f.paths }
         let t = transform
-        let most = values.values.max() ?? 0
-        for (i, c) in map.countries.enumerated() {
+        let out = map.countries.map { c -> NSBezierPath in
             let p = c.path.copy() as! NSBezierPath
             p.transform(using: t)
+            return p
+        }
+        fitted = (bounds.size, out)
+        return out
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let most = values.values.max() ?? 0
+        let all = paths()
+        for (c, p) in zip(map.countries, all) {
             let s = Self.step(values[c.iso] ?? 0, max: most)
             (s < 0 ? Dash.cardRaised : Dash.accent.withAlphaComponent(Self.steps[s])).setFill()
             p.fill()
             Dash.card.setStroke()
             p.lineWidth = 0.6
             p.stroke()
-            if i == hovered || c.iso == selected {
-                (c.iso == selected ? Dash.text : Dash.text.withAlphaComponent(0.6)).setStroke()
-                p.lineWidth = 1.5
-                p.stroke()
-            }
+        }
+        // Hover and selection last: on top of the neighbours' borders.
+        for (i, (c, p)) in zip(map.countries, all).enumerated() where i == hovered || c.iso == selected {
+            (c.iso == selected ? Dash.text : Dash.text.withAlphaComponent(0.6)).setStroke()
+            p.lineWidth = 1.5
+            p.stroke()
+            p.lineWidth = 0.6
         }
     }
 
