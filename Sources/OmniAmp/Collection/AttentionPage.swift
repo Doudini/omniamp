@@ -1,39 +1,16 @@
 import AppKit
 
 /// Needs Attention: what could be better in the library, a card per kind of problem.
-final class AttentionPage: NSScrollView {
+final class AttentionPage: DashPage {
     var onFix: ((LibraryAttention.Fix) -> Void)?
-    private let stack = NSStackView()
     private var generation = 0
     /// One group's full list (its id), or nil for the overview.
     private(set) var group: String?
     /// What was built last: a refresh of the same view keeps its scroll position.
     private var shown: String??
 
-    init() {
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        drawsBackground = false
-        hasVerticalScroller = true
-        scrollerStyle = .overlay
-        automaticallyAdjustsContentInsets = false
-        let doc = PageDocument()
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(stack)
-        documentView = doc
-        NSLayoutConstraint.activate([
-            doc.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            doc.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            doc.topAnchor.constraint(equalTo: contentView.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: doc.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -4),
-        ])
+    override init() {
+        super.init()
     }
     required init?(coder: NSCoder) { fatalError() }
 

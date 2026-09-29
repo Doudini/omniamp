@@ -54,11 +54,10 @@ final class ClockChart: StatsChart {
 }
 
 /// Last.fm history and the world: where the music you play and own comes from, and when you listen.
-final class ListeningPage: NSScrollView, NSTextFieldDelegate {
+final class ListeningPage: DashPage, NSTextFieldDelegate {
     var onArtist: ((String) -> Void)?
     /// A release to play (a show recorded on this day).
     var onPlayRelease: ((LibraryAlbum) -> Void)?
-    private let stack = NSStackView()
     private let history = ListeningHistory.shared
     /// Everything the page shows, with what it was computed from.
     private struct Figures: @unchecked Sendable {
@@ -97,30 +96,8 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
     private let userField = NSTextField()
     private var generation = 0
 
-    init() {
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        drawsBackground = false
-        hasVerticalScroller = true
-        scrollerStyle = .overlay
-        automaticallyAdjustsContentInsets = false
-        let doc = FlippedView()
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(stack)
-        documentView = doc
-        NSLayoutConstraint.activate([
-            doc.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            doc.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            doc.topAnchor.constraint(equalTo: contentView.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: doc.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -4),
-        ])
+    override init() {
+        super.init()
         map.describe = { [weak self] name, iso in self?.tip(name: name, iso: iso) ?? name }
         map.onSelect = { [weak self] iso, name in self?.select(iso: iso, name: name) }
         countryArtists.onClick = { [weak self] in self?.onArtist?($0.id) }
@@ -161,7 +138,6 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         lastBuild = Date()
         generation += 1
         let gen = generation
-        updateStatus()
         let started = Date()
         DispatchQueue.global(qos: .userInitiated).async {
             let db = try? CollectionDB()
@@ -212,15 +188,6 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
     }
 
     // MARK: Building
-
-    private func row(_ views: [NSView]) -> NSStackView {
-        let r = NSStackView(views: views)
-        r.distribution = .fillEqually
-        r.alignment = .top
-        r.spacing = 10
-        for v in views { v.setContentHuggingPriority(.required, for: .vertical) }
-        return r
-    }
 
     private static func countryName(_ iso: String) -> String { Locale.current.localizedString(forRegionCode: iso) ?? iso }
 
@@ -568,7 +535,6 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
     }
 
     /// A long name, short enough for a tile.
-    private static func short(_ s: String) -> String { s.count > 16 ? String(s.prefix(15)) + "…" : s }
 
     private func note(_ text: String) -> NSView {
         let l = NSTextField(wrappingLabelWithString: text)
@@ -578,23 +544,6 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
     }
 
     private func panel(_ title: String, _ content: NSView, note: String? = nil) -> NSView { StatsPanel(title, content, note: note) }
-
-    /// A card whose title changes (the selected country).
-    private func titledPanel(_ title: NSTextField, _ content: NSView) -> NSView {
-        let box = NSView()
-        Dash.styleCard(box)
-        for v in [title, content] { v.translatesAutoresizingMaskIntoConstraints = false; box.addSubview(v) }
-        NSLayoutConstraint.activate([
-            title.topAnchor.constraint(equalTo: box.topAnchor, constant: 13), title.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 16),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: box.trailingAnchor, constant: -16),
-            content.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 12),
-            content.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 12),
-            content.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -12),
-            content.bottomAnchor.constraint(lessThanOrEqualTo: box.bottomAnchor, constant: -14),
-            box.heightAnchor.constraint(greaterThanOrEqualToConstant: 60),
-        ])
-        return box
-    }
 
     private func finish(_ rows: [NSView]) {
         for r in rows {

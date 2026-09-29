@@ -1,12 +1,5 @@
 import AppKit
 
-extension Dash {
-    /// Categorical colors for artists (the dataviz reference palette, dark steps), checked on our cards: neighbours
-    /// stay apart for color-blind eyes too. Fixed order; a ninth artist folds into "other" (gray).
-    static let series: [NSColor] = [0x3987E5, 0xD95926, 0x199E70, 0xC98500, 0xD55181, 0x008300, 0x9085E9, 0xE66767].map { rgb(UInt32($0)) }
-    static let other = rgb(0x4A5A61)
-}
-
 /// Your top artists as a river through the years: each band's thickness is that artist's plays that year,
 /// stacked around a middle line. Bands are labelled where they're wide enough (a legend lists them all);
 /// hover shows the figures and highlights the band, click opens the artist.

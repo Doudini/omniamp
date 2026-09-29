@@ -235,7 +235,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         Dash.styleCard(timeline)
 
         empty.font = Dash.font(13)
-        empty.textColor = LibraryStyle.dim
+        empty.textColor = Dash.text2
         empty.alignment = .center
         empty.isHidden = true
 
@@ -385,11 +385,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private func applyTheme() {
+        // Only the accent follows the theme (the cards don't): redrawing is enough.
         window?.backgroundColor = Dash.page
-        for (t, s) in zip([sidebar, middle, albumTable, trackTable], scrolls) { Dash.applyList(t, in: s, rowHeight: t.rowHeight) }
         [sidebar, middle, albumTable, trackTable].forEach { $0.reloadData() }
-        status.textColor = LibraryStyle.dim
-        empty.textColor = LibraryStyle.dim
+        status.textColor = Dash.text2
+        empty.textColor = Dash.text2
         letters.needsDisplay = true
         timeline.needsDisplay = true
     }
@@ -1153,7 +1153,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         case sidebar:
             let s = Section(rawValue: row)!
             let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("sidebar"), owner: nil) as? SidebarCell) ?? SidebarCell()
-            cell.show(glyph: s.glyph, title: s.title, selected: sidebar.selectedRow == row, enabled: true)
+            cell.show(glyph: s.glyph, title: s.title, selected: sidebar.selectedRow == row)
             return cell
         case middle:
             let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("bucket"), owner: nil) as? BucketCell) ?? BucketCell()

@@ -167,7 +167,7 @@ final class CareerChart: StatsChart {
 }
 
 /// An artist: what they made, and how you've listened to them.
-final class ArtistPage: NSScrollView {
+final class ArtistPage: DashPage {
     var onBack: (() -> Void)?
     var onSong: ((String, String) -> Void)?
     var onRelease: ((LibraryAlbum) -> Void)?
@@ -175,34 +175,13 @@ final class ArtistPage: NSScrollView {
     var onPlay: (([LibraryTrack]) -> Void)?
     /// The Shows list at this artist.
     var onShows: ((String) -> Void)?
-    private let stack = NSStackView()
     private var dash = ArtistDashboard()
     private var generation = 0
 
-    init() {
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        drawsBackground = false
-        hasVerticalScroller = true
-        scrollerStyle = .overlay
-        automaticallyAdjustsContentInsets = false
-        let doc = PageDocument()
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(stack)
-        documentView = doc
-        NSLayoutConstraint.activate([
-            doc.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            doc.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            doc.topAnchor.constraint(equalTo: contentView.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: doc.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -4),
-        ])
+    override init() {
+        super.init()
+        photo.widthAnchor.constraint(equalToConstant: 132).isActive = true
+        photo.heightAnchor.constraint(equalToConstant: 132).isActive = true
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -255,6 +234,7 @@ final class ArtistPage: NSScrollView {
 
     private var info: MetadataLookup.ArtistInfo?
     private var photoImage: CGImage?
+    /// Kept across artists (its size set once, in init).
     private let photo = ArtView()
     private let bio = NSTextField(wrappingLabelWithString: "")
     private let about = NSTextField(labelWithString: "")
@@ -479,7 +459,6 @@ final class ArtistPage: NSScrollView {
         let have = recs.filter { $0.date.flatMap { owned[$0] } != nil }.count
         let note = "concert tapes the artist allows to share, free · you have \(have)"
             + (recs.count > 40 && !liveExpanded ? " · the others by date" : "")
-            + ""
         return StatsPanel("Live Music Archive (\(n.formatted()))", list, note: note)
     }
 
@@ -541,13 +520,6 @@ final class ArtistPage: NSScrollView {
         }
         guard let event = NSApp.currentEvent else { return }
         NSMenu.popUpContextMenu(menu, with: event, for: self)
-    }
-
-    private func button(_ glyph: String, _ label: String, _ action: Selector, tip: String, prominent: Bool = false) -> Pill {
-        let b = Pill(label, glyph: glyph.isEmpty ? nil : glyph, target: self, action: action)
-        b.prominent = prominent
-        b.toolTip = tip
-        return b
     }
 
     @objc private func back() { onBack?() }
@@ -635,8 +607,6 @@ final class ArtistPage: NSScrollView {
         photo.iconColor = Dash.text3
         photo.placeholder = LibraryWindowController.Section.artists.glyph
         photo.image = photoImage
-        photo.widthAnchor.constraint(equalToConstant: 132).isActive = true
-        photo.heightAnchor.constraint(equalToConstant: 132).isActive = true
         // The text takes the width beside the photo; the bio wraps across it (up to 4 lines).
         for v in [about, bio] { v.widthAnchor.constraint(equalTo: text.widthAnchor).isActive = true }
         text.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -727,29 +697,6 @@ final class ArtistPage: NSScrollView {
         Dash.relaxWidth(stack)
     }
 
-    private func row(_ views: [NSView]) -> NSStackView {
-        let r = NSStackView(views: views)
-        r.distribution = .fillEqually
-        r.alignment = .top
-        r.spacing = 12
-        for v in views { v.setContentHuggingPriority(.required, for: .vertical) }
-        return r
-    }
-
-    private func add(_ v: NSView) {
-        stack.addArrangedSubview(v)
-        v.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        v.setContentHuggingPriority(.required, for: .vertical)
-    }
-
-    /// After the new content has its size (scrolling before would land short of the top).
-    private func scrollToTop() {
-        layoutSubtreeIfNeeded()
-        // Test hook: OMNIAMP_STATS_SCROLL=<y> for screenshots of the lower part.
-        let y = ProcessInfo.processInfo.environment["OMNIAMP_STATS_SCROLL"].flatMap(Double.init) ?? 0
-        contentView.scroll(to: NSPoint(x: 0, y: y))
-        reflectScrolledClipView(contentView)
-    }
 }
 
 /// A menu item's action as a closure.

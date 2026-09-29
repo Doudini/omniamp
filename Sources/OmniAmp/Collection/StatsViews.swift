@@ -447,9 +447,6 @@ final class DonutChart: StatsChart {
         super.layout()
     }
 
-    /// Two shades of the accent and a neutral: for a two- or three-part split that isn't about kinds.
-    static var pair: [NSColor] { [Dash.accent, Dash.accent2, Dash.text3] }
-
     private var ring: (c: NSPoint, r: CGFloat) {
         if stacked {
             let d = min(150, bounds.width * 0.6)
@@ -693,9 +690,60 @@ final class StatsPanel: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// A flipped container, so the page scrolls from the top.
-final class FlippedView: NSView {
-    override var isFlipped: Bool { true }
+/// A scrolling page of cards (artist, song, Needs Attention, Stats, Listening): a vertical stack in a flipped,
+/// focusable document (the Back and scroll keys), with the helpers every page uses.
+class DashPage: NSScrollView {
+    let stack = NSStackView()
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        drawsBackground = false
+        hasVerticalScroller = true
+        scrollerStyle = .overlay
+        automaticallyAdjustsContentInsets = false
+        let doc = PageDocument()
+        doc.translatesAutoresizingMaskIntoConstraints = false
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        doc.addSubview(stack)
+        documentView = doc
+        NSLayoutConstraint.activate([
+            doc.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            doc.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            doc.topAnchor.constraint(equalTo: contentView.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: doc.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -4),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// A card (or row of them) the page's full width, as tall as its content.
+    func add(_ v: NSView) {
+        stack.addArrangedSubview(v)
+        v.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        v.setContentHuggingPriority(.required, for: .vertical)
+    }
+
+    /// After the new content has its size (scrolling before would land short of the top).
+    func scrollToTop() {
+        layoutSubtreeIfNeeded()
+        // Test hook: OMNIAMP_STATS_SCROLL=<y> for screenshots of the lower part.
+        let y = ProcessInfo.processInfo.environment["OMNIAMP_STATS_SCROLL"].flatMap(Double.init) ?? 0
+        contentView.scroll(to: NSPoint(x: 0, y: y))
+        reflectScrolledClipView(contentView)
+    }
+
+    func button(_ glyph: String, _ label: String, _ action: Selector, tip: String, prominent: Bool = false) -> Pill {
+        let b = Pill(label, glyph: glyph.isEmpty ? nil : glyph, target: self, action: action)
+        b.prominent = prominent
+        b.toolTip = tip
+        return b
+    }
 }
 
 /// Whoever can go Back from a page (the library window), for the Back keys.
@@ -767,25 +815,6 @@ func dashGrid(_ items: [(NSView, Int)], columns: Int = 3, gap: CGFloat = 12) -> 
     return row
 }
 
-/// A row of cards; `weights` share the width (default equal).
-func dashRow(_ views: [NSView], weights: [CGFloat]? = nil, spacing: CGFloat = 12) -> NSView {
-    let r = NSStackView(views: views)
-    r.alignment = .top
-    r.spacing = spacing
-    for v in views { v.setContentHuggingPriority(.required, for: .vertical) }
-    if let w = weights, w.count == views.count, views.count > 1 {
-        r.distribution = .fill
-        let total = w.reduce(0, +)
-        for (v, x) in zip(views.dropFirst(), w.dropFirst()) {
-            v.widthAnchor.constraint(equalTo: views[0].widthAnchor, multiplier: x / w[0]).isActive = true
-        }
-        _ = total
-    } else {
-        r.distribution = .fillEqually
-    }
-    return r
-}
-
 /// A page heading: big white title, grey line under it.
 func dashHeading(_ title: String, _ subtitle: String?) -> NSView {
     let t = Dash.label(title, Dash.font(22, .semibold), Dash.text)
@@ -799,39 +828,16 @@ func dashHeading(_ title: String, _ subtitle: String?) -> NSView {
 }
 
 /// The Stats page: key figures, then charts in cards. Clicks go back to the library through the callbacks.
-final class StatsPage: NSScrollView {
+final class StatsPage: DashPage {
     var onGenre: ((String) -> Void)?
     var onYear: ((Int) -> Void)?
     var onArtist: ((String) -> Void)?
     var onSearch: ((String) -> Void)?
     /// A song: its artist key and title key.
     var onSong: ((String, String) -> Void)?
-    private let stack = NSStackView()
 
-    init() {
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        drawsBackground = false
-        hasVerticalScroller = true
-        scrollerStyle = .overlay
-        automaticallyAdjustsContentInsets = false
-        let doc = FlippedView()
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(stack)
-        documentView = doc
-        NSLayoutConstraint.activate([
-            doc.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            doc.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            doc.topAnchor.constraint(equalTo: contentView.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: doc.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -4),
-        ])
+    override init() {
+        super.init()
     }
     required init?(coder: NSCoder) { fatalError() }
 

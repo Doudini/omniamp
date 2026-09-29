@@ -240,22 +240,17 @@ final class SidebarCell: NSTableCellView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(glyph: String, title: String, selected: Bool, enabled: Bool) {
+    func show(glyph: String, title: String, selected: Bool) {
         icon.stringValue = glyph
         icon.font = Fonts.hack(13)
-        icon.textColor = enabled ? (selected ? Dash.accent : Dash.text2) : Dash.text3
+        icon.textColor = selected ? Dash.accent : Dash.text2
         name.stringValue = title
         name.font = Dash.font(13, selected ? .semibold : .regular)
-        name.textColor = enabled ? Dash.text : Dash.text3
+        name.textColor = Dash.text
     }
 }
 
 /// Text colors in the library (see Dash): details grey, labels muted.
-enum LibraryStyle {
-    static var dim: NSColor { Dash.text2 }
-    static var header: NSColor { Dash.text3 }
-}
-
 /// A name with a count on the right; for years, a bar behind it showing how many.
 final class BucketCell: NSTableCellView {
     private let name = NSTextField(labelWithString: "")

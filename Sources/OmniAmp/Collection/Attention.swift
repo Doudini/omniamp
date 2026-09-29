@@ -58,12 +58,15 @@ extension CollectionDB {
         var spellings: [LibraryAttention.Entry] = []
         var spellTotal = 0
         if wanted("spelling") { try db.query("""
-            SELECT artist_key, group_concat(DISTINCT album_artist), count(DISTINCT album_artist), count(*) FROM files
-            WHERE artist_key NOT IN ('unknown artist', '') GROUP BY artist_key HAVING count(DISTINCT album_artist) > 1 ORDER BY count(*) DESC
+            SELECT artist_key, group_concat(form, char(1)), count(*), sum(n) FROM
+                (SELECT artist_key, album_artist AS form, count(*) AS n FROM files WHERE artist_key NOT IN ('unknown artist', '')
+                 GROUP BY artist_key, album_artist)
+            GROUP BY artist_key HAVING count(*) > 1 ORDER BY sum(n) DESC
             """) { r in
             spellTotal += 1
             guard spellings.count < limit else { return }
-            let forms = r.text(1).components(separatedBy: ",")
+            // Joined by a character no name has ("Crosby, Stills, Nash & Young" stays one name).
+            let forms = r.text(1).components(separatedBy: "\u{1}")
             let lookAlike = Set(forms.map { $0.precomposedStringWithCanonicalMapping }).count < forms.count
             spellings.append(.init(lead: "×\(r.int(2))", title: forms.joined(separator: " · "),
                                    detail: lookAlike ? "same letters, stored two ways" : "\(r.int(3)) tracks", fix: .artist(r.text(0))))

@@ -134,41 +134,18 @@ final class VersionTimeline: StatsChart {
 }
 
 /// One song across all its recordings: when each was made, how long each is, which you play.
-final class SongPage: NSScrollView {
+final class SongPage: DashPage {
     var onBack: (() -> Void)?
     var onArtist: ((String) -> Void)?
     var onPlay: (([LibraryTrack]) -> Void)?
     var onAdd: (([LibraryTrack]) -> Void)?
-    private let stack = NSStackView()
     private var versions: [SongVersion] = []
     private var plays = SongPlays()
     private var artistKey = ""
     private var generation = 0
 
-    init() {
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        drawsBackground = false
-        hasVerticalScroller = true
-        scrollerStyle = .overlay
-        automaticallyAdjustsContentInsets = false
-        let doc = PageDocument()
-        doc.translatesAutoresizingMaskIntoConstraints = false
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        doc.addSubview(stack)
-        documentView = doc
-        NSLayoutConstraint.activate([
-            doc.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            doc.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            doc.topAnchor.constraint(equalTo: contentView.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: doc.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: doc.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: doc.bottomAnchor, constant: -4),
-        ])
+    override init() {
+        super.init()
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -194,13 +171,6 @@ final class SongPage: NSScrollView {
     /// Plays of a version: last.fm plays carry the album name they were played from.
     private func plays(_ v: SongVersion) -> Int {
         plays.byAlbum[Keys.fold(v.release)] ?? plays.byAlbum[Keys.fold(v.track.album)] ?? 0
-    }
-
-    private func button(_ glyph: String, _ label: String, _ action: Selector, tip: String, prominent: Bool = false) -> Pill {
-        let b = Pill(label, glyph: glyph.isEmpty ? nil : glyph, target: self, action: action)
-        b.prominent = prominent
-        b.toolTip = tip
-        return b
     }
 
     @objc private func back() { onBack?() }
@@ -316,12 +286,6 @@ final class SongPage: NSScrollView {
         Dash.relaxWidth(stack)
     }
 
-    private func add(_ v: NSView) {
-        stack.addArrangedSubview(v)
-        v.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        v.setContentHuggingPriority(.required, for: .vertical)
-    }
-
     /// The song's name without version notes ("About A Girl", not "About A Girl (Live Version)"): the most common
     /// spelling among the plain ones, studio recordings first.
     static func bestTitle(_ versions: [SongVersion]) -> String {
@@ -331,12 +295,4 @@ final class SongPage: NSScrollView {
         return counts.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key ?? versions.first?.track.title ?? ""
     }
 
-    /// After the new content has its size (scrolling before would land short of the top).
-    private func scrollToTop() {
-        layoutSubtreeIfNeeded()
-        // Test hook: OMNIAMP_STATS_SCROLL=<y> for screenshots of the lower part.
-        let y = ProcessInfo.processInfo.environment["OMNIAMP_STATS_SCROLL"].flatMap(Double.init) ?? 0
-        contentView.scroll(to: NSPoint(x: 0, y: y))
-        reflectScrolledClipView(contentView)
-    }
 }
