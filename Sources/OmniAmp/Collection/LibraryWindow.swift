@@ -73,6 +73,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var lettersWidth: NSLayoutConstraint!
     private let search = NSSearchField()
     private let status = NSTextField(labelWithString: "")
+    /// Shown while Live Music Archive downloads are paused (after a quit): carries on with all of them.
+    private lazy var resumeButton = Pill("Resume", glyph: "⤓", target: self, action: #selector(resumeDownloads))
     private let empty = NSTextField(wrappingLabelWithString: "")
     private var scopeButtons: [Pill] = []
     private var losslessButton: Pill!
@@ -240,7 +242,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         play.prominent = true
         add.toolTip = "Add to the playlist (⌥Return)"
         play.toolTip = "Add to the playlist and play (Return, double-click)"
-        let bottom = NSStackView(views: [status, NSView(), add, play])
+        resumeButton.toolTip = "Carry on with the paused Live Music Archive downloads (only the missing files)"
+        resumeButton.isHidden = true
+        let bottom = NSStackView(views: [status, resumeButton, NSView(), add, play])
         bottom.spacing = 6
 
         let root = NSView()
@@ -693,6 +697,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         empty.isHidden = empty.stringValue.isEmpty
     }
 
+    @objc private func resumeDownloads() { LiveArchiveDownloads.shared.resumeAll() }
+
     /// Written during a scan: refresh at most every two seconds (the lists stay put under the mouse).
     private func libraryChanged() {
         guard !refreshPending else { return }
@@ -723,8 +729,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         // Downloads from the Live Music Archive keep going wherever you are: shown first.
         if let d = LiveArchiveDownloads.shared.summary {
-            status.stringValue = "⤓ " + d + (status.stringValue.isEmpty ? "" : "   ·   " + status.stringValue)
+            status.stringValue = d + (status.stringValue.isEmpty ? "" : "   ·   " + status.stringValue)
         }
+        resumeButton.isHidden = LiveArchiveDownloads.shared.paused.isEmpty
         showEmpty()
     }
 

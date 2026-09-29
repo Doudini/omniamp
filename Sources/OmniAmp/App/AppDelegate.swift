@@ -70,7 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         for sig in [SIGTERM, SIGINT] {
             signal(sig, SIG_IGN)
             let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            src.setEventHandler { NSApp.terminate(nil) }
+            src.setEventHandler { [weak self] in
+                self?.quitBySignal = true   // no one to ask: downloads just stay paused
+                NSApp.terminate(nil)
+            }
             src.resume()
             signalSources.append(src)
         }
@@ -105,6 +108,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         let media = urls.filter { !["wsz", "opml"].contains($0.pathExtension.lowercased()) }
         if !media.isEmpty { controller.add(media, at: position) }
+    }
+
+    private var quitBySignal = false
+
+    /// Live Music Archive downloads still running: ask first (quitting pauses them; Resume carries on later).
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let running = LiveArchiveDownloads.shared.running
+        guard !running.isEmpty, !quitBySignal else { return .terminateNow }
+        let a = NSAlert()
+        a.messageText = running.count == 1 ? "A download is still running" : "\(running.count) downloads are still running"
+        a.informativeText = "Quit anyway? The files downloaded so far are kept: Resume in the Music Library carries on with the rest."
+        a.addButton(withTitle: "Quit")
+        a.addButton(withTitle: "Keep Downloading")
+        return a.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
     }
 
     func applicationWillTerminate(_ notification: Notification) {

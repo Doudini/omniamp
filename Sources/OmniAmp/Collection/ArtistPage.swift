@@ -411,8 +411,15 @@ final class ArtistPage: NSScrollView {
                 detail = total == 0 ? "starting download…" : "downloading \(done + 1) of \(total) files…"
                 button = "Cancel"
                 press = { LiveArchiveDownloads.shared.cancel(r.id) }
+            case .paused(let done, let total)?:
+                detail = "paused" + (total > 0 ? ": \(done) of \(total) files" : "")
+                button = "Resume"
+                press = { LiveArchiveDownloads.shared.resume(r.id) }
             case .finished?: detail = "downloaded ✓ · in your library"; button = nil
-            case .failed(let why)?: detail = "download failed: \(why)"; button = "Retry"
+            case .failed(let why)?:
+                detail = "download failed: \(why)"
+                button = "Retry"
+                press = { LiveArchiveDownloads.shared.resume(r.id) }
             case nil: if mine != nil { detail += " · in your library" }
             }
             return .init(lead: r.date ?? "–", main: r.venue ?? r.id, detail: detail, color: mine != nil ? Dash.accent : Dash.text3,
@@ -485,8 +492,12 @@ final class ArtistPage: NSScrollView {
         }
         if let owned { item("Open in Library") { [weak self] in self?.onRelease?(owned) } }
         let name = dash.name
+        let state = LiveArchiveDownloads.shared.states[r.id]
         if LiveArchiveDownloads.shared.isRunning(r.id) {
             item("Cancel Download") { LiveArchiveDownloads.shared.cancel(r.id) }
+        } else if case .paused? = state {
+            item("Resume Download") { LiveArchiveDownloads.shared.resume(r.id) }
+            item("Discard Download") { LiveArchiveDownloads.shared.cancel(r.id) }
         } else {
             item(owned == nil ? "Download FLAC (lossless)" : "Download FLAC Again (another source?)") {
                 LiveArchiveDownloads.shared.start(r, artist: name, format: .lossless)

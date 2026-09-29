@@ -58,39 +58,88 @@ extension MetadataLookup {
 
 /// Downloads from the Live Music Archive into a library folder. Nothing starts without a click; downloads
 /// keep going when the page closes (the library window's status bar shows them), and can be cancelled.
-/// Files land in a temporary folder first and move into the library when the show is complete, so the
-/// library never picks up half a show.
+/// Files gather in OmniAmp's cache folder and move into the library when the show is complete, so the
+/// library never picks up half a show. Quitting pauses a download: the files so far and the list of
+/// unfinished ones are kept, and Resume (a click, never on its own) fetches only what's missing.
 @MainActor
 final class LiveArchiveDownloads {
     static let shared = LiveArchiveDownloads()
     static let changed = Notification.Name("OmniAmpLiveArchiveDownloads")
 
-    enum Format: Sendable { case lossless, mp3 }
+    enum Format: String, Codable, Sendable { case lossless, mp3 }
     enum State: Equatable {
         case running(done: Int, total: Int)
+        /// Stopped by quitting (or a lost connection): the files so far are kept.
+        case paused(done: Int, total: Int)
         case finished
         case failed(String)
     }
     struct Job {
         let recording: LiveRecording
         let artist: String
+        let format: Format
         var state: State
         var task: Task<Void, Never>?
+    }
+    /// What's kept between launches: the downloads not finished yet.
+    struct Pending: Codable, Equatable {
+        let recording: LiveRecording
+        let artist: String
+        let format: Format
+        var total: Int
     }
     private(set) var jobs: [String: Job] = [:]
     private var order: [String] = []
     var states: [String: State] { jobs.mapValues(\.state) }
 
-    /// For a status bar: what's downloading ("Sharon Van Etten, 2008-06-06 Piano's: 3 of 10 files · 1 more"), nil when nothing is.
-    var summary: String? {
-        let running = order.compactMap { id -> Job? in
-            guard let j = jobs[id], case .running = j.state else { return nil }
-            return j
+    /// OmniAmp's cache folder: the partial downloads, and pending.json listing them.
+    nonisolated static var directory: URL {
+        LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("LiveArchiveDownloads", isDirectory: true)
+    }
+    nonisolated static func staging(_ id: String) -> URL { directory.appendingPathComponent(safeName(id), isDirectory: true) }
+    private static var pendingFile: URL { directory.appendingPathComponent("pending.json") }
+
+    private init() {
+        // Unfinished downloads from before: paused, with the files already here counted.
+        guard let data = try? Data(contentsOf: Self.pendingFile),
+              let pending = try? JSONDecoder().decode([Pending].self, from: data) else { return }
+        for p in pending {
+            let have = (try? FileManager.default.contentsOfDirectory(atPath: Self.staging(p.recording.id).path))?.count ?? 0
+            jobs[p.recording.id] = Job(recording: p.recording, artist: p.artist, format: p.format,
+                                       state: .paused(done: min(have, p.total), total: p.total))
+            order.append(p.recording.id)
         }
-        guard let first = running.first, case .running(let done, let total) = first.state else { return nil }
-        let what = "\(first.artist), \([first.recording.date, first.recording.venue].compactMap { $0 }.joined(separator: " "))"
-        return "Downloading \(what): " + (total == 0 ? "starting…" : "\(done + 1) of \(total) files")
-            + (running.count > 1 ? " · \(running.count - 1) more" : "")
+    }
+
+    private func savePending() {
+        let pending = order.compactMap { id -> Pending? in
+            guard let j = jobs[id] else { return nil }
+            switch j.state {
+            case .running(_, let total), .paused(_, let total): return Pending(recording: j.recording, artist: j.artist, format: j.format, total: total)
+            case .failed: return Pending(recording: j.recording, artist: j.artist, format: j.format, total: 0)
+            case .finished: return nil
+            }
+        }
+        try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+        if pending.isEmpty { try? FileManager.default.removeItem(at: Self.pendingFile) }
+        else { try? JSONEncoder().encode(pending).write(to: Self.pendingFile, options: .atomic) }
+    }
+
+    var running: [Job] { order.compactMap { id in jobs[id].flatMap { if case .running = $0.state { $0 } else { nil } } } }
+    var paused: [Job] { order.compactMap { id in jobs[id].flatMap { if case .paused = $0.state { $0 } else { nil } } } }
+
+    /// For a status bar: what's downloading ("Sharon Van Etten, 2008-06-06 Piano's: 3 of 10 files · 1 more"),
+    /// or what's paused; nil when neither.
+    var summary: String? {
+        func name(_ j: Job) -> String { "\(j.artist), \([j.recording.date, j.recording.venue].compactMap { $0 }.joined(separator: " "))" }
+        let run = running, wait = paused
+        if let first = run.first, case .running(let done, let total) = first.state {
+            return "⤓ Downloading \(name(first)): " + (total == 0 ? "starting…" : "\(done + 1) of \(total) files")
+                + (run.count > 1 ? " · \(run.count - 1) more" : "") + (wait.isEmpty ? "" : " · \(wait.count) paused")
+        }
+        guard let first = wait.first, case .paused(let done, let total) = first.state else { return nil }
+        return wait.count == 1 ? "⏸ Download paused: \(name(first))" + (total > 0 ? ", \(done) of \(total) files" : "")
+            : "⏸ \(wait.count) downloads paused"
     }
 
     /// Where downloads go; asks the first time (a library folder, so they show up in the library).
@@ -116,22 +165,34 @@ final class LiveArchiveDownloads {
         return false
     }
 
+    /// A paused or failed download again, in its format: only the missing files.
+    func resume(_ id: String) {
+        guard let j = jobs[id], !isRunning(id) else { return }
+        start(j.recording, artist: j.artist, format: j.format)
+    }
+
+    func resumeAll() { paused.forEach { resume($0.recording.id) } }
+
     func start(_ r: LiveRecording, artist: String, format: Format) {
         guard !isRunning(r.id), let base = folder ?? chooseFolder() else { return }
         let dest = base + "/" + Self.safeName(artist) + "/" + r.folderName
-        let staging = FileManager.default.temporaryDirectory.appendingPathComponent("OmniAmp-LiveArchive/\(Self.safeName(r.id))", isDirectory: true)
-        jobs[r.id] = Job(recording: r, artist: artist, state: .running(done: 0, total: 0))
+        let staging = Self.staging(r.id)
+        // Carrying on from what's already here only in the same format.
+        let fresh = jobs[r.id].map { $0.format != format } ?? true
+        jobs[r.id] = Job(recording: r, artist: artist, format: format, state: .running(done: 0, total: 0))
         order.removeAll { $0 == r.id }
         order.append(r.id)
+        savePending()
         changed()
         jobs[r.id]?.task = Task { [weak self] in
             do {
                 // Files and tags off the main thread; only the progress comes back to it.
                 try await Task.detached {
-                    try? FileManager.default.removeItem(at: staging)
+                    if fresh { try? FileManager.default.removeItem(at: staging) }
                     try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
                 }.value
                 let item = try await Self.item(r.id, format)
+                self?.set(r.id, .running(done: 0, total: item.files.count), save: true)
                 for (i, f) in item.files.enumerated() {
                     try Task.checkCancellation()
                     self?.set(r.id, .running(done: i, total: item.files.count))
@@ -140,29 +201,41 @@ final class LiveArchiveDownloads {
                 try Task.checkCancellation()
                 self?.set(r.id, .running(done: item.files.count - 1, total: item.files.count))
                 try await Task.detached { try Self.install(item, r, artist: artist, from: staging, to: dest) }.value
-                self?.set(r.id, .finished)
+                self?.set(r.id, .finished, save: true)
                 if MusicCollection.shared.roots.contains(where: { dest.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }) {
                     MusicCollection.shared.rescan(folder: dest)
                 }
             } catch {
-                Task.detached { try? FileManager.default.removeItem(at: staging) }
                 if Task.isCancelled || (error as? URLError)?.code == .cancelled || error is CancellationError {
+                    // Cancelled: nothing kept.
+                    Task.detached { try? FileManager.default.removeItem(at: staging) }
                     self?.jobs[r.id] = nil
+                    self?.order.removeAll { $0 == r.id }
+                    self?.savePending()
                     self?.changed()
                     return
                 }
+                // Failed: the files so far stay, so Retry carries on.
                 NSLog("OmniAmp: Live Music Archive download of %@ failed: %@", r.id, "\(error)")
-                self?.set(r.id, .failed((error as? Failure)?.message ?? error.localizedDescription))
+                self?.set(r.id, .failed((error as? Failure)?.message ?? error.localizedDescription), save: true)
             }
         }
     }
 
     func cancel(_ id: String) {
-        jobs[id]?.task?.cancel()
+        if let task = jobs[id]?.task, isRunning(id) { task.cancel(); return }
+        // Paused or failed: forget it and its files.
+        jobs[id] = nil
+        order.removeAll { $0 == id }
+        let staging = Self.staging(id)
+        Task.detached { try? FileManager.default.removeItem(at: staging) }
+        savePending()
+        changed()
     }
 
-    private func set(_ id: String, _ s: State) {
+    private func set(_ id: String, _ s: State, save: Bool = false) {
         jobs[id]?.state = s
+        if save { savePending() }
         changed()
     }
 
@@ -216,6 +289,14 @@ final class LiveArchiveDownloads {
     }
 
     nonisolated private static func download(_ id: String, _ name: String, into folder: URL) async throws {
+        // Already here from before a pause: files only land here complete (moved in once downloaded).
+        let dest = folder.appendingPathComponent(safeName(String(name.split(separator: "/").last ?? "")))
+        let debug = ProcessInfo.processInfo.environment["OMNIAMP_DEBUG"] != nil
+        if FileManager.default.fileExists(atPath: dest.path) {
+            if debug { NSLog("OmniAmp: Live Music Archive: have %@", dest.lastPathComponent) }
+            return
+        }
+        if debug { NSLog("OmniAmp: Live Music Archive: fetching %@", name) }
         let path = name.split(separator: "/").map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }.joined(separator: "/")
         guard let url = URL(string: "https://archive.org/download/\(id)/\(path)") else { throw Failure(message: "bad file name") }
         var req = URLRequest(url: url, timeoutInterval: 60)
@@ -226,8 +307,6 @@ final class LiveArchiveDownloads {
             try? FileManager.default.removeItem(at: tmp)
             throw Failure(message: status == 401 || status == 403 ? "stream only (the artist doesn't allow downloads)" : "archive.org answered \(status)")
         }
-        let dest = folder.appendingPathComponent(safeName(String(name.split(separator: "/").last ?? "")))
-        try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
     }
 
