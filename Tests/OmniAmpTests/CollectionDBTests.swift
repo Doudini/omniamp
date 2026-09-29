@@ -269,6 +269,16 @@ final class CollectionDBTests: XCTestCase {
         XCTAssertEqual(try d.albums(matching: "dark star", LibraryFilter(), artist: Keys.artist("Phish")).map(\.title), ["Hoist"])
     }
 
+    func testPlayedSpellingsOfOwnedArtists() {
+        let owned = ["cat power": 1, "pj harvey": 1, "julien baker": 1, "metallica": 1, "bright eyes": 0].filter { $0.value > 0 }
+        XCTAssertEqual(CollectionDB.ownedSpelling(of: "Cat Power (live)", in: owned), "cat power")
+        XCTAssertEqual(CollectionDB.ownedSpelling(of: "PJ Harvey & John Parish", in: owned), "pj harvey")
+        XCTAssertEqual(CollectionDB.ownedSpelling(of: "Julien Baker, Phoebe Bridgers", in: owned), "julien baker")
+        XCTAssertEqual(CollectionDB.ownedSpelling(of: "Metallic", in: owned), "metallica")
+        XCTAssertNil(CollectionDB.ownedSpelling(of: "Bright Eyes", in: owned))
+        XCTAssertNil(CollectionDB.ownedSpelling(of: "Cat", in: ["cats": 1]), "too short to guess")
+    }
+
     func testRetagMovesTrackBetweenAlbums() throws {
         let d = try db()
         try d.upsert([row(1, artist: "A", album: "X", title: "t")])

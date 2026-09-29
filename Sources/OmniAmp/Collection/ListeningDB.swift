@@ -28,6 +28,23 @@ struct ListeningStats: Sendable {
 }
 
 extension CollectionDB {
+    /// An owned artist this played name is a spelling of: with a note ("Cat Power (live)"), as the lead of a pairing
+    /// ("PJ Harvey & John Parish", "Julien Baker, Phoebe Bridgers"), or cut short by a letter or two ("Metallic").
+    static func ownedSpelling(of name: String, in owned: [String: Int]) -> String? {
+        var plain = name
+        for (o, c) in [("(", ")"), ("[", "]")] {
+            while let a = plain.range(of: o), let b = plain.range(of: c, range: a.upperBound..<plain.endIndex) { plain.removeSubrange(a.lowerBound..<b.upperBound) }
+        }
+        var candidates = [Keys.artist(plain)]
+        for sep in [" & ", " and ", ", ", " feat. ", " feat ", " ft. ", " with ", " + ", " x ", " vs. ", " / "] {
+            if let r = plain.range(of: sep, options: .caseInsensitive) { candidates.append(Keys.artist(String(plain[..<r.lowerBound]))) }
+        }
+        for k in candidates where !k.isEmpty && owned[k] != nil { return k }
+        let k = candidates[0]
+        guard k.count >= 5 else { return nil }
+        return owned.keys.first { $0.hasPrefix(k) && $0.count - k.count <= 2 }
+    }
+
     /// Tables for plays and artist places (created with the database, or added to an older one).
     func ensureListeningTables() throws {
         try db.exec("""
@@ -262,7 +279,8 @@ extension CollectionDB {
             let key = r.text(0), n = r.int(2)
             let bar = LibraryStats.Bar(id: key, label: r.text(1), value: Double(n), count: owned[key])
             if s.topArtists.count < 15 { s.topArtists.append(bar) }
-            if bar.count == nil, s.notOwned.count < 15, !["unknown artist", "various artists"].contains(key) { s.notOwned.append(bar) }
+            if bar.count == nil, s.notOwned.count < 15, !["unknown artist", "various artists"].contains(key),
+               Self.ownedSpelling(of: r.text(1), in: owned) == nil { s.notOwned.append(bar) }
         }
         try db.query("""
             SELECT a.artist_key, min(a.artist), sum(a.tracks) AS t FROM albums a

@@ -588,11 +588,12 @@ final class ShowCalendar: StatsChart {
         return Array(lo...hi)
     }
 
-    /// Square cells as large as fit the width (at most 14 points).
-    private var cell: CGFloat {
+    /// A column per year across the whole width; cells square up to 14 points tall, wider than tall beyond that.
+    private var cellW: CGFloat {
         let n = CGFloat(max(years.count, 1))
-        return max(4, min(14, (bounds.width - Self.labelW - 4) / n - Self.gap))
+        return max(4, (bounds.width - Self.labelW - 4) / n - Self.gap)
     }
+    private var cell: CGFloat { min(14, cellW) }
 
     /// Its height follows the cell size, which follows the width.
     private lazy var height: NSLayoutConstraint = {
@@ -608,7 +609,7 @@ final class ShowCalendar: StatsChart {
     }
 
     private func rect(col: Int, month: Int) -> NSRect {
-        NSRect(x: Self.labelW + CGFloat(col) * (cell + Self.gap), y: Self.top + CGFloat(month) * (cell + Self.gap), width: cell, height: cell)
+        NSRect(x: Self.labelW + CGFloat(col) * (cellW + Self.gap), y: Self.top + CGFloat(month) * (cell + Self.gap), width: cellW, height: cell)
     }
 
     private static let monthNames: [String] = {
@@ -819,7 +820,8 @@ final class PageDocument: NSView {
 
 /// A row of the page grid: each card spans `span` of `columns` equal columns (12 pt gaps), so cards line up
 /// with the rows above and below; all as tall as the tallest, their content at the top.
-func dashGrid(_ items: [(NSView, Int)], columns: Int = 3, gap: CGFloat = 12) -> NSView {
+/// `equalHeights: false`: each card as tall as its own content (lists of very different lengths side by side).
+func dashGrid(_ items: [(NSView, Int)], columns: Int = 3, gap: CGFloat = 12, equalHeights: Bool = true) -> NSView {
     let row = NSView()
     row.translatesAutoresizingMaskIntoConstraints = false
     var previous: NSView?
@@ -830,7 +832,7 @@ func dashGrid(_ items: [(NSView, Int)], columns: Int = 3, gap: CGFloat = 12) -> 
         // span × column + the gaps inside it; a column is (row − all gaps) / columns.
         NSLayoutConstraint.activate([
             v.topAnchor.constraint(equalTo: row.topAnchor),
-            v.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+            equalHeights ? v.bottomAnchor.constraint(equalTo: row.bottomAnchor) : v.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor),
             v.leadingAnchor.constraint(equalTo: previous?.trailingAnchor ?? row.leadingAnchor, constant: previous == nil ? 0 : gap),
             v.widthAnchor.constraint(equalTo: row.widthAnchor, multiplier: s / c, constant: (s - 1) * gap - gap * (c - 1) * s / c),
         ])

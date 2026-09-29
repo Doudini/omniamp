@@ -378,7 +378,7 @@ final class ArtistPage: DashPage {
         } else {
             cards[0].1 = 2
         }
-        for grid in [dashGrid(cards, columns: 2)] + [liveArchiveCard(d)].compactMap({ $0 }) {
+        for grid in [dashGrid(cards, columns: 2, equalHeights: false)] + [liveArchiveCard(d)].compactMap({ $0 }) {
             discoSlot.addArrangedSubview(grid)
             grid.widthAnchor.constraint(equalTo: discoSlot.widthAnchor).isActive = true
         }
