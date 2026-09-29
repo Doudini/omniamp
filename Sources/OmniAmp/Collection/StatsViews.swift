@@ -901,7 +901,7 @@ final class StatsPage: DashPage {
             if y == thisYear - 1, let m = Int(g.month.dropFirst(5).prefix(2)), m <= thisMonth { lastYearSoFar += n }
         }
         let added = perYear[thisYear] ?? 0, before = lastYearSoFar
-        let delta: (String, Bool)? = before > 0 ? (String(format: "%.0f%% vs %d", abs(Double(added - before) / Double(before) * 100), thisYear - 1),
+        let delta: (String, Bool)? = before > 0 ? (String(format: "%.0f%% vs ’%02d", abs(Double(added - before) / Double(before) * 100), (thisYear - 1) % 100),
                                                    added >= before) : nil
         let spark = (thisYear - 9...thisYear).map { Double(perYear[$0] ?? 0) }
         let display = HiFiDisplay()
@@ -928,6 +928,8 @@ final class StatsPage: DashPage {
         let years = YearsChart()
         years.years = Array(s.years.dropFirst(cut))
         years.trend = true
+        years.valueLabels = true
+        years.unit = "release"
         years.onClick = { [weak self] in self?.onYear?($0) }
         let decade = Dictionary(grouping: s.years, by: { $0.year / 10 * 10 }).mapValues { $0.reduce(0) { $0 + $1.releases } }
             .max { $0.value < $1.value }

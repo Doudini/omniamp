@@ -312,7 +312,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         let perYear = Dictionary(uniqueKeysWithValues: s.years.map { ($0.year, $0.releases) })
         // This year so far against last year up to the same date (not all of last year).
         let now = perYear[year] ?? 0, last = s.lastYearToDate
-        let delta: (String, Bool)? = last > 0 ? (String(format: "%.0f%% vs %d", abs(Double(now - last) / Double(last) * 100), year - 1), now >= last) : nil
+        let delta: (String, Bool)? = last > 0 ? (String(format: "%.0f%% vs ’%02d", abs(Double(now - last) / Double(last) * 100), (year - 1) % 100), now >= last) : nil
         let placed = s.plays > 0 ? Double(s.mappedPlays) / Double(s.plays) : 0
         let since = s.firstPlay.map { Calendar.current.component(.year, from: $0) }
         let topArtist = s.topArtists.first
@@ -386,7 +386,14 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         when.alignment = .leading
         when.spacing = 16
         for v in [clock, days] { v.widthAnchor.constraint(equalTo: when.widthAnchor).isActive = true }
-        rows.append(dashGrid([(mostPlayedCard(), 2), (panel("When you listen", when, note: "weekday × hour"), 1)]))
+        // In words: the busiest hour and day.
+        let names = Calendar.current.shortWeekdaySymbols
+        let byDay = s.clock.map { $0.reduce(0, +) }, byHour = (0..<24).map { h in s.clock.reduce(0) { $0 + $1[h] } }
+        var whenNote = "weekday × hour"
+        if let d = byDay.indices.max(by: { byDay[$0] < byDay[$1] }), let h = byHour.indices.max(by: { byHour[$0] < byHour[$1] }), byHour[h] > 0 {
+            whenNote = "peak \(String(format: "%02d:00", h)) · \(names[d])"
+        }
+        rows.append(dashGrid([(mostPlayedCard(), 2), (panel("When you listen", when, note: whenNote), 1)]))
 
         // 5. Where: the map, then the countries with the chosen one's artists.
         map.values = showOwned ? s.ownedByCountry : s.playsByCountry

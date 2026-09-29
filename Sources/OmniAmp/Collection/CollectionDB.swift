@@ -186,6 +186,24 @@ final class CollectionDB {
             }
         }
         try groupVariousOnce()
+        // Once: artist names in their proper spelling, genre numbers as names, "added" by the files' dates (from what's
+        // stored: nothing read again).
+        if (try db.scalar("SELECT value FROM meta WHERE key = 'displayFixes'") ?? 0) < 1 {
+            try db.transaction {
+                var keys = Set<String>()
+                try db.query("SELECT key FROM artists") { keys.insert($0.text(0)) }
+                var genres: [(Int64, String?)] = []
+                try db.query("SELECT id, genre FROM files") { genres.append(($0.int64(0), $0.optText(1))) }
+                try db.run("DELETE FROM genres")
+                for (id, g) in genres { for name in Self.genres(g) { try db.run("INSERT INTO genres(file_id, genre) VALUES (?, ?)", [id, name]) } }
+                try db.run("""
+                    UPDATE albums SET added = coalesce((SELECT max(CASE WHEN f.mtime > 0 THEN f.mtime ELSE f.added END) FROM files f
+                                                        WHERE f.album_key = albums.key), added)
+                    """)
+                try rollUp(albums: [], artists: keys)
+                try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('displayFixes', 1)")
+            }
+        }
         // Album artist "VA" or "Various" was its own artist: read those files again, once, to join Various Artists.
         if (try db.scalar("SELECT value FROM meta WHERE key = 'variousNames'") ?? 0) < 1 {
             try db.run("UPDATE files SET mtime = -1 WHERE artist_key IN ('va', 'various')")
@@ -425,7 +443,7 @@ final class CollectionDB {
                 SELECT album_key, min(artist_key), min(album_artist), min(album), min(year), min(kind), min(folder), count(*),
                        coalesce(sum(duration), 0),
                        (SELECT path FROM files f2 WHERE f2.album_key = ?1 ORDER BY disc_no, track_no, path LIMIT 1),
-                       min(lossless), max(added), min(show_date), min(venue), sum(playable = 0),
+                       min(lossless), max(CASE WHEN mtime > 0 THEN mtime ELSE added END), min(show_date), min(venue), sum(playable = 0),
                        (SELECT upper(replace(path, rtrim(path, replace(path, '.', '')), '')) FROM files f3
                         WHERE f3.album_key = ?1 AND f3.playable = 0 LIMIT 1)
                 FROM files WHERE album_key = ?1 GROUP BY album_key
@@ -433,7 +451,11 @@ final class CollectionDB {
         }
         for k in artists {
             var name: String?
-            try db.query("SELECT artist FROM albums WHERE artist_key = ? GROUP BY artist ORDER BY sum(tracks) DESC LIMIT 1", [k]) {
+            // The most used spelling, but not one in all capitals or all lower case when a normal one exists ("Nirvana", not "NIRVANA").
+            try db.query("""
+                SELECT artist FROM albums WHERE artist_key = ? GROUP BY artist
+                ORDER BY (artist = upper(artist) OR artist = lower(artist)), sum(tracks) DESC LIMIT 1
+                """, [k]) {
                 name = $0.text(0)
             }
             if let name {
@@ -460,9 +482,32 @@ final class CollectionDB {
         guard let s else { return [] }
         var seen = Set<String>()
         return s.split(whereSeparator: { $0 == ";" || $0 == "/" || $0 == "," || $0 == "\0" })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+            .map { genreName($0.trimmingCharacters(in: .whitespaces)) }
+            .filter { !$0.isEmpty && !["genre", "unknown", "other", "misc"].contains($0.lowercased()) && seen.insert($0.lowercased()).inserted }
     }
+
+    /// Old ID3 genre numbers ("(80)", "17") as their names ("Folk", "Rock").
+    static func genreName(_ g: String) -> String {
+        let inner = g.hasPrefix("(") && g.hasSuffix(")") ? String(g.dropFirst().dropLast()) : g
+        guard let n = Int(inner), n >= 0, n < id3Genres.count else { return g }
+        return id3Genres[n]
+    }
+
+    private static let id3Genres = ["Blues", "Classic Rock", "Country", "Dance", "Disco", "Funk", "Grunge", "Hip-Hop", "Jazz", "Metal",
+        "New Age", "Oldies", "Other", "Pop", "R&B", "Rap", "Reggae", "Rock", "Techno", "Industrial", "Alternative", "Ska", "Death Metal",
+        "Pranks", "Soundtrack", "Euro-Techno", "Ambient", "Trip-Hop", "Vocal", "Jazz+Funk", "Fusion", "Trance", "Classical", "Instrumental",
+        "Acid", "House", "Game", "Sound Clip", "Gospel", "Noise", "Alternative Rock", "Bass", "Soul", "Punk", "Space", "Meditative",
+        "Instrumental Pop", "Instrumental Rock", "Ethnic", "Gothic", "Darkwave", "Techno-Industrial", "Electronic", "Pop-Folk", "Eurodance",
+        "Dream", "Southern Rock", "Comedy", "Cult", "Gangsta", "Top 40", "Christian Rap", "Pop/Funk", "Jungle", "Native American",
+        "Cabaret", "New Wave", "Psychedelic", "Rave", "Showtunes", "Trailer", "Lo-Fi", "Tribal", "Acid Punk", "Acid Jazz", "Polka", "Retro",
+        "Musical", "Rock & Roll", "Hard Rock", "Folk", "Folk-Rock", "National Folk", "Swing", "Fast Fusion", "Bebop", "Latin", "Revival",
+        "Celtic", "Bluegrass", "Avantgarde", "Gothic Rock", "Progressive Rock", "Psychedelic Rock", "Symphonic Rock", "Slow Rock",
+        "Big Band", "Chorus", "Easy Listening", "Acoustic", "Humour", "Speech", "Chanson", "Opera", "Chamber Music", "Sonata", "Symphony",
+        "Booty Bass", "Primus", "Porn Groove", "Satire", "Slow Jam", "Club", "Tango", "Samba", "Folklore", "Ballad", "Power Ballad",
+        "Rhythmic Soul", "Freestyle", "Duet", "Punk Rock", "Drum Solo", "A Cappella", "Euro-House", "Dance Hall", "Goa", "Drum & Bass",
+        "Club-House", "Hardcore", "Terror", "Indie", "BritPop", "Negerpunk", "Polsk Punk", "Beat", "Christian Gangsta Rap", "Heavy Metal",
+        "Black Metal", "Crossover", "Contemporary Christian", "Christian Rock", "Merengue", "Salsa", "Thrash Metal", "Anime", "JPop",
+        "Synthpop"]
 
     // MARK: Reading
 

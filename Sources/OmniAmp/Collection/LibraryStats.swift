@@ -96,7 +96,7 @@ extension CollectionDB {
 
         // Songs with the most recordings: the same title (versions folded) by the same artist on several releases.
         try db.query("""
-            SELECT min(f.title), min(a.artist), count(DISTINCT f.album_key) AS n,
+            SELECT min(f.title), (SELECT name FROM artists WHERE key = f.artist_key), count(DISTINCT f.album_key) AS n,
                    count(DISTINCT CASE WHEN a.kind > \(ReleaseKind.live.rawValue) THEN f.album_key END), f.artist_key, f.title_key
             FROM files f JOIN albums a ON a.key = f.album_key WHERE \(f) AND length(f.title_key) >= 3
             GROUP BY f.artist_key, f.title_key HAVING n >= 3 ORDER BY n DESC LIMIT 60
@@ -114,7 +114,8 @@ extension CollectionDB {
         s.songs = Array(s.songs.prefix(12))
 
         try db.query("""
-            SELECT a.artist_key, min(a.artist), sum(a.duration) AS d, sum(a.tracks), count(*) FROM albums a WHERE \(f)
+            SELECT a.artist_key, (SELECT name FROM artists WHERE key = a.artist_key), sum(a.duration) AS d, sum(a.tracks), count(*)
+            FROM albums a WHERE \(f) AND a.artist_key NOT IN ('unknown artist', '')
             GROUP BY a.artist_key ORDER BY d DESC LIMIT 12
             """) { r in
             s.topArtists.append(.init(id: r.text(0), label: r.text(1), value: r.double(2) / 3600,
