@@ -670,6 +670,49 @@ final class FlippedView: NSView {
     override var isFlipped: Bool { true }
 }
 
+/// Whoever can go Back from a page (the library window), for the Back keys.
+@objc protocol PageBack {
+    func pageBack(_ sender: Any?)
+}
+
+/// A page's content (artist, song, Needs Attention): takes the keyboard, so the window's Back keys (Esc, ⌘[, ⌫)
+/// reach it instead of a list hidden behind; arrows, Page Up/Down and space scroll it.
+final class PageDocument: NSView {
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
+    override func keyDown(with e: NSEvent) {
+        // Back (Esc, ⌫, ⌘[): up the responder chain to whoever shows the pages (the library window).
+        let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
+        if (mods.isEmpty && (e.keyCode == 53 || e.keyCode == 51)) || (mods == .command && e.charactersIgnoringModifiers == "[") {
+            if NSApp.sendAction(#selector(PageBack.pageBack(_:)), to: nil, from: self) { return }
+        }
+        guard let clip = enclosingScrollView?.contentView, e.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+            return super.keyDown(with: e)
+        }
+        let page = max(40, clip.bounds.height - 40)
+        let step: CGFloat
+        switch e.keyCode {
+        case 125: step = 40                        // ↓
+        case 126: step = -40                       // ↑
+        case 121: step = page                      // Page Down
+        case 116: step = -page                     // Page Up
+        case 49: step = e.modifierFlags.contains(.shift) ? -page : page   // space
+        case 119: step = .greatestFiniteMagnitude  // End
+        case 115: step = -.greatestFiniteMagnitude // Home
+        default: return super.keyDown(with: e)
+        }
+        let maxY = max(0, frame.height - clip.bounds.height)
+        clip.scroll(to: NSPoint(x: 0, y: min(maxY, max(0, clip.bounds.minY + step))))
+        enclosingScrollView?.reflectScrolledClipView(clip)
+    }
+}
+
 /// A row of the page grid: each card spans `span` of `columns` equal columns (12 pt gaps), so cards line up
 /// with the rows above and below; all as tall as the tallest, their content at the top.
 func dashGrid(_ items: [(NSView, Int)], columns: Int = 3, gap: CGFloat = 12) -> NSView {

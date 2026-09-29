@@ -6,7 +6,7 @@ import AppKit
 ///
 /// ALL / OFFICIAL / UNOFFICIAL and LOSSLESS filter every pane; typing searches titles, artists, albums and
 /// venues. Return or double-click plays (adds to the playlist and starts), ⌥Return adds without playing.
-final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
+final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, PageBack,
                                      NSMenuDelegate, NSSearchFieldDelegate {
     enum Section: Int, CaseIterable {
         case artists, shows, years, genres, added, stats, listening, attention
@@ -288,7 +288,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         artistPage.onRelease = { [weak self] a in self?.openRelease(artist: a.artistKey, album: a.key) }
         artistPage.onBrowse = { [weak self] a in self?.openRelease(artist: a, album: nil) }
         artistPage.onPlay = { [weak self] list in self?.play(list) }
-        artistPage.onShows = { [weak self] a in self?.pages = []; self?.open(.shows, a) }
+        artistPage.onShows = { [weak self] a in self?.dropPages(); self?.open(.shows, a) }
         for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage, artistPage, attentionPage]
             as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -449,33 +449,57 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         switch p {
         case .song(let artist, let title):
             songPage.isHidden = false
-            songPage.show(artist: artist, titleKey: title)
-            window?.makeFirstResponder(songPage)
+            if shownSong != artist + "\u{1}" + title {
+                shownSong = artist + "\u{1}" + title
+                songPage.show(artist: artist, titleKey: title)
+            }
+            window?.makeFirstResponder(songPage.documentView)
         case .artist(let key):
             artistPage.isHidden = false
-            artistPage.show(artist: key)
-            window?.makeFirstResponder(artistPage)
+            if shownArtist != key {
+                shownArtist = key
+                artistPage.show(artist: key)
+            }
+            window?.makeFirstResponder(artistPage.documentView)
         }
+    }
+
+    /// A page's Back keys (Esc, ⌘[, ⌫): the page before, the lists, or in Needs Attention its overview.
+    @objc func pageBack(_ sender: Any?) {
+        if !pages.isEmpty { back(); return }
+        if showingAttention { _ = attentionPage.showOverview() }
     }
 
     /// Back: the page before, or the lists.
     private func back() {
+        guard !pages.isEmpty else { return }
         pages.removeLast()
         if pages.isEmpty { closePages() } else { showTopPage() }
     }
 
     private func closePages() {
+        dropPages()
+        reloadAll()
+        window?.makeFirstResponder(middle)   // the list the page was opened from (keys keep working)
+    }
+
+    /// Out of the pages: the lists again. The artist page's lookups stop, and the next page opened loads fresh.
+    private func dropPages() {
         pages = []
         songPage.isHidden = true
         artistPage.isHidden = true
-        reloadAll()
+        artistPage.stopLookups()
+        shownArtist = nil
+        shownSong = nil
     }
+
+    /// What the two pages show now: Back to one of them just shows it again, scrolled as it was.
+    private var shownArtist: String?
+    private var shownSong: String?
 
     /// A release (or just the artist) in the library's lists.
     private func openRelease(artist: String, album: String?) {
-        pages = []
-        songPage.isHidden = true
-        artistPage.isHidden = true
+        dropPages()
         section = .artists
         // A search or a filter could hide the release (the first search hit would be opened instead).
         if searching {
@@ -532,9 +556,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(searchChanged), object: nil)
         search.stringValue = ""
         query = ""
-        pages = []
-        songPage.isHidden = true
-        artistPage.isHidden = true
+        dropPages()
         section = s
         reloadAll(keepEntry: nil)
     }
@@ -550,9 +572,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         // An open page stays until Back or a click elsewhere: refreshes (new files, a finished download) only
         // update the lists under it. A new search closes it in searchChanged.
         if !pages.isEmpty { return }
-        songPage.isHidden = true
-        artistPage.isHidden = true
-        pages = []
+        dropPages()
         statsPage.isHidden = !showingStats
         listeningPage.isHidden = !showingListening
         attentionPage.isHidden = !showingAttention
@@ -795,9 +815,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard search.stringValue != query else { return }
         query = search.stringValue
         // Typing a search: its results replace an open page.
-        pages = []
-        songPage.isHidden = true
-        artistPage.isHidden = true
+        dropPages()
         reloadAll(keepEntry: nil)
     }
 
@@ -1105,9 +1123,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(searchChanged), object: nil)
                 search.stringValue = ""
                 query = ""
-                pages = []
-                songPage.isHidden = true
-                artistPage.isHidden = true
+                dropPages()
                 section = s
                 reloadAll(keepEntry: nil)
                 return
@@ -1115,9 +1131,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             // While searching, the Artists highlight is the search's own (set by reloadAll): not a choice.
             if searching { return }
             if !pages.isEmpty {   // leaving the pages
-                pages = []
-                songPage.isHidden = true
-                artistPage.isHidden = true
+                dropPages()
                 section = s
                 loadEntries(keep: nil)
                 return

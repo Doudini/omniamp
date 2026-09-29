@@ -186,7 +186,7 @@ final class ArtistPage: NSScrollView {
         hasVerticalScroller = true
         scrollerStyle = .overlay
         automaticallyAdjustsContentInsets = false
-        let doc = FlippedView()
+        let doc = PageDocument()
         doc.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -209,12 +209,12 @@ final class ArtistPage: NSScrollView {
     private var downloadObserver: NSObjectProtocol?
     deinit { downloadObserver.map(NotificationCenter.default.removeObserver) }
 
-    /// Its lookups (photo, discography, more recordings): cancelled when another artist opens or the page hides,
+    /// Its lookups (photo, discography, more recordings): cancelled when another artist opens or the pages close,
     /// so nothing keeps asking MusicBrainz for a page that's gone.
     private var lookups: [Task<Void, Never>] = []
 
-    override func viewDidHide() {
-        super.viewDidHide()
+    /// Leaving the pages (not a song page over this one: Back comes here again, lookups done).
+    func stopLookups() {
         lookups.forEach { $0.cancel() }
         lookups = []
     }

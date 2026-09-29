@@ -17,7 +17,7 @@ final class AttentionPage: NSScrollView {
         hasVerticalScroller = true
         scrollerStyle = .overlay
         automaticallyAdjustsContentInsets = false
-        let doc = FlippedView()
+        let doc = PageDocument()
         doc.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -59,6 +59,13 @@ final class AttentionPage: NSScrollView {
                 }
             }
         }
+    }
+
+    /// Esc in a group's list: the overview.
+    func showOverview() -> Bool {
+        guard group != nil else { return false }
+        back()
+        return true
     }
 
     @objc private func back() {
@@ -108,6 +115,7 @@ final class AttentionPage: NSScrollView {
 
     /// One kind of problem, all of it.
     private func buildGroup(_ g: LibraryAttention.Group?) {
+        defer { window?.makeFirstResponder(documentView) }   // Esc goes back to the overview
         let backButton = Pill("‹  Needs Attention", target: self, action: #selector(back))
         let title = Dash.label(g?.title ?? "Nothing left here", Dash.font(22, .semibold), Dash.text)
         let top = NSStackView(views: [backButton, title])

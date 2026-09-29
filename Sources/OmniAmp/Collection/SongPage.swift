@@ -152,7 +152,7 @@ final class SongPage: NSScrollView {
         hasVerticalScroller = true
         scrollerStyle = .overlay
         automaticallyAdjustsContentInsets = false
-        let doc = FlippedView()
+        let doc = PageDocument()
         doc.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .vertical
         stack.alignment = .leading
