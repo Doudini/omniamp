@@ -16,7 +16,7 @@ enum Shortcuts {
         ]),
         ("Windows", [
             ("I", "INFO drawer (modern look)"), ("E", "Equalizer"), ("⌘1", "Player"), ("⌘2", "Internet Radio (again: close)"),
-            ("⌘3", "Podcasts (again: close)"), ("⌃⌘1  ⌃⌘2", "Modern / classic look"), ("⌘O", "Add files or folder"), ("⌘L", "Add a URL"), ("⌘,", "Settings"),
+            ("⌘3", "Podcasts (again: close)"), ("⌘4", "Music Library (again: close)"), ("⌃⌘1  ⌃⌘2", "Modern / classic look"), ("⌘O", "Add files or folder"), ("⌘L", "Add a URL"), ("⌘,", "Settings"),
             ("⌘/", "This list"), ("⌘W  ⌘M", "Close / minimize a window"), ("⌘S  ⇧⌘O", "Save / open a playlist"),
         ]),
         ("Radio and Podcasts", [

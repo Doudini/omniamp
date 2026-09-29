@@ -38,14 +38,14 @@ Real Winamp 2.x skins: pixel-exact main, equalizer and playlist windows at 1×�
 
 ## Music Library
 
-Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (⌥⌘L). OmniAmp turns them into a collection you can browse, even when it's big and loosely organized.
+Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4). OmniAmp turns them into a collection you can browse, even when it's big and loosely organized.
 
 <p align="center"><img src="docs/library-artist.png" alt="An artist page: photo and bio, every release on a timeline above your own plays, your top songs" width="820"></p>
 
-- **Artist pages:** a photo and bio, every release on a timeline next to your own listening, your top songs, and the albums you don't have yet.
+- **Artist pages:** every release on a timeline next to your own listening, your top songs, and the albums you don't have yet. Including live recordings and bootlegs.
 - **Shows and bootlegs:** live recordings are recognized and sorted by date and venue, apart from the official albums. Missing shows can be downloaded from the [Live Music Archive](https://archive.org/details/etree).
 - **Browse** by artist, show, year or genre, see what's new, and search artists, albums, songs and venues.
-- **Stats:** your collection at a glance, from release years to lossless versus lossy.
+- **Stats:** your collection at a glance.
 - **Listening:** connect [Last.fm](https://www.last.fm) to see your whole history: plays per year, your top artists through the years, and where your music comes from.
 - **Needs Attention:** finds files with missing tags, duplicates and artists spelled several ways, and helps you fix them.
 
@@ -141,9 +141,9 @@ OmniAmp works without a mouse. **Help → Keyboard Shortcuts (⌘/)** lists ever
 | `+` / `−` | Volume | | `L` | Show the playing track |
 | `S` / `R` | Shuffle / repeat | | `Q` | Queue selected track |
 | ⇧V | Stop after current | | `I` / `E` | INFO drawer / equalizer |
-| ⌘1 / ⌘2 / ⌘3 | Player / radio / podcasts | | ⌘O / ⌘L | Add files / add URL |
+| ⌘1 / ⌘2 / ⌘3 / ⌘4 | Player / radio / podcasts / library | | ⌘O / ⌘L | Add files / add URL |
 | ⌃⌘1 / ⌃⌘2 | Modern / classic look | | ⌘/ | All shortcuts |
-| ⌥⌘L | Music Library | | ⌘, | Settings |
+| ⌘, | Settings | | | |
 
 ## Get it
 
