@@ -205,6 +205,10 @@ final class CollectionDBTests: XCTestCase {
         try d.upsert([a, b, row(3, artist: "Scout Niblett", album: "I Am", title: "c")])
         let shared = try d.albums(artist: Keys.artist("Scout Niblett"), LibraryFilter()).map { ($0.title, $0.sharedFolder) }
         XCTAssertEqual(shared.sorted { $0.0 < $1.0 }.map(\.1), [true, true, false])   // Calcination, Emma, I Am
+        let group = try d.attention().groups.first { $0.id == "folders" }
+        XCTAssertEqual(group?.total, 1)
+        XCTAssertEqual(group?.entries.first?.lead, "×2")
+        XCTAssertEqual(group?.entries.first?.title, "scout niblett")
     }
 
     func testRetagMovesTrackBetweenAlbums() throws {

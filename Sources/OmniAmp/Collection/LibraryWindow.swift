@@ -273,6 +273,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             switch fix {
             case .artist(let a): self.push(.artist(a))
             case .open(let a, let album): self.openRelease(artist: a, album: album)
+            case .folder(let f): NSWorkspace.shared.activateFileViewerSelecting([URL(exactPath: f, isDirectory: true)])
             case .findInfo(let a, let album):
                 self.openRelease(artist: a, album: album)
                 if self.selectedAlbum?.key == album { self.findInfo() }

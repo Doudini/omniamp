@@ -7,6 +7,7 @@ struct LibraryAttention: Sendable {
         case findInfo(artist: String, album: String)   // open the release and look it up
         case open(artist: String, album: String)
         case artist(String)
+        case folder(String)                          // show it in Finder (files to move)
     }
 
     struct Entry: Sendable, Equatable {
@@ -87,6 +88,25 @@ extension CollectionDB {
         if dupeTotal > 0 {
             out.groups.append(.init(id: "dupes", title: "Same title in several folders", note: "copies, or other sources of a show",
                                     total: dupeTotal, entries: dupes))
+        }
+
+        // Several releases loose in one folder (told apart by their tags): a cover.jpg there is every one's, and
+        // other players mix them up. Each in a folder of its own fixes both.
+        var shared: [LibraryAttention.Entry] = []
+        var sharedTotal = 0
+        if wanted("folders") { try db.query("""
+            SELECT a.folder, count(*), group_concat(a.title, ' · '), min(a.artist_key), min(a.key), sum(a.tracks) FROM albums a
+            GROUP BY a.folder HAVING count(*) > 1 ORDER BY count(*) DESC, sum(a.tracks) DESC
+            """) { r in
+            sharedTotal += 1
+            guard shared.count < limit else { return }
+            let folder = r.text(0)
+            shared.append(.init(lead: "×\(r.int(1))", title: (folder as NSString).lastPathComponent, detail: r.text(2),
+                                fix: .folder(folder)))
+        } }
+        if sharedTotal > 0 {
+            out.groups.append(.init(id: "folders", title: "Several releases in one folder", note: "move each into its own folder",
+                                    total: sharedTotal, entries: shared))
         }
 
         try albums("unplayable", "Formats OmniAmp can't play", "convert with scripts/convert-unplayable.sh",

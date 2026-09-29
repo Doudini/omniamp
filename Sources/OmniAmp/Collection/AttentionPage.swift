@@ -129,6 +129,7 @@ final class AttentionPage: NSScrollView {
         case .findInfo: "Click to open it and look it up (Find Missing Info)"
         case .open: "Click to open it in the library"
         case .artist: "Click for the artist"
+        case .folder(let f): "\(f)\nClick to show it in Finder"
         }
     }
 }
