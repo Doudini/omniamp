@@ -66,6 +66,19 @@ struct TagInfo: Equatable {
         default: break
         }
     }
+
+    /// Another tag's names, where this one has none (a FLAC's ID3 tag in front of its comments).
+    mutating func fillMissing(from o: TagInfo) {
+        title = title ?? o.title
+        artist = artist ?? o.artist
+        album = album ?? o.album
+        albumArtist = albumArtist ?? o.albumArtist
+        date = date ?? o.date
+        originalDate = originalDate ?? o.originalDate
+        genre = genre ?? o.genre
+        trackNumber = trackNumber ?? o.trackNumber
+        discNumber = discNumber ?? o.discNumber
+    }
 }
 
 /// A read buffer to reuse across files. Tag loading reads the head of every file in a folder; a fresh
@@ -111,8 +124,13 @@ enum TagReader {
         let head = n == buffer.bytes.count ? buffer.bytes : Array(buffer.bytes[0..<n])
         let ext = (path as NSString).pathExtension.lowercased()
         let reader = PositionedReader(fd: fd, head: head)
-        if ext == "flac" || head.starts(with: [0x66, 0x4C, 0x61, 0x43]) {
-            return parseFLAC(compactFLAC(reader) ?? head)
+        // FLAC, also behind an ID3 tag that some rippers put in front (its fields fill what the FLAC lacks).
+        let behindID3 = flacAfterID3(reader)
+        if ext == "flac" || head.starts(with: [0x66, 0x4C, 0x61, 0x43]) || behindID3 != nil {
+            let base = behindID3 ?? 0
+            var info = parseFLAC(compactFLAC(reader, base: base) ?? head)
+            if base > 0, let tag = reader.bytes(0, min(base, 4 << 20)) { info.fillMissing(from: parseID3Tag(tag)) }
+            return info
         }
         if head.starts(with: ContainerTags.asfHeader) {   // WMA: listed in the library, not playable
             return ContainerTags.asf(FileHandle(fileDescriptor: fd, closeOnDealloc: false), fileSize: fileSize)
@@ -176,8 +194,18 @@ enum TagReader {
 
     /// FLAC whose metadata runs past the head: a compact copy with just STREAMINFO and VORBIS_COMMENT
     /// (pictures and padding skipped). nil when the head already holds everything.
-    static func compactFLAC(_ r: PositionedReader) -> [UInt8]? {
-        var p = 4, kept: [(UInt8, [UInt8])] = [], leftHead = false
+    /// Where "fLaC" starts when an ID3v2 tag comes first, else nil.
+    static func flacAfterID3(_ r: PositionedReader) -> Int? {
+        let b = r.head
+        guard b.count >= 10, b[0] == 0x49, b[1] == 0x44, b[2] == 0x33 else { return nil }
+        let size = Int(b[6] & 0x7F) << 21 | Int(b[7] & 0x7F) << 14 | Int(b[8] & 0x7F) << 7 | Int(b[9] & 0x7F)
+        let base = 10 + size + (b[5] & 0x10 != 0 ? 10 : 0)
+        return r.bytes(base, 4) == [0x66, 0x4C, 0x61, 0x43] ? base : nil
+    }
+
+    /// `base`: where "fLaC" is (not 0 behind an ID3 tag: then always a copy that starts with it).
+    static func compactFLAC(_ r: PositionedReader, base: Int = 0) -> [UInt8]? {
+        var p = base + 4, kept: [(UInt8, [UInt8])] = [], leftHead = base > 0
         for _ in 0..<128 {
             guard let h = r.bytes(p, 4), h.count == 4 else { break }
             let type = h[0] & 0x7F, isLast = h[0] & 0x80 != 0

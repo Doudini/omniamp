@@ -149,6 +149,12 @@ final class CollectionDB {
                 try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('songKeys', ?)", [songKeyVersion])
             }
         }
+        // FLAC behind an ID3 tag couldn't be read before (no tags, no length): read just those again, once.
+        if (try db.scalar("SELECT value FROM meta WHERE key = 'flacBehindID3'") ?? 0) < 1 {
+            try db.run("UPDATE files SET mtime = -1 WHERE duration IS NULL AND lower(path) LIKE '%.flac'")
+            if (try db.scalar("SELECT changes()") ?? 0) > 0 { needsFullScan = true }
+            try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('flacBehindID3', 1)")
+        }
         let content = try db.scalar("SELECT value FROM meta WHERE key = 'content'") ?? 0
         if content < Self.contentVersion {
             // Unknown mtime: the scanner treats every file as changed.

@@ -42,6 +42,11 @@ enum DetailsReader {
             readFLAC(bytes, data, size: size, into: &d)
         } else if head.starts(with: Array("ID3".utf8)) {
             let h = bytes(0, 10)
+            let base = Int64(10 + synchsafe(h, 6)) + (h.count == 10 && h[5] & 0x10 != 0 ? 10 : 0)
+            if bytes(base, 4) == Array("fLaC".utf8) {
+                // FLAC behind an ID3 tag: the FLAC part first, the ID3 tag for what it lacks.
+                readFLAC({ bytes($0 + base, $1) }, { data($0 + base, $1) }, size: size - base, into: &d)
+            }
             readID3(bytes(0, 10 + synchsafe(h, 6)), into: &d)
         } else if head.count == 12, String(decoding: head[4..<8], as: UTF8.self) == "ftyp" {
             readMP4(bytes, size: size, into: &d)

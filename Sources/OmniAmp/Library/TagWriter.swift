@@ -37,6 +37,8 @@ enum TagWriter {
         let n = pread(fd, &head, 10, 0)
         let ext = (path as NSString).pathExtension.lowercased()
         if n >= 4, head.starts(with: Array("fLaC".utf8)) { return writeFLAC(tags, fd: fd, path: path, backupDir: backupDir) }
+        // FLAC behind an ID3 tag (some rippers put one in front): the FLAC part, the ID3 tag left as it is.
+        if n == 10, let base = flacAfterID3(fd, head: head) { return writeFLAC(tags, fd: fd, path: path, backupDir: backupDir, base: base) }
         if ext == "mp3" { return writeID3(tags, fd: fd, head: n == 10 ? head : [], path: path, backupDir: backupDir) }
         return .unsupported(ext.uppercased())
     }
@@ -187,9 +189,18 @@ enum TagWriter {
 
     // MARK: FLAC
 
-    static func writeFLAC(_ tags: BasicTags, fd: Int32, path: String, backupDir: URL?) -> Outcome {
+    /// Where FLAC starts when an ID3v2 tag comes first ("ID3…" then "fLaC"), else nil.
+    static func flacAfterID3(_ fd: Int32, head: [UInt8]) -> Int64? {
+        guard head.count >= 10, head.starts(with: Array("ID3".utf8)) else { return nil }
+        let size = Int64(head[6] & 0x7F) << 21 | Int64(head[7] & 0x7F) << 14 | Int64(head[8] & 0x7F) << 7 | Int64(head[9] & 0x7F)
+        let base = 10 + size + (head[5] & 0x10 != 0 ? 10 : 0)
+        return read(fd, base, 4) == Array("fLaC".utf8) ? base : nil
+    }
+
+    /// `base`: where "fLaC" is (after a leading ID3 tag, which is kept).
+    static func writeFLAC(_ tags: BasicTags, fd: Int32, path: String, backupDir: URL?, base: Int64 = 0) -> Outcome {
         var blocks: [(type: UInt8, body: [UInt8])] = []
-        var p: Int64 = 4
+        var p: Int64 = base + 4
         var last = false
         while !last {
             guard let h = read(fd, p, 4) else { return .failed("couldn't read the FLAC header") }
@@ -259,10 +270,11 @@ enum TagWriter {
         }
         if let old = read(fd, 0, Int(audio)) { backup(old, of: path, in: backupDir) }
         let exact = header(padding: nil).count
-        let room = Int(audio) - exact
+        let room = Int(audio - base) - exact
         // Same size exactly, or room left for a padding block (its 4-byte header included): in place.
-        if room == 0 { return writeAll(fd, header(padding: nil), at: 0) ? .written : .failed("couldn't write the tag") }
-        if room >= 4 { return writeAll(fd, header(padding: room - 4), at: 0) ? .written : .failed("couldn't write the tag") }
-        return rewrite(fd, path: path, prefix: header(padding: 4096), from: audio)
+        if room == 0 { return writeAll(fd, header(padding: nil), at: base) ? .written : .failed("couldn't write the tag") }
+        if room >= 4 { return writeAll(fd, header(padding: room - 4), at: base) ? .written : .failed("couldn't write the tag") }
+        guard let lead = base > 0 ? read(fd, 0, Int(base)) : [] else { return .failed("couldn't read the file") }
+        return rewrite(fd, path: path, prefix: lead + header(padding: 4096), from: audio)
     }
 }

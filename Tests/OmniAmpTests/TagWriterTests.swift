@@ -164,6 +164,36 @@ final class TagWriterTests: XCTestCase {
         XCTAssertEqual(decoded.length, 44100)
     }
 
+    /// Like some rippers' files: an ID3v2.3 tag (unsynchronisation flag set) in front of the FLAC.
+    func testFLACBehindID3Tag() throws {
+        let plain = try flac()
+        let frames = frame("TIT2", "Leave Me With the Monkeys") + frame("TPE1", "Sophie Hunger") + frame("TALB", "1983")
+        let id3 = Array("ID3".utf8) + [3, 0, 0x80] + synchsafe(frames.count + 64) + frames + [UInt8](repeating: 0, count: 64)
+        let url = tmp.appendingPathComponent("behind.flac")
+        try Data(id3 + [UInt8](try Data(contentsOf: plain))).write(to: url)
+        let audio = try flacAudio(plain)
+
+        // Read: the FLAC part (length, rate), the ID3 tag's names where the FLAC has none.
+        var i = read(url)
+        XCTAssertEqual(i.artist, "Sophie Hunger")
+        XCTAssertEqual(i.title, "Leave Me With the Monkeys")
+        XCTAssertEqual(i.sampleRate, 44100)
+        XCTAssertEqual(i.duration ?? 0, 1, accuracy: 0.01)
+
+        // Written into the FLAC part (grown: no padding to use), the ID3 tag and the audio as they were.
+        XCTAssertEqual(TagWriter.write(BasicTags(artist: "Sophie Hunger", album: "1983", year: "2010"), to: url.path, backupDir: nil), .written)
+        XCTAssertEqual(TagWriter.write(BasicTags(genre: "Alternative"), to: url.path, backupDir: nil), .written)   // in place
+        let bytes = [UInt8](try Data(contentsOf: url))
+        XCTAssertEqual(Array(bytes.prefix(id3.count)), id3)
+        XCTAssertEqual(Array(bytes.suffix(audio.count)), audio)
+        i = read(url)
+        XCTAssertEqual(i.albumArtist, "Sophie Hunger")
+        XCTAssertEqual(i.album, "1983")
+        XCTAssertEqual(i.date, "2010")
+        XCTAssertEqual(i.genre, "Alternative")
+        XCTAssertEqual(try AVAudioFile(forReading: url).length, 44100)
+    }
+
     // MARK: Find Missing Info: applying
 
     func testApplyWritesTagsAndCover() throws {
