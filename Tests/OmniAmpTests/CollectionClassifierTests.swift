@@ -10,6 +10,14 @@ final class CollectionClassifierTests: XCTestCase {
 
     // MARK: Keys
 
+    func testVariousArtistNames() {
+        for name in ["VA", "Various", "various artists"] {
+            let r = classify("Mixed/Now 42/01.flac", .init(artist: "Someone", albumArtist: name, album: "Now 42"))
+            XCTAssertEqual(r.artist, "Various Artists", name)
+            XCTAssertEqual(r.kind, .compilation)
+        }
+    }
+
     func testArtistKeys() {
         XCTAssertEqual(Keys.artist("The Beatles"), "beatles")
         XCTAssertEqual(Keys.artist("Beatles, The"), "beatles")

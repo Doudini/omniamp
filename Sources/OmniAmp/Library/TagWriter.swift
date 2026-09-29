@@ -98,15 +98,26 @@ enum TagWriter {
 
     /// `prefix` followed by the original file from `from` to its end, into a temporary file next to it, then
     /// renamed over it (same permissions). A failure leaves the original untouched.
+    /// Temporary files a crash left in a folder (".omniamp-….tmp", over an hour old).
+    private static func removeStaleTemporaries(in dir: String) {
+        for name in ExactPath.contents(ofDirectory: dir) ?? [] where name.hasPrefix(".omniamp-") && name.hasSuffix(".tmp") {
+            let p = dir + "/" + name
+            var st = stat()
+            if stat(p, &st) == 0, Date().timeIntervalSince1970 - Double(st.st_mtimespec.tv_sec) > 3600 { unlink(p) }
+        }
+    }
+
     private static func rewrite(_ fd: Int32, path: String, prefix: [UInt8], from: Int64) -> Outcome {
-        let tmp = (path as NSString).deletingLastPathComponent + "/.omniamp-\(UUID().uuidString.prefix(8)).tmp"
+        let dir = (path as NSString).deletingLastPathComponent
+        removeStaleTemporaries(in: dir)
+        let tmp = dir + "/.omniamp-\(UUID().uuidString.prefix(8)).tmp"
         var st = stat()
-        fstat(fd, &st)
+        guard fstat(fd, &st) == 0 else { return .failed("couldn't read the file's size") }
+        let total = Int64(st.st_size)
         let out = open(tmp, O_WRONLY | O_CREAT | O_EXCL, st.st_mode & 0o7777)
         guard out >= 0 else { return .failed("can't create a file in the folder: \(String(cString: strerror(errno)))") }
         var ok = writeAll(out, prefix, at: 0)
         var at = from, dest = Int64(prefix.count)
-        let total = size(fd)
         let chunk = 1 << 20
         while ok, at < total {
             let n = Int(min(Int64(chunk), total - at))
@@ -115,6 +126,9 @@ enum TagWriter {
             at += Int64(n); dest += Int64(n)
         }
         ok = ok && fsync(out) == 0
+        // All of the audio made it (a short read would otherwise replace the file with less of it).
+        var written = stat()
+        ok = ok && fstat(out, &written) == 0 && Int64(written.st_size) == Int64(prefix.count) + max(0, total - from)
         close(out)
         guard ok, rename(tmp, path) == 0 else {
             unlink(tmp)
@@ -185,7 +199,8 @@ enum TagWriter {
         if let a = tags.album, !a.isEmpty { replace.insert("TALB"); add.append(textFrame("TALB", a, version: version)) }
         if let y = tags.year, !y.isEmpty {
             replace.formUnion(["TYER", "TDRC"])
-            add.append(textFrame(version == 4 ? "TDRC" : "TYER", y, version: version))
+            // v2.3's year frame holds four digits ("1994-05-12" → 1994); v2.4's takes a whole date.
+            add.append(textFrame(version == 4 ? "TDRC" : "TYER", version == 4 ? y : Keys.year(y).map(String.init) ?? y, version: version))
         }
         if let g = tags.genre, !g.isEmpty { replace.insert("TCON"); add.append(textFrame("TCON", g, version: version)) }
         if let t = tags.title, !t.isEmpty { replace.insert("TIT2"); add.append(textFrame("TIT2", t, version: version)) }

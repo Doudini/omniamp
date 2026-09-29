@@ -432,6 +432,10 @@ final class ArtistPage: NSScrollView {
             let name = dash.name
             var press: () -> Void = { LiveArchiveDownloads.shared.start(r, artist: name, format: .lossless) }
             switch downloads.states[r.id] {
+            case .running(let done, let total)? where downloads.installing.contains(r.id) || (total > 0 && done >= total):
+                detail = "adding to your library…"
+                button = nil
+                _ = (done, total)
             case .running(let done, let total)?:
                 detail = total == 0 ? "starting download…" : "downloading \(done + 1) of \(total) files…"
                 button = "Cancel"

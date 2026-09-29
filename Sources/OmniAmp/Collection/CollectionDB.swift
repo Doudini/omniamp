@@ -118,19 +118,38 @@ final class CollectionDB {
     static let contentVersion = 4
     let db: SQLiteDB
     private(set) var hasFTS = true
-    /// Opened after a contentVersion bump: every folder has to be listed and read again.
-    private(set) var needsFullScan = false
+    /// Every folder has to be listed and read again (after a contentVersion bump, a one-time re-read of some
+    /// files, or one of those interrupted by quitting). Known per database file, whichever connection found out.
+    var needsFullScan: Bool {
+        get { Self.setupLock.lock(); defer { Self.setupLock.unlock() }; return Self.fullScanDue.contains(path) }
+        set {
+            Self.setupLock.lock(); defer { Self.setupLock.unlock() }
+            if newValue { Self.fullScanDue.insert(path) } else { Self.fullScanDue.remove(path) }
+        }
+    }
+    private let path: String
+
+    /// The setup below (columns, indexes, one-time migrations) runs on the first connection to a database in this
+    /// run of the app; the others (pages, lookups) skip it.
+    private static let setupLock = NSLock()
+    nonisolated(unsafe) private static var setUp = Set<String>(), fullScanDue = Set<String>()
+    private static func firstOpen(_ path: String) -> Bool {
+        setupLock.lock(); defer { setupLock.unlock() }
+        return setUp.insert(path).inserted
+    }
 
     static var defaultURL: URL { LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("collection.sqlite") }
 
     init(url: URL = CollectionDB.defaultURL, readOnly: Bool = false) throws {
         db = try SQLiteDB(path: url.path, readOnly: readOnly)
+        path = url.path
         if readOnly {
             hasFTS = (try? db.scalar("SELECT count(*) FROM sqlite_master WHERE name = 'fts'")) == 1
             return
         }
         try db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;")
         try migrate()
+        guard Self.firstOpen(url.path) else { return }
         try db.exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER)")
         // Columns added after the first release of the library.
         func addColumn(_ table: String, _ column: String, _ type: String) throws {
@@ -167,6 +186,12 @@ final class CollectionDB {
             }
         }
         try groupVariousOnce()
+        // Album artist "VA" or "Various" was its own artist: read those files again, once, to join Various Artists.
+        if (try db.scalar("SELECT value FROM meta WHERE key = 'variousNames'") ?? 0) < 1 {
+            try db.run("UPDATE files SET mtime = -1 WHERE artist_key IN ('va', 'various')")
+            if (try db.scalar("SELECT changes()") ?? 0) > 0 { needsFullScan = true }
+            try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('variousNames', 1)")
+        }
         // FLAC behind an ID3 tag couldn't be read before (no tags, no length): read just those again, once.
         if (try db.scalar("SELECT value FROM meta WHERE key = 'flacBehindID3'") ?? 0) < 1 {
             try db.run("UPDATE files SET mtime = -1 WHERE duration IS NULL AND lower(path) LIKE '%.flac'")
@@ -180,6 +205,9 @@ final class CollectionDB {
             needsFullScan = true
             try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('content', ?)", [Self.contentVersion])
         }
+        // Files still marked for reading again: a full re-read was cut short by quitting (local folders would
+        // otherwise only replay what changed).
+        if !needsFullScan, (try db.scalar("SELECT EXISTS(SELECT 1 FROM files WHERE mtime = -1)") ?? 0) == 1 { needsFullScan = true }
     }
 
     private func migrate() throws {
@@ -515,12 +543,14 @@ final class CollectionDB {
     }
 
     /// Albums with a track matching the search.
-    func albums(matching query: String, _ filter: LibraryFilter) throws -> [LibraryAlbum] {
+    /// `artist`: only theirs (the release list beside a search's artist: no cap cutting off late names).
+    func albums(matching query: String, _ filter: LibraryFilter, artist: String? = nil) throws -> [LibraryAlbum] {
         let (sql, args) = matchSQL(query)
+        let only = artist == nil ? "" : " AND a.artist_key = ?"
         return try albums("""
             SELECT \(Self.albumColumns) FROM albums a WHERE a.key IN (SELECT album_key FROM files WHERE id IN (\(sql)))
-            AND \(filter.sql) ORDER BY a.artist COLLATE NOCASE, a.kind, a.year LIMIT 2000
-            """, args)
+            AND \(filter.sql)\(only) ORDER BY a.artist COLLATE NOCASE, a.kind, a.year\(artist == nil ? " LIMIT 2000" : "")
+            """, args + (artist.map { [$0] } ?? []))
     }
 
     /// Artists matching the search by name, or with matching tracks.

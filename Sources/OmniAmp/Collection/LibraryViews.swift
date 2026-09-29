@@ -31,7 +31,33 @@ final class LibraryArt {
         return d
     }
 
-    private init() { memory.countLimit = 600 }
+    private init() {
+        memory.countLimit = 600
+        DispatchQueue.global(qos: .background).async { Self.prune() }
+    }
+
+    /// A folder's cover generation: saving a new cover bumps it, so a read that started before doesn't bring the
+    /// old image back (into memory or the disk cache).
+    nonisolated(unsafe) private static var epochs: [String: Int] = [:]
+    nonisolated private static let epochLock = NSLock()
+    nonisolated private static func epoch(_ folder: String) -> Int {
+        epochLock.lock(); defer { epochLock.unlock() }
+        return epochs[folder, default: 0]
+    }
+
+    /// Once per launch, in the background: "no cover" markers over a month old go (art added since is found), and
+    /// when the cache has grown past 20,000 files, thumbnails not rewritten in a year.
+    nonisolated private static func prune() {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return }
+        let now = Date(), crowded = names.count > 20_000
+        for name in names where name.hasSuffix(".png") {
+            let url = directory.appendingPathComponent(name)
+            guard let a = try? fm.attributesOfItem(atPath: url.path), let modified = a[.modificationDate] as? Date else { continue }
+            let empty = (a[.size] as? Int ?? 0) == 0, age = now.timeIntervalSince(modified)
+            if (empty && age > 30 * 86400) || (crowded && age > 365 * 86400) { try? fm.removeItem(at: url) }
+        }
+    }
 
     /// Whose cover it is: the folder's, or in a folder shared with other releases, this release's own.
     nonisolated static func key(_ a: LibraryAlbum) -> String { a.sharedFolder ? a.folder + "\u{1}" + a.key : a.folder }
@@ -52,9 +78,10 @@ final class LibraryArt {
         waiting[key] = [token: completion]
         // A release sharing its folder is known by its first file: its key changes when it's retagged.
         let firstPath = album.firstPath, own = album.sharedFolder ? album.firstPath : nil, oldKey = album.key
+        let started = Self.epoch(folder)
         let op = BlockOperation {
-            let img = autoreleasepool { Self.thumbnail(folder: folder, release: own, earlier: oldKey, firstPath: firstPath) }
-            DispatchQueue.main.async { MainActor.assumeIsolated { self.finish(key, img) } }
+            let img = autoreleasepool { Self.thumbnail(folder: folder, release: own, earlier: oldKey, firstPath: firstPath, epoch: started) }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.finish(key, img, stale: Self.epoch(folder) != started) } }
         }
         operations[key] = op
         queue.addOperation(op)
@@ -75,6 +102,9 @@ final class LibraryArt {
 
     /// A folder got a new cover: forget the old one (memory and disk), and say so.
     func forget(folder: String) {
+        Self.epochLock.lock()
+        Self.epochs[folder, default: 0] += 1
+        Self.epochLock.unlock()
         for key in keysByFolder[folder, default: []].union([folder]) { memory.removeObject(forKey: key as NSString) }
         // The folder's thumbnail and every release's in it ("<folder>-<release>.png").
         let prefix = Self.hash(folder)
@@ -100,8 +130,9 @@ final class LibraryArt {
         return d.appendingPathComponent(hash(release))
     }
 
-    private func finish(_ key: String, _ img: CGImage?) {
-        memory.setObject(Box(img), forKey: key as NSString)
+    private func finish(_ key: String, _ img: CGImage?, stale: Bool = false) {
+        // Read before a new cover was saved: not kept (whoever shows it asks again after the change).
+        if !stale { memory.setObject(Box(img), forKey: key as NSString) }
         operations[key] = nil
         let cbs = waiting.removeValue(forKey: key) ?? [:]
         cbs.values.forEach { $0(img) }
@@ -111,7 +142,7 @@ final class LibraryArt {
     /// `release`: set when the folder holds other releases too. Then its chosen cover, else the art in its own
     /// files; never the folder's cover.jpg, which can't tell whose it is (it was often saved for a neighbour).
     /// `earlier`: the name a chosen cover was kept under before (the release key).
-    nonisolated private static func thumbnail(folder: String, release: String?, earlier: String, firstPath: String) -> CGImage? {
+    nonisolated private static func thumbnail(folder: String, release: String?, earlier: String, firstPath: String, epoch started: Int) -> CGImage? {
         let file = cacheFile(folder, release: release)
         if let attrs = try? FileManager.default.attributesOfItem(atPath: file.path) {
             if (attrs[.size] as? Int ?? 0) == 0 { return nil }
@@ -126,10 +157,10 @@ final class LibraryArt {
         }
         guard let data, let img = ArtworkStore.image(data, maxPixels: pixels) else {
             // No cover (or the share is away): remember only when the folder is really there.
-            if ExactPath.exists(folder) { FileManager.default.createFile(atPath: file.path, contents: nil) }
+            if ExactPath.exists(folder), epoch(folder) == started { FileManager.default.createFile(atPath: file.path, contents: nil) }
             return nil
         }
-        if let dest = CGImageDestinationCreateWithURL(file as CFURL, UTType.png.identifier as CFString, 1, nil) {
+        if epoch(folder) == started, let dest = CGImageDestinationCreateWithURL(file as CFURL, UTType.png.identifier as CFString, 1, nil) {
             CGImageDestinationAddImage(dest, img, nil)
             CGImageDestinationFinalize(dest)
         }

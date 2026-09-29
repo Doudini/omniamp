@@ -151,4 +151,10 @@ final class DiscographyTests: XCTestCase {
         let second = await lookup.liveArchive("Band", page: 2)
         XCTAssertEqual(second?.recordings.first, LiveRecording(id: "b", date: "2001-01-02", venue: "Two", city: "X", source: nil))
     }
+
+    func testDiscsInSubfoldersDontCollide() {
+        XCTAssertEqual(LiveArchiveDownloads.localName("d1/t01.flac"), "d1-t01.flac")
+        XCTAssertNotEqual(LiveArchiveDownloads.localName("d1/t01.flac"), LiveArchiveDownloads.localName("d2/t01.flac"))
+        XCTAssertEqual(LiveArchiveDownloads.localName("t01.flac"), "t01.flac")
+    }
 }

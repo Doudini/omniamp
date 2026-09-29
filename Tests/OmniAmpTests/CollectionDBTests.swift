@@ -261,6 +261,14 @@ final class CollectionDBTests: XCTestCase {
         XCTAssertEqual(try d.summary().tracks, 0)
     }
 
+    func testSearchReleasesOfOneArtist() throws {
+        let d = try db()
+        try d.upsert([row(1, artist: "Grateful Dead", album: "Live Dead", title: "Dark Star"),
+                      row(2, artist: "Phish", album: "Hoist", title: "Dark Star Cover")])
+        XCTAssertEqual(try d.albums(matching: "dark star", LibraryFilter()).count, 2)
+        XCTAssertEqual(try d.albums(matching: "dark star", LibraryFilter(), artist: Keys.artist("Phish")).map(\.title), ["Hoist"])
+    }
+
     func testRetagMovesTrackBetweenAlbums() throws {
         let d = try db()
         try d.upsert([row(1, artist: "A", album: "X", title: "t")])

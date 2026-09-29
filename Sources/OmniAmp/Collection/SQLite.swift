@@ -58,17 +58,17 @@ final class SQLiteDB {
     /// Run `sql` with `args` and hand each result row over.
     func query(_ sql: String, _ args: [SQLValue?] = [], row: (Statement) throws -> Void) throws {
         let s = try prepare(sql)
+        defer { s.reset() }   // also when a row throws: an unreset statement holds an old read snapshot open
         try s.bind(args)
         while try s.step() { try row(s) }
-        s.reset()
     }
 
     /// Run a statement that returns nothing.
     func run(_ sql: String, _ args: [SQLValue?] = []) throws {
         let s = try prepare(sql)
+        defer { s.reset() }
         try s.bind(args)
         while try s.step() {}
-        s.reset()
     }
 
     /// The first column of the first row.

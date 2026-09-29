@@ -111,8 +111,9 @@ enum ReleaseClassifier {
             kind = .album
         }
 
-        let artist = clean(t.albumArtist) ?? clean(t.artist) ?? artistFromFolders(albumFolder: albumFolder, ancestors: Array(ancestors))
-            ?? "Unknown Artist"
+        // "VA", "Various": all one Various Artists.
+        let artist = (isVarious(t.albumArtist) ? CollectionDB.variousArtists : nil) ?? clean(t.albumArtist) ?? clean(t.artist)
+            ?? artistFromFolders(albumFolder: albumFolder, ancestors: Array(ancestors)) ?? "Unknown Artist"
         if showDate == nil, kind == .show { showDate = tagDay }
         // An untagged show is named by its date and place, whatever the tape folder is called.
         let showName = showDate.map { d in venue.map { "\(d) \($0)" } ?? d }

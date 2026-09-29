@@ -645,7 +645,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                     let all = try db.albums(artist: e.id, filter)
                     timeline.albums = all
                     if searching {
-                        let hits = Set(try db.albums(matching: query, filter).map(\.key))
+                        let hits = Set(try db.albums(matching: query, filter, artist: e.id).map(\.key))
                         list = all.filter { hits.contains($0.key) }
                     } else {
                         list = all

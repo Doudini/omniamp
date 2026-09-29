@@ -127,6 +127,18 @@ final class TagWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: broken), before)
     }
 
+    /// ID3v2.3's year frame holds a year: a full date is cut to it (v2.4 keeps the date).
+    func testYearFrameHoldsFourDigits() throws {
+        let url = try mp3([], padding: 256, version: 3)
+        XCTAssertEqual(TagWriter.write(BasicTags(year: "1994-05-12"), to: url.path, backupDir: nil), .written)
+        let bytes = try Data(contentsOf: url)
+        // Text frames are written as UTF-16.
+        func utf16(_ t: String) -> Data { Data(t.utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] }) }
+        XCTAssertNotNil(bytes.range(of: Data("TYER".utf8)))
+        XCTAssertNotNil(bytes.range(of: utf16("1994")))
+        XCTAssertNil(bytes.range(of: utf16("1994-05")))
+    }
+
     // MARK: FLAC
 
     private func flac() throws -> URL {

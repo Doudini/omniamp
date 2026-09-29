@@ -134,7 +134,8 @@ final class LiveArchiveDownloads {
         func name(_ j: Job) -> String { "\(j.artist), \([j.recording.date, j.recording.venue].compactMap { $0 }.joined(separator: " "))" }
         let run = running, wait = paused
         if let first = run.first, case .running(let done, let total) = first.state {
-            return "⤓ Downloading \(name(first)): " + (total == 0 ? "starting…" : "\(done + 1) of \(total) files")
+            let progress = total == 0 ? "starting…" : done >= total ? "adding to your library…" : "\(done + 1) of \(total) files"
+            return "⤓ Downloading \(name(first)): " + progress
                 + (run.count > 1 ? " · \(run.count - 1) more" : "") + (wait.isEmpty ? "" : " · \(wait.count) paused")
         }
         guard let first = wait.first, case .paused(let done, let total) = first.state else { return nil }
@@ -199,7 +200,10 @@ final class LiveArchiveDownloads {
                     try await Self.download(r.id, f.name, into: staging)
                 }
                 try Task.checkCancellation()
-                self?.set(r.id, .running(done: item.files.count - 1, total: item.files.count))
+                // Into the library: not stopped halfway (that would leave half a show there), so no Cancel now.
+                self?.installing.insert(r.id)
+                self?.set(r.id, .running(done: item.files.count, total: item.files.count))
+                defer { self?.installing.remove(r.id) }
                 try await Task.detached { try Self.install(item, r, artist: artist, from: staging, to: dest) }.value
                 self?.set(r.id, .finished, save: true)
                 // The artist's folder: the show may have gone into "… (2)" next to one already there.
@@ -217,14 +221,25 @@ final class LiveArchiveDownloads {
                     self?.changed()
                     return
                 }
-                // Failed: the files so far stay, so Retry carries on.
+                // Offline or the connection dropped: paused, Resume carries on. Anything else: failed (the files so far
+                // stay, so Retry carries on too).
+                if let u = error as? URLError, [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotConnectToHost,
+                                                .cannotFindHost, .dnsLookupFailed, .dataNotAllowed].contains(u.code) {
+                    let (done, total): (Int, Int) = { if case .running(let d, let t)? = self?.jobs[r.id]?.state { return (d, t) }; return (0, 0) }()
+                    self?.set(r.id, .paused(done: done, total: total), save: true)
+                    return
+                }
                 NSLog("OmniAmp: Live Music Archive download of %@ failed: %@", r.id, "\(error)")
                 self?.set(r.id, .failed((error as? Failure)?.message ?? error.localizedDescription), save: true)
             }
         }
     }
 
+    /// Being moved into the library right now (can't be cancelled).
+    private(set) var installing = Set<String>()
+
     func cancel(_ id: String) {
+        guard !installing.contains(id) else { return }
         if let task = jobs[id]?.task, isRunning(id) { task.cancel(); return }
         // Paused or failed: forget it and its files.
         jobs[id] = nil
@@ -292,7 +307,7 @@ final class LiveArchiveDownloads {
 
     nonisolated private static func download(_ id: String, _ name: String, into folder: URL) async throws {
         // Already here from before a pause: files only land here complete (moved in once downloaded).
-        let dest = folder.appendingPathComponent(safeName(String(name.split(separator: "/").last ?? "")))
+        let dest = folder.appendingPathComponent(localName(name))
         let debug = ProcessInfo.processInfo.environment["OMNIAMP_DEBUG"] != nil
         if FileManager.default.fileExists(atPath: dest.path) {
             if debug { NSLog("OmniAmp: Live Music Archive: have %@", dest.lastPathComponent) }
@@ -315,7 +330,7 @@ final class LiveArchiveDownloads {
     /// Tags each track (while it's still on the local disk), then moves the show into the library: off the main
     /// thread (moving onto a NAS copies every byte).
     nonisolated private static func install(_ item: Item, _ r: LiveRecording, artist: String, from staging: URL, to dest: String) throws {
-        func local(_ name: String) -> URL { staging.appendingPathComponent(safeName(String(name.split(separator: "/").last ?? ""))) }
+        func local(_ name: String) -> URL { staging.appendingPathComponent(localName(name)) }
         let notes = item.files.filter { !Item.isAudio($0.name) }.compactMap { f -> String? in
             guard let data = try? Data(contentsOf: local(f.name)) else { return nil }
             return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
@@ -373,6 +388,9 @@ final class LiveArchiveDownloads {
         let all = runs.flatMap { $0 }
         return all.count == count ? all : nil
     }
+
+    /// A file's name in the show's folder: its subfolder kept ("d1/t01.flac" → "d1-t01.flac"), so discs don't collide.
+    nonisolated static func localName(_ name: String) -> String { safeName(name) }
 
     /// A name that's safe as one folder or file name on a NAS: no slashes or colons, precomposed accents.
     nonisolated static func safeName(_ s: String) -> String {
