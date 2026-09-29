@@ -81,6 +81,7 @@ enum Dash {
         scroll.drawsBackground = true
         scroll.backgroundColor = card
         styleCard(scroll)
+        ScrollFades.add(to: scroll, color: card)
     }
 
     static func styleCard(_ v: NSView, color: NSColor = card) {
@@ -172,4 +173,66 @@ final class Pill: NSControl {
         }
     }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
+/// Soft edges on a list in a card: rows fade into the card at the top and bottom instead of being cut off,
+/// each edge only while there's more to scroll to that way. Clicks go through.
+final class ScrollFades: NSView {
+    private weak var scroll: NSScrollView?
+    private let top = CAGradientLayer(), bottom = CAGradientLayer()
+    static let height: CGFloat = 18
+
+    static func add(to scroll: NSScrollView, color: NSColor) {
+        scroll.subviews.filter { $0 is ScrollFades }.forEach { $0.removeFromSuperview() }
+        let f = ScrollFades(scroll: scroll, color: color)
+        scroll.addSubview(f, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            f.leadingAnchor.constraint(equalTo: scroll.leadingAnchor), f.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
+            f.topAnchor.constraint(equalTo: scroll.topAnchor), f.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
+        ])
+    }
+
+    private init(scroll: NSScrollView, color: NSColor) {
+        self.scroll = scroll
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        for (g, down) in [(top, true), (bottom, false)] {
+            g.colors = [color.cgColor, color.withAlphaComponent(0).cgColor]
+            // Layer y runs up: the top fade is solid at its top, the bottom one at its bottom.
+            g.startPoint = CGPoint(x: 0.5, y: down ? 1 : 0)
+            g.endPoint = CGPoint(x: 0.5, y: down ? 0 : 1)
+            g.opacity = 0
+            layer?.addSublayer(g)
+        }
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(update), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        NotificationCenter.default.addObserver(self, selector: #selector(update), name: NSView.frameDidChangeNotification, object: scroll.documentView)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        top.frame = CGRect(x: 0, y: bounds.height - Self.height, width: bounds.width, height: Self.height)
+        bottom.frame = CGRect(x: 0, y: 0, width: bounds.width, height: Self.height)
+        CATransaction.commit()
+        update()
+    }
+
+    /// Each edge as strong as there's content beyond it (full after a fade's height).
+    @objc private func update() {
+        guard let s = scroll, let doc = s.documentView else { return }
+        let clip = s.contentView.bounds, inset = s.contentInsets
+        let above = clip.minY + inset.top
+        let below = doc.frame.height - clip.maxY + inset.bottom
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        top.opacity = Float(max(0, min(1, above / Self.height)))
+        bottom.opacity = Float(max(0, min(1, below / Self.height)))
+        CATransaction.commit()
+    }
 }

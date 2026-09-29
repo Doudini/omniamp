@@ -70,6 +70,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let letters = LetterStrip()
     private let timeline = LibraryTimeline()
     private var timelineHeight: NSLayoutConstraint!
+    /// The gap under the release shelf (none when it's hidden).
+    private var timelineGap: NSLayoutConstraint!
     private var lettersWidth: NSLayoutConstraint!
     private let search = NSSearchField()
     private let status = NSTextField(labelWithString: "")
@@ -289,6 +291,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         let (side, mid, alb, trk) = (scrolls[0], scrolls[1], scrolls[2], scrolls[3])
         timelineHeight = timeline.heightAnchor.constraint(equalToConstant: 0)
+        timelineGap = alb.topAnchor.constraint(equalTo: timeline.bottomAnchor, constant: 0)
         lettersWidth = letters.widthAnchor.constraint(equalToConstant: 16)
         let gap: CGFloat = 8
         NSLayoutConstraint.activate([
@@ -316,7 +319,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             timeline.leadingAnchor.constraint(equalTo: mid.trailingAnchor, constant: gap),
             timeline.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             timelineHeight,
-            alb.topAnchor.constraint(equalTo: timeline.bottomAnchor, constant: 0),
+            timelineGap,
             alb.leadingAnchor.constraint(equalTo: timeline.leadingAnchor),
             alb.trailingAnchor.constraint(equalTo: timeline.trailingAnchor),
             alb.heightAnchor.constraint(equalTo: trk.heightAnchor, multiplier: 1.1),
@@ -629,6 +632,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         if !withTimeline { timeline.albums = [] }
         timelineHeight.constant = withTimeline ? min(timeline.preferredHeight, 140) : 0
         timeline.isHidden = timelineHeight.constant == 0
+        timelineGap.constant = timeline.isHidden ? 0 : 10
 
         // Group titles with counts ("Shows & Bootlegs · 42", "1977 · 23").
         items = []
