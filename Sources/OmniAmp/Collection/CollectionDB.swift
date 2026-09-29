@@ -315,17 +315,22 @@ final class CollectionDB {
     private func groupVarious(folders: Set<String>, albums: inout Set<String>, artists: inout Set<String>) throws {
         let va = Keys.artist(Self.variousArtists)
         for folder in folders {
-            var rows: [(id: Int64, artist: String, album: String, title: String, performer: String)] = []
-            try db.query("SELECT id, artist_key, album_key, album, artist FROM files WHERE folder = ?", [folder]) { s in
-                rows.append((s.int64(0), s.text(1), s.text(2), s.text(3), Keys.artist(s.text(4))))
+            var rows: [(id: Int64, artist: String, album: String, title: String, performer: String, untagged: Bool)] = []
+            try db.query("SELECT id, artist_key, album_key, album, artist, album_artist FROM files WHERE folder = ?", [folder]) { s in
+                let performer = Keys.artist(s.text(4))
+                // No album-artist tag of its own: the release artist fell back to the track's.
+                rows.append((s.int64(0), s.text(1), s.text(2), s.text(3), performer, Keys.artist(s.text(5)) == performer))
             }
             for (title, group) in Dictionary(grouping: rows, by: { Keys.fold($0.title) }) {
                 // By the tracks' own artists: at least three, none on most of the tracks (an album with a "feat."
                 // track, or a band spelled two ways, stays the band's; two loose files aren't a compilation).
                 // Or grouped before, and a track read again came back with its own artist.
+                // Only tracks without an album-artist tag: an album tagged "Foo" with "Foo feat. X" tracks is Foo's,
+                // however varied its track artists (and retagging must be able to undo a grouping).
+                guard group.allSatisfy({ $0.untagged || $0.artist == va }), Set(group.map(\.artist)).count > 1 else { continue }
                 let performers = Dictionary(grouping: group, by: \.performer)
                 let top = performers.values.map(\.count).max() ?? 0
-                let regrouped = Set(group.map(\.artist)).count > 1 && group.contains { $0.artist == va }
+                let regrouped = group.contains { $0.artist == va }
                 let various = regrouped || (group.count >= 3 && performers.count >= 3 && top * 2 <= group.count)
                 guard !title.isEmpty, title != "unknown album", various else { continue }
                 let key = va + "\u{1}" + title + "\u{1}" + folder
@@ -345,7 +350,16 @@ final class CollectionDB {
 
     /// Once: the compilations stored as a release per artist before groupVarious existed.
     private func groupVariousOnce() throws {
-        guard (try db.scalar("SELECT value FROM meta WHERE key = 'variousGroups'") ?? 0) < 1 else { return }
+        let done = try db.scalar("SELECT value FROM meta WHERE key = 'variousGroups'") ?? 0
+        if done == 1 {
+            // The first version also grouped albums with an album-artist tag ("Foo" with "Foo feat. X" tracks): read the
+            // Various Artists files again, so each gets its own tags back and is judged by the rule above.
+            try db.run("UPDATE files SET mtime = -1 WHERE artist_key = ?", [Keys.artist(Self.variousArtists)])
+            if (try db.scalar("SELECT changes()") ?? 0) > 0 { needsFullScan = true }
+            try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('variousGroups', 2)")
+            return
+        }
+        guard done < 1 else { return }
         try db.transaction {
             var folders = Set<String>()
             try db.query("""
@@ -354,7 +368,7 @@ final class CollectionDB {
             var albums = Set<String>(), artists = Set<String>()
             try groupVarious(folders: folders, albums: &albums, artists: &artists)
             try rollUp(albums: albums, artists: artists)
-            try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('variousGroups', 1)")
+            try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('variousGroups', 2)")
         }
     }
 

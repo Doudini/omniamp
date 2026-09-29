@@ -239,6 +239,16 @@ final class CollectionDBTests: XCTestCase {
                      + [track(111, "Wye Oak feat. Someone", album: "Shriek", folder: "/m/Shriek")])
         XCTAssertEqual(try d.albums(artist: Keys.artist("Wye Oak"), LibraryFilter()).first?.tracks, 10)
         XCTAssertEqual(try d.albums(artist: Keys.artist("Various Artists"), LibraryFilter()).count, 1)
+
+        // Tagged with its album artist: "Foo feat. X" tracks on Foo's album stay Foo's, however many guests.
+        let guests = ["Foo", "Foo feat. A", "Foo feat. B", "Foo feat. C", "Foo feat. D"]
+        try d.upsert(guests.enumerated().map { i, performer in
+            var t = track(200 + i, "Foo", album: "Rap Album", folder: "/m/Rap Album")   // release artist: the album-artist tag
+            t.info.artist = performer
+            return t
+        })
+        XCTAssertEqual(try d.albums(artist: Keys.artist("Foo"), LibraryFilter()).first?.tracks, 5)
+        XCTAssertEqual(try d.albums(artist: Keys.artist("Various Artists"), LibraryFilter()).count, 1)
     }
 
     func testRetagMovesTrackBetweenAlbums() throws {
