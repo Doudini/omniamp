@@ -381,6 +381,8 @@ final class ArtistPage: NSScrollView {
     }
 
     /// Their concerts on the Live Music Archive: the ones you don't have can be downloaded into the library.
+    /// Owned ones are marked in the accent ("you have it"), not the shows' kind color: every row is a show, and
+    /// that red read as an error next to a download.
     private func liveArchiveCard(_ d: ArtistDiscography) -> NSView? {
         guard let recs = d.liveRecordings, !recs.isEmpty else { return nil }
         // Test hook: OMNIAMP_LIVE_DOWNLOAD=<archive.org id>[:mp3] downloads that recording once.
@@ -413,7 +415,7 @@ final class ArtistPage: NSScrollView {
             case .failed(let why)?: detail = "download failed: \(why)"; button = "Retry"
             case nil: if mine != nil { detail += " · in your library" }
             }
-            return .init(lead: r.date ?? "–", main: r.venue ?? r.id, detail: detail, color: mine != nil ? Theme.kind(.show) : Dash.text3,
+            return .init(lead: r.date ?? "–", main: r.venue ?? r.id, detail: detail, color: mine != nil ? Dash.accent : Dash.text3,
                          tip: (r.source.map { "Source: \($0)\n" } ?? "") + (mine != nil ? "You have this show · click to open it or for more"
                             : "Download: FLAC (lossless) into your library · click the row for MP3 or archive.org"),
                          action: { [weak self] in self?.liveArchiveMenu(r, owned: mine) }, hollow: mine == nil,
