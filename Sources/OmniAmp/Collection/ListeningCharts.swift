@@ -210,7 +210,11 @@ final class RowListChart: StatsChart {
             Self.sans(empty, 12, Dash.text3).draw(at: NSPoint(x: 6, y: 5))
             return
         }
-        for (i, r) in rows.enumerated() {
+        // Only the rows in view (a list can be thousands long).
+        let first = max(0, Int(dirtyRect.minY / Self.rowHeight)), last = min(rows.count - 1, Int(dirtyRect.maxY / Self.rowHeight))
+        guard first <= last else { return }
+        for i in first...last {
+            let r = rows[i]
             let y = CGFloat(i) * Self.rowHeight
             if hovered == i {
                 Dash.cardRaised.setFill()

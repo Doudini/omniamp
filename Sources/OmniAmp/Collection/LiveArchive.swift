@@ -34,11 +34,12 @@ extension MetadataLookup {
     /// At most this many recordings are listed (a link covers the rest).
     static let liveArchiveLimit = 300
 
-    /// Their recordings on the Live Music Archive, oldest first, and how many there are. nil: unreachable.
-    func liveArchive(_ artist: String) async -> (recordings: [LiveRecording], total: Int)? {
+    /// Their recordings on the Live Music Archive, oldest first (a page of `liveArchiveLimit`, from 1), and how
+    /// many there are. nil: unreachable.
+    func liveArchive(_ artist: String, page: Int = 1) async -> (recordings: [LiveRecording], total: Int)? {
         guard let json = await get(Self.url("https://archive.org/advancedsearch.php", [
             "q": "collection:etree AND creator:\(Self.lucene(artist))", "fl[]": "identifier,date,venue,coverage,source",
-            "sort[]": "date asc", "rows": String(Self.liveArchiveLimit), "output": "json"])) as? [String: Any],
+            "sort[]": "date asc", "rows": String(Self.liveArchiveLimit), "page": String(page), "output": "json"])) as? [String: Any],
               let response = json["response"] as? [String: Any] else { return nil }
         let docs = (response["docs"] as? [[String: Any]]) ?? []
         func text(_ v: Any?) -> String? { (v as? String) ?? (v as? [String])?.first }

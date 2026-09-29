@@ -139,4 +139,16 @@ final class DiscographyTests: XCTestCase {
         XCTAssertEqual(tags[1].1.title, "Strong", "from the notes")
         XCTAssertEqual(tags[1].1.track, "2")
     }
+
+    func testLiveArchivePages() async {
+        let lookup = MetadataLookup(http: Answers(answers: [
+            ("page=2", #"{"response":{"numFound":301,"docs":[{"identifier":"b","date":"2001-01-02T00:00:00Z","venue":["Two"],"coverage":"X"}]}}"#),
+            ("page=1", #"{"response":{"numFound":301,"docs":[{"identifier":"a","date":"2001-01-01T00:00:00Z","venue":"One"}]}}"#),
+        ]), pace: 0)
+        let first = await lookup.liveArchive("Band")
+        XCTAssertEqual(first?.recordings.map(\.id), ["a"])
+        XCTAssertEqual(first?.total, 301)
+        let second = await lookup.liveArchive("Band", page: 2)
+        XCTAssertEqual(second?.recordings.first, LiveRecording(id: "b", date: "2001-01-02", venue: "Two", city: "X", source: nil))
+    }
 }

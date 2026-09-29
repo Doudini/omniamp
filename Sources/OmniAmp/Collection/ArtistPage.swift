@@ -197,6 +197,8 @@ final class ArtistPage: NSScrollView {
     private var downloadObserver: NSObjectProtocol?
 
     func show(artist key: String) {
+        liveExpanded = ProcessInfo.processInfo.environment["OMNIAMP_LIVE_SHOW_ALL"] != nil   // test hook
+        liveLoadingMore = false
         if downloadObserver == nil {
             downloadObserver = NotificationCenter.default.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.fillDiscography() }
@@ -394,7 +396,7 @@ final class ArtistPage: NSScrollView {
         // Up to 40: all of them, or when there are more, the ones you don't have.
         // Downloads (running or done this session) always stay in the list, even once they're in the library.
         let missing = recs.filter { $0.date.flatMap { owned[$0] } == nil || downloads.states[$0.id] != nil }
-        let shown = recs.count <= 40 ? recs : Array(missing.prefix(40))
+        let shown = liveExpanded || recs.count <= 40 ? recs : Array(missing.prefix(40))
         let list = RowListChart()
         list.rows = shown.map { r in
             let mine = r.date.flatMap { owned[$0] }
@@ -417,18 +419,58 @@ final class ArtistPage: NSScrollView {
                          action: { [weak self] in self?.liveArchiveMenu(r, owned: mine) }, hollow: mine == nil,
                          button: button, buttonAction: press)
         }
-        let n = d.liveArchive ?? recs.count
-        if n > shown.count {
-            list.rows.append(.init(lead: "", main: "All \(n.formatted()) on archive.org ↗", detail: "", tip: "Search the Live Music Archive",
-                                   action: { [name = dash.name] in NSWorkspace.shared.open(MetadataLookup.liveArchiveURL(name)) }))
+        let n = max(d.liveArchive ?? recs.count, recs.count)
+        if !liveExpanded, n > shown.count {
+            list.rows.append(.init(lead: "", main: "Show all \(n.formatted()) ›", detail: "every recording, the ones you have too",
+                                   tip: "List the whole catalog here", action: { [weak self] in
+                                       self?.liveExpanded = true
+                                       self?.fillDiscography()
+                                   }))
+        }
+        if liveExpanded, recs.count < n {
+            list.rows.append(.init(lead: "", main: liveLoadingMore ? "Loading…" : "Load \(min(MetadataLookup.liveArchiveLimit, n - recs.count).formatted()) more ›",
+                                   detail: "\(recs.count.formatted()) of \(n.formatted()) listed", tip: "The next ones from archive.org",
+                                   action: { [weak self] in self?.loadMoreLive() }))
+        }
+        if liveExpanded, recs.count > 40 {
+            list.rows.append(.init(lead: "", main: "‹ Show fewer", detail: "", tip: "Back to the ones you don't have", action: { [weak self] in
+                self?.liveExpanded = false
+                self?.fillDiscography()
+            }))
         }
         let have = recs.filter { $0.date.flatMap { owned[$0] } != nil }.count
-        let note = "concert tapes the artist allows to share, free · you have \(have)" + (recs.count > 40 ? " · the others by date" : "")
+        let note = "concert tapes the artist allows to share, free · you have \(have)"
+            + (recs.count > 40 && !liveExpanded ? " · the others by date" : "")
             + ""
         return StatsPanel("Live Music Archive (\(n.formatted()))", list, note: note)
     }
 
     private static var hookRan = false
+    /// The Live Music Archive card lists everything (Show all), and whether the next page is on its way.
+    private var liveExpanded = false
+    private var liveLoadingMore = false
+
+    /// The next page of the artist's recordings, added to the kept list.
+    private func loadMoreLive() {
+        guard !liveLoadingMore, var d = discography, let recs = d.liveRecordings else { return }
+        liveLoadingMore = true
+        fillDiscography()
+        let key = dash.key, name = dash.name, gen = generation
+        let page = recs.count / MetadataLookup.liveArchiveLimit + 1
+        Task { @MainActor [weak self] in
+            let more = await MetadataLookup.shared.liveArchive(name, page: page)
+            guard let self, gen == self.generation else { return }
+            self.liveLoadingMore = false
+            if let more {
+                let known = Set(recs.map(\.id))
+                d.liveRecordings = recs + more.recordings.filter { !known.contains($0.id) }
+                d.liveArchive = more.total
+                self.discography = d
+                _ = await Task.detached { try? CollectionDB().saveDiscography(key, d) }.value
+            }
+            self.fillDiscography()
+        }
+    }
 
     private func liveArchiveMenu(_ r: LiveRecording, owned: LibraryAlbum?) {
         let menu = NSMenu()
