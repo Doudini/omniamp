@@ -63,10 +63,14 @@ final class LibraryArt {
         }
     }
 
-    /// A folder got a new cover: forget the old one (memory and disk).
+    /// Posted with the folder (`object`) when it gets a new cover.
+    static let coverChanged = Notification.Name("OmniAmpLibraryCoverChanged")
+
+    /// A folder got a new cover: forget the old one (memory and disk), and say so.
     func forget(folder: String) {
         memory.removeObject(forKey: folder as NSString)
         try? FileManager.default.removeItem(at: Self.cacheFile(folder))
+        NotificationCenter.default.post(name: Self.coverChanged, object: folder)
     }
 
     nonisolated private static func cacheFile(_ folder: String) -> URL {
@@ -404,18 +408,22 @@ final class LetterStrip: NSView {
 
 // MARK: Timeline
 
-/// An artist's releases along the years, as a shelf: the studio albums as covers standing at their year (title
-/// underneath), everything else (live albums, EPs, concerts, demos) as dots on the line below, with a count
-/// when several share a year. Hover names a release, click opens it.
+/// An artist's releases along the years, as a shelf: the official releases (albums, EPs, compilations, live
+/// albums) as covers standing at their year, title underneath and a bar in the kind's color; concerts and demos
+/// as dots on the line below, with a count when several share a year. When the covers don't fit, a year's
+/// releases share one cover (the biggest, "×3"). Hover names a release, click opens it.
 final class LibraryTimeline: NSView {
     var albums: [LibraryAlbum] = [] { didSet { rebuild() } }
     var selectedKey: String? { didSet { needsDisplay = true } }
     var onSelect: ((LibraryAlbum) -> Void)?
 
-    /// The covers: one kind (albums, else live albums, else EPs and compilations), one per year (its biggest
-    /// release; the others are counted on it), oldest first.
+    /// The covers, oldest first: each official release, or when they don't fit, one per year (its biggest; the
+    /// others are counted on it).
     private var shelf: [LibraryAlbum] = []
     private var shelfYear: [[LibraryAlbum]] = []
+    private var official: [LibraryAlbum] = []
+    private var shelfKinds: [ReleaseKind] = []
+    private var coverObserver: NSObjectProtocol?
     /// Dots: per kind, per year.
     private var dots: [(kind: ReleaseKind, year: Int, list: [LibraryAlbum])] = []
     private var dotKinds: [ReleaseKind] = []
@@ -445,12 +453,11 @@ final class LibraryTimeline: NSView {
         hovered = nil
         let dated = albums.filter { $0.year != nil }
         undated = albums.count - dated.count
-        let shelfKind: ReleaseKind? = [.album, .live, .single, .compilation].first { k in dated.contains { $0.kind == k } }
         // Shows only (the Shows list): all dots, no shelf.
-        let onShelf = Dictionary(grouping: dated.filter { $0.kind == shelfKind && shelfKind != nil }, by: { $0.year! })
-        shelfYear = onShelf.keys.sorted().map { y in onShelf[y]!.sorted { ($0.tracks, $1.title) > ($1.tracks, $0.title) } }
-        shelf = shelfYear.map { $0[0] }
-        let rest = dated.filter { $0.kind != shelfKind }
+        official = dated.filter(\.kind.isOfficial).sorted { ($0.year!, $0.kind.rawValue, $0.title) < ($1.year!, $1.kind.rawValue, $1.title) }
+        shelfKinds = ReleaseKind.allCases.filter { k in official.contains { $0.kind == k } }
+        arrangeShelf()
+        let rest = dated.filter { !$0.kind.isOfficial }
         var grouped: [ReleaseKind: [Int: [LibraryAlbum]]] = [:]
         for a in rest { grouped[a.kind, default: [:]][a.year!, default: []].append(a) }
         dotKinds = ReleaseKind.allCases.filter { grouped[$0] != nil }
@@ -460,17 +467,47 @@ final class LibraryTimeline: NSView {
             let pad = max(1, (10 - (hi - lo)) / 2)
             span = (lo - pad)...(hi + pad)
         }
-        for a in shelf {
-            let key = a.folder
-            let t = LibraryArt.shared.load(a) { [weak self] img in
-                guard let self, let img else { return }
-                self.covers[key] = img
-                self.needsDisplay = true
+        for a in official { loadCover(a) }
+        if coverObserver == nil {
+            coverObserver = NotificationCenter.default.addObserver(forName: LibraryArt.coverChanged, object: nil, queue: .main) { [weak self] n in
+                MainActor.assumeIsolated {
+                    guard let self, let folder = n.object as? String, let a = self.official.first(where: { $0.folder == folder }) else { return }
+                    self.covers[folder] = nil
+                    self.loadCover(a)
+                }
             }
-            if t >= 0 { tokens.append((a, t)) }
         }
         invalidateIntrinsicContentSize()
         needsDisplay = true
+    }
+
+    private func loadCover(_ a: LibraryAlbum) {
+        let key = a.folder
+        let t = LibraryArt.shared.load(a) { [weak self] img in
+            guard let self, let img else { return }
+            self.covers[key] = img
+            self.needsDisplay = true
+        }
+        if t >= 0 { tokens.append((a, t)) }
+    }
+
+    /// Every release its own cover when they fit side by side; else a cover per year.
+    private func arrangeShelf() {
+        let room = bounds.width - 2 * side - Self.cover
+        let fits = official.count <= 1 || room / CGFloat(official.count - 1) >= Self.cover + 8
+        if fits {
+            shelfYear = official.map { [$0] }
+        } else {
+            let byYear = Dictionary(grouping: official, by: { $0.year! })
+            shelfYear = byYear.keys.sorted().map { y in byYear[y]!.sorted { ($0.tracks, $1.title) > ($1.tracks, $0.title) } }
+        }
+        shelf = shelfYear.map { $0[0] }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = newSize.width != frame.width
+        super.setFrameSize(newSize)
+        if changed { arrangeShelf(); needsDisplay = true }
     }
 
     private var plot: (minX: CGFloat, maxX: CGFloat) { (side + Self.cover / 2, max(side + Self.cover, bounds.width - side - Self.cover / 2)) }
@@ -526,10 +563,12 @@ final class LibraryTimeline: NSView {
         // years in between where they fit.
         var taken: [ClosedRange<CGFloat>] = []
         var lx = side
-        for k in dotKinds {
+        let legendKinds = (shelfKinds.count > 1 ? shelfKinds.map { ($0, true) } : []) + dotKinds.map { ($0, false) }
+        for (k, isCover) in legendKinds {
             let t = NSAttributedString(string: k.title, attributes: [.font: Dash.font(10.5), .foregroundColor: Dash.text2])
             Theme.kind(k).setFill()
-            NSBezierPath(ovalIn: NSRect(x: lx, y: axisY + 3, width: 7, height: 7)).fill()
+            let mark = NSRect(x: lx, y: axisY + 3, width: 7, height: 7)
+            (isCover ? NSBezierPath(roundedRect: mark, xRadius: 1.5, yRadius: 1.5) : NSBezierPath(ovalIn: mark)).fill()
             t.draw(at: NSPoint(x: lx + 11, y: axisY - 1))
             lx += 11 + t.size().width + 14
         }
@@ -606,6 +645,11 @@ final class LibraryTimeline: NSView {
                 r.fill()
                 let g = NSAttributedString(string: Fonts.Icon.music, attributes: [.font: Fonts.hack(16), .foregroundColor: Dash.text3])
                 g.draw(at: NSPoint(x: r.midX - g.size().width / 2, y: r.midY - g.size().height / 2))
+            }
+            // Its kind: a bar along the bottom (the legend names them).
+            if shelfKinds.count > 1 {
+                Theme.kind(a.kind).setFill()
+                NSRect(x: r.minX, y: r.maxY - 4, width: r.width, height: 4).fill()
             }
             NSGraphicsContext.restoreGraphicsState()
             (selected ? Dash.accent : hot ? Dash.text : Dash.border).setStroke()
