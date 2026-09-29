@@ -38,6 +38,7 @@ final class CollectionScanner: @unchecked Sendable {
 
     /// Rescan `scopes` (folders, each inside one of `roots`). `done` runs on the main queue.
     func scan(_ scopes: [String], roots: [String], done: (@Sendable () -> Void)? = nil) {
+        writes.async { self.forgotten.subtract(roots) }   // added again
         lock.lock()
         activeScans += 1
         if activeScans == 1 { progress = Progress(running: true) }
@@ -122,6 +123,8 @@ final class CollectionScanner: @unchecked Sendable {
     /// The user took a folder out of the library: its files go (after anything still being written).
     func forget(root: String) {
         writes.async {
+            self.forgotten.insert(root)
+            self.pending.removeAll { $0.root == root }
             self.flush()
             do { try self.db.removeRoot(root) } catch { NSLog("OmniAmp: library: %@", "\(error)") }
             self.changed()
@@ -131,6 +134,7 @@ final class CollectionScanner: @unchecked Sendable {
 
     private func removeAll(under folder: String) {
         writes.async {
+            self.flush()   // rows still waiting for that folder would come back after the delete
             do {
                 let keys = Array(try self.db.known(under: folder).keys)
                 try self.db.remove(keys: keys)
@@ -190,7 +194,12 @@ final class CollectionScanner: @unchecked Sendable {
 
     // MARK: Writing (on `writes`)
 
+    /// Roots taken out of the library: tags still being read for them are dropped, not written. (On `writes`.)
+    private var forgotten = Set<String>()
+
     private func add(_ rows: [LibraryFile]) {
+        let rows = forgotten.isEmpty ? rows : rows.filter { !forgotten.contains($0.root) }
+        guard !rows.isEmpty else { return }
         pending += rows
         bump { $0.read += rows.count }
         if pending.count >= Self.batchSize { flush() }

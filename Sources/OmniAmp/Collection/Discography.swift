@@ -101,7 +101,7 @@ extension MetadataLookup {
         for page in 0..<pages {
             guard let json = await get(Self.url("https://musicbrainz.org/ws/2/release-group", [
                 "artist": mbid, "type": "album|ep", "release-group-status": status, "limit": "100", "offset": String(page * 100), "fmt": "json"]),
-                                       musicBrainz: true) as? [String: Any] else { return page == 0 ? nil : (out, total) }
+                                       musicBrainz: true) as? [String: Any] else { return nil }   // a partial list would be kept a month
             total = json["release-group-count"] as? Int ?? 0
             let groups = (json["release-groups"] as? [[String: Any]]) ?? []
             out += groups.compactMap { g in

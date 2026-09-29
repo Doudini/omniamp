@@ -21,6 +21,9 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
     private let saveCover = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let status = NSTextField(labelWithString: "")
     private var applyButton: NSButton!
+    private var cancelButton: NSButton?
+    /// Writing: a second Apply (double-click on a match) or Cancel must wait for it.
+    private var busy = false
     private var coverData: Data?
     private var coverTask: Task<Void, Never>?
     /// The folder's own cover file, if it has one.
@@ -130,6 +133,7 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        cancelButton = cancel
         cancel.keyEquivalent = "\u{1b}"
         applyButton = NSButton(title: "Apply", target: self, action: #selector(apply))
         applyButton.keyEquivalent = "\r"
@@ -252,12 +256,16 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
     // MARK: Applying
 
     @objc private func cancel() {
+        guard !busy else { return }
         searchTask?.cancel()
         coverTask?.cancel()
         onDone?(nil)
     }
 
     @objc private func apply() {
+        guard !busy else { return }
+        busy = true
+        cancelButton?.isEnabled = false
         func value(_ f: NSTextField) -> String? {
             let v = f.stringValue.trimmingCharacters(in: .whitespaces)
             return v.isEmpty ? nil : v
@@ -265,7 +273,7 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         let tags = BasicTags(artist: value(artist), album: value(albumField), year: value(year), genre: value(genre))
         let paths = writeTags.state == .on
             ? Array(Set(tracks.map(\.path).filter { ["mp3", "flac"].contains(($0 as NSString).pathExtension.lowercased()) })).sorted() : []
-        let folder = album.folder, release = album.sharedFolder ? album.key : nil
+        let folder = album.folder, release = album.sharedFolder ? album.firstPath : nil   // as LibraryArt knows it
         let wantCover = saveCover.state == .on
         let pendingCover = coverTask
         let chosenURL = table.selectedRow >= 0 && table.selectedRow < candidates.count ? candidates[table.selectedRow].coverURL : nil

@@ -3,6 +3,8 @@ import Foundation
 /// The Listening page's figures: last.fm plays, and where the artists (played and owned) come from.
 struct ListeningStats: Sendable {
     var plays = 0, artists = 0
+    /// Last year's plays up to today's date (to compare this year so far with).
+    var lastYearToDate = 0
     var firstPlay: Date?
     var lastPlay: Date?
     /// Plays whose artist has a known country, and artists still waiting for a lookup.
@@ -225,6 +227,9 @@ extension CollectionDB {
             s.firstPlay = r.optInt(2).map { Date(timeIntervalSince1970: TimeInterval($0)) }
             s.lastPlay = r.optInt(3).map { Date(timeIntervalSince1970: TimeInterval($0)) }
         }
+        let today = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        let md = String(format: "%02d-%02d", today.month ?? 1, today.day ?? 1)
+        s.lastYearToDate = Int(try db.scalar("SELECT count(*) FROM scrobbles WHERE year = ? AND md <= ?", [(today.year ?? 2000) - 1, md]) ?? 0)
         try db.query("""
             SELECT p.country, count(*), count(DISTINCT s.artist_key) FROM scrobbles s JOIN artist_places p ON p.artist_key = s.artist_key
             WHERE p.country IS NOT NULL AND p.country NOT IN ('XE', 'XW', 'XG', 'XU') GROUP BY p.country

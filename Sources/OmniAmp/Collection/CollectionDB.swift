@@ -302,9 +302,11 @@ final class CollectionDB {
 
     /// Forget everything under a root (the user removed it from the library).
     func removeRoot(_ root: String) throws {
-        var keys: [String] = []
-        try db.query("SELECT key FROM files WHERE root = ?", [root]) { keys.append($0.text(0)) }
-        try remove(keys: keys)
+        // By path as well as by the stored root: files read under a folder inside it (added first, then replaced
+        // by this parent) keep that folder as their root until they change.
+        var keys = Set(try known(under: root).keys)
+        try db.query("SELECT key FROM files WHERE root = ?", [root]) { keys.insert($0.text(0)) }
+        try remove(keys: Array(keys))
     }
 
     static let variousArtists = "Various Artists"

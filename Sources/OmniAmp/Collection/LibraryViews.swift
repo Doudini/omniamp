@@ -50,9 +50,10 @@ final class LibraryArt {
         let token = nextToken
         if waiting[key] != nil { waiting[key]![token] = completion; return token }
         waiting[key] = [token: completion]
-        let firstPath = album.firstPath, own = album.sharedFolder ? album.key : nil
+        // A release sharing its folder is known by its first file: its key changes when it's retagged.
+        let firstPath = album.firstPath, own = album.sharedFolder ? album.firstPath : nil, oldKey = album.key
         let op = BlockOperation {
-            let img = autoreleasepool { Self.thumbnail(folder: folder, release: own, firstPath: firstPath) }
+            let img = autoreleasepool { Self.thumbnail(folder: folder, release: own, earlier: oldKey, firstPath: firstPath) }
             DispatchQueue.main.async { MainActor.assumeIsolated { self.finish(key, img) } }
         }
         operations[key] = op
@@ -109,7 +110,8 @@ final class LibraryArt {
     /// From the disk cache, else read and shrunk (and cached; "none" is cached too, as an empty file).
     /// `release`: set when the folder holds other releases too. Then its chosen cover, else the art in its own
     /// files; never the folder's cover.jpg, which can't tell whose it is (it was often saved for a neighbour).
-    nonisolated private static func thumbnail(folder: String, release: String?, firstPath: String) -> CGImage? {
+    /// `earlier`: the name a chosen cover was kept under before (the release key).
+    nonisolated private static func thumbnail(folder: String, release: String?, earlier: String, firstPath: String) -> CGImage? {
         let file = cacheFile(folder, release: release)
         if let attrs = try? FileManager.default.attributesOfItem(atPath: file.path) {
             if (attrs[.size] as? Int ?? 0) == 0 { return nil }
@@ -117,7 +119,8 @@ final class LibraryArt {
         }
         let data: Data?
         if let release {
-            data = (try? Data(contentsOf: chosenFile(release: release))) ?? DetailsReader.read(path: firstPath, folderArt: false).artwork
+            data = (try? Data(contentsOf: chosenFile(release: release))) ?? (try? Data(contentsOf: chosenFile(release: earlier)))
+                ?? DetailsReader.read(path: firstPath, folderArt: false).artwork
         } else {
             data = DetailsReader.folderArt(for: firstPath)?.0 ?? DetailsReader.read(path: firstPath).artwork
         }
@@ -649,10 +652,7 @@ final class LibraryTimeline: NSView {
         }
 
         // Covers last, the hovered and selected ones on top.
-        let order = frames.indices.sorted { a, b in
-            func rank(_ i: Int) -> Int { hovered == .cover(i) ? 2 : shelf[i].key == selectedKey ? 1 : 0 }
-            return (rank(a), a) < (rank(b), b)
-        }
+        let order = coverOrder(frames.count)
         // Each cover's year above it, where it doesn't run into the one before.
         var yearRight: CGFloat = -1
         for i in frames.indices {
@@ -711,11 +711,19 @@ final class LibraryTimeline: NSView {
         }
     }
 
+    /// The order covers are drawn in (the last on top): hovered, then selected, over the rest.
+    private func coverOrder(_ n: Int) -> [Int] {
+        (0..<min(n, shelf.count)).sorted { a, b in
+            func rank(_ i: Int) -> Int { hovered == .cover(i) ? 2 : shelf[i].key == selectedKey ? 1 : 0 }
+            return (rank(a), a) < (rank(b), b)
+        }
+    }
+
     private func hit(_ e: NSEvent) -> Hit? {
         let pt = convert(e.locationInWindow, from: nil)
         let frames = coverFrames()
-        // Topmost first: covers drawn later are on top.
-        if let i = frames.indices.reversed().first(where: { frames[$0].contains(pt) }) { return .cover(i) }
+        // Topmost first, in the order they're drawn (a raised cover is what's under the mouse).
+        if let i = coverOrder(frames.count).reversed().first(where: { frames[$0].contains(pt) }) { return .cover(i) }
         if abs(pt.y - lineY) <= 9 {
             let c = dotCenters()
             if let i = c.indices.min(by: { abs(c[$0].x - pt.x) < abs(c[$1].x - pt.x) }), abs(c[i].x - pt.x) <= 7 { return .dot(i) }

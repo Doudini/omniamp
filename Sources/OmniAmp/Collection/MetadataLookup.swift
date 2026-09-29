@@ -72,6 +72,8 @@ final class MetadataLookup: @unchecked Sendable {
         // MusicBrainz sheds load with 503 "currently busy" now and then: that request, a few seconds later, works.
         for attempt in 0..<(musicBrainz ? 4 : 1) {
             if musicBrainz { await mbGate.wait() }
+            // The page that asked is gone (another artist opened): no request.
+            if Task.isCancelled { return nil }
             var req = URLRequest(url: url, timeoutInterval: 12)
             req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
             req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -94,6 +96,8 @@ final class MetadataLookup: @unchecked Sendable {
     static func url(_ base: String, _ query: [String: String]) -> URL {
         var c = URLComponents(string: base)!
         c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        // URLComponents leaves "+" as it is, and servers read it as a space ("Hootie + the Blowfish").
+        c.percentEncodedQuery = c.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         return c.url!
     }
 
@@ -317,7 +321,10 @@ final class MetadataLookup: @unchecked Sendable {
     }
 
     private func summary(_ title: String, lang: String) async -> ArtistInfo? {
-        let path = title.replacingOccurrences(of: " ", with: "_").addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? title
+        // One path segment: "AC/DC" as AC%2FDC.
+        var segment = CharacterSet.urlPathAllowed
+        segment.remove(charactersIn: "/")
+        let path = title.replacingOccurrences(of: " ", with: "_").addingPercentEncoding(withAllowedCharacters: segment) ?? title
         guard let url = URL(string: "https://\(lang).wikipedia.org/api/rest_v1/page/summary/\(path)?redirect=true"),
               let d = await get(url) as? [String: Any], (d["type"] as? String) != "disambiguation", let extract = d["extract"] as? String,
               !extract.isEmpty else { return nil }

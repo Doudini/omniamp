@@ -196,7 +196,19 @@ final class ArtistPage: NSScrollView {
 
     private var downloadObserver: NSObjectProtocol?
 
+    /// Its lookups (photo, discography, more recordings): cancelled when another artist opens or the page hides,
+    /// so nothing keeps asking MusicBrainz for a page that's gone.
+    private var lookups: [Task<Void, Never>] = []
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        lookups.forEach { $0.cancel() }
+        lookups = []
+    }
+
     func show(artist key: String) {
+        lookups.forEach { $0.cancel() }
+        lookups = []
         liveExpanded = ProcessInfo.processInfo.environment["OMNIAMP_LIVE_SHOW_ALL"] != nil   // test hook
         liveLoadingMore = false
         if downloadObserver == nil {
@@ -238,7 +250,7 @@ final class ArtistPage: NSScrollView {
     /// Looked up when the page opens (never in the background), then kept; the photo is kept on disk.
     private func loadInfo(key: String, name: String, cached: CollectionDB.CachedInfo, gen: Int) {
         let online = UserDefaults.standard.object(forKey: Pref.libraryOnlineLookups) as? Bool ?? true
-        Task { @MainActor [weak self] in
+        lookups.append(Task { @MainActor [weak self] in
             var found: MetadataLookup.ArtistInfo?
             switch cached {
             case .found(let c): found = c
@@ -259,7 +271,7 @@ final class ArtistPage: NSScrollView {
                 self.photo.image = img
                 self.photo.isHidden = false
             }
-        }
+        })
     }
 
     /// The photo, from the disk cache or downloaded and kept there (small: 320 px).
@@ -303,7 +315,7 @@ final class ArtistPage: NSScrollView {
         let album = dash.releases.first { $0.kind == .album }?.title ?? dash.releases.first?.title
         discographyLoading = discography == nil
         fillDiscography()
-        Task { @MainActor [weak self] in
+        lookups.append(Task { @MainActor [weak self] in
             var mbid = known
             if mbid == nil { mbid = await Task.detached { try? CollectionDB().artistMBID(key) }.value ?? nil }
             if mbid == nil { mbid = await MetadataLookup.shared.artistPlace(name: name, mbid: nil, album: album).mbid }
@@ -316,7 +328,7 @@ final class ArtistPage: NSScrollView {
             self.discographyLoading = false
             if let found { self.discography = found }
             self.fillDiscography()
-        }
+        })
     }
 
     private func fillDiscography() {
@@ -466,7 +478,7 @@ final class ArtistPage: NSScrollView {
         fillDiscography()
         let key = dash.key, name = dash.name, gen = generation
         let page = recs.count / MetadataLookup.liveArchiveLimit + 1
-        Task { @MainActor [weak self] in
+        lookups.append(Task { @MainActor [weak self] in
             let more = await MetadataLookup.shared.liveArchive(name, page: page)
             guard let self, gen == self.generation else { return }
             self.liveLoadingMore = false
@@ -478,7 +490,7 @@ final class ArtistPage: NSScrollView {
                 _ = await Task.detached { try? CollectionDB().saveDiscography(key, d) }.value
             }
             self.fillDiscography()
-        }
+        })
     }
 
     private func liveArchiveMenu(_ r: LiveRecording, owned: LibraryAlbum?) {

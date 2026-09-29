@@ -202,8 +202,10 @@ final class LiveArchiveDownloads {
                 self?.set(r.id, .running(done: item.files.count - 1, total: item.files.count))
                 try await Task.detached { try Self.install(item, r, artist: artist, from: staging, to: dest) }.value
                 self?.set(r.id, .finished, save: true)
-                if MusicCollection.shared.roots.contains(where: { dest.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }) {
-                    MusicCollection.shared.rescan(folder: dest)
+                // The artist's folder: the show may have gone into "… (2)" next to one already there.
+                let artistFolder = (dest as NSString).deletingLastPathComponent
+                if MusicCollection.shared.roots.contains(where: { artistFolder.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }) {
+                    MusicCollection.shared.rescan(folder: artistFolder)
                 }
             } catch {
                 if Task.isCancelled || (error as? URLError)?.code == .cancelled || error is CancellationError {
@@ -321,12 +323,16 @@ final class LiveArchiveDownloads {
         for (file, t) in tags(item, r, artist: artist, notes: notes) {
             _ = TagWriter.write(t, to: local(file).path, backupDir: nil)
         }
-        let target = URL(exactPath: dest, isDirectory: true)
+        // Never over files already there (your own copy of the show, an earlier download): a folder of its own.
+        var folder = dest, n = 2
+        while !(ExactPath.contents(ofDirectory: folder) ?? []).filter({ !$0.hasPrefix(".") }).isEmpty {
+            folder = dest + " (\(n))"
+            n += 1
+        }
+        let target = URL(exactPath: folder, isDirectory: true)
         try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         for f in try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil) {
-            let to = target.appendingExact(f.lastPathComponent)
-            try? FileManager.default.removeItem(at: to)
-            try FileManager.default.moveItem(at: f, to: to)
+            try FileManager.default.moveItem(at: f, to: target.appendingExact(f.lastPathComponent))
         }
         try? FileManager.default.removeItem(at: staging)
     }

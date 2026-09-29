@@ -251,6 +251,16 @@ final class CollectionDBTests: XCTestCase {
         XCTAssertEqual(try d.albums(artist: Keys.artist("Various Artists"), LibraryFilter()).count, 1)
     }
 
+    /// /m/A added first, then /m (which replaced it), then /m removed: /m/A's files go too.
+    func testRemovingAParentRootRemovesFilesReadUnderAChild() throws {
+        let d = try db()
+        var child = row(1, artist: "A", album: "X", title: "t")
+        child.root = "/m/A"
+        try d.upsert([child, row(2, artist: "B", album: "Y", title: "u")])
+        try d.removeRoot("/m")
+        XCTAssertEqual(try d.summary().tracks, 0)
+    }
+
     func testRetagMovesTrackBetweenAlbums() throws {
         let d = try db()
         try d.upsert([row(1, artist: "A", album: "X", title: "t")])

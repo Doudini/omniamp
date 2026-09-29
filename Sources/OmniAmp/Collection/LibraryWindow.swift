@@ -70,6 +70,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let letters = LetterStrip()
     private let timeline = LibraryTimeline()
     private var timelineHeight: NSLayoutConstraint!
+    /// Needs Attention is on screen already (a refresh), and a group the test hook asked for.
+    private var attentionOpen = false
+    private var attentionHookGroup: String?
     /// The gap under the release shelf (none when it's hidden).
     private var timelineGap: NSLayoutConstraint!
     private var lettersWidth: NSLayoutConstraint!
@@ -132,6 +135,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
            let s = Section.allCases.first(where: { String(describing: $0) == name }) {
             section = s
             entry = hook.split(separator: ":", maxSplits: 1).dropFirst().first.map { e in s == .artists || s == .shows ? Keys.artist(String(e)) : String(e) }
+            if s == .attention { attentionHookGroup = entry }
         }
         reloadAll(keepEntry: entry, keepAlbum: Self.lastState?.album)
         // Test hook: OMNIAMP_LIBRARY_SONG="Artist|Title" opens that song's page.
@@ -473,7 +477,18 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         songPage.isHidden = true
         artistPage.isHidden = true
         section = .artists
+        // A search or a filter could hide the release (the first search hit would be opened instead).
+        if searching {
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(searchChanged), object: nil)
+            search.stringValue = ""
+            query = ""
+        }
         reloadAll(keepEntry: artist, keepAlbum: album)
+        if filter != LibraryFilter(), selectedEntry?.id != artist || (album != nil && selectedAlbum?.key != album) {
+            filter = LibraryFilter()
+            updateFilterButtons()
+            reloadAll(keepEntry: artist, keepAlbum: album)
+        }
         window?.makeFirstResponder(album == nil ? middle : albumTable)
     }
 
@@ -542,9 +557,14 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         listeningPage.isHidden = !showingListening
         attentionPage.isHidden = !showingAttention
         for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingPage }
+        if !showingAttention { attentionOpen = false }
         if showingAttention {
             for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
-            attentionPage.reload(group: keep)   // a group only from the test hook ("attention:genre")
+            // A refresh keeps the view it's on (a group's full list); coming from another section, the overview.
+            // A group by name only from the test hook ("attention:genre").
+            attentionPage.reload(group: attentionHookGroup ?? (attentionOpen ? attentionPage.group : nil))
+            attentionHookGroup = nil
+            attentionOpen = true
             return
         }
         if showingStats { showStatsPage(); return }
@@ -1080,6 +1100,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 reloadAll(keepEntry: nil)
                 return
             }
+            // While searching, the Artists highlight is the search's own (set by reloadAll): not a choice.
+            if searching { return }
             if !pages.isEmpty {   // leaving the pages
                 pages = []
                 songPage.isHidden = true

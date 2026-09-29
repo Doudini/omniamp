@@ -340,8 +340,9 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         // 1. Key figures: six tiles, this year against last.
         let year = Calendar.current.component(.year, from: Date())
         let perYear = Dictionary(uniqueKeysWithValues: s.years.map { ($0.year, $0.releases) })
-        let now = perYear[year] ?? 0, last = perYear[year - 1] ?? 0
-        let delta: (String, Bool)? = last > 0 ? (String(format: "%.0f%% vs %d", abs(Double(now - last) / Double(last) * 100), year - 1), now >= last) : nil
+        // This year so far against last year up to the same date (not all of last year).
+        let now = perYear[year] ?? 0, last = s.lastYearToDate
+        let delta: (String, Bool)? = last > 0 ? (String(format: "%.0f%% vs %d so far", abs(Double(now - last) / Double(last) * 100), year - 1), now >= last) : nil
         let placed = s.plays > 0 ? Double(s.mappedPlays) / Double(s.plays) : 0
         let since = s.firstPlay.map { Calendar.current.component(.year, from: $0) }
         let topArtist = s.topArtists.first

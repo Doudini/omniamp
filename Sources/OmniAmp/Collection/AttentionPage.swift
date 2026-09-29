@@ -6,7 +6,9 @@ final class AttentionPage: NSScrollView {
     private let stack = NSStackView()
     private var generation = 0
     /// One group's full list (its id), or nil for the overview.
-    private var group: String?
+    private(set) var group: String?
+    /// What was built last: a refresh of the same view keeps its scroll position.
+    private var shown: String??
 
     init() {
         super.init(frame: .zero)
@@ -44,11 +46,17 @@ final class AttentionPage: NSScrollView {
     private func load() {
         generation += 1
         let gen = generation, only = group
+        let keepScroll = shown == .some(only) ? contentView.bounds.origin : nil
         DispatchQueue.global(qos: .userInitiated).async {
             let a = (only == nil ? try? CollectionDB().attention() : try? CollectionDB().attention(limit: 5000, only: only)) ?? LibraryAttention()
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.build(a)
+                self.shown = .some(only)
+                if let keepScroll {
+                    self.contentView.scroll(to: keepScroll)
+                    self.reflectScrolledClipView(self.contentView)
+                }
             }
         }
     }

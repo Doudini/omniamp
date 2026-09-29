@@ -246,10 +246,12 @@ final class YearsChart: StatsChart {
             centres.append(NSPoint(x: r.midX, y: 0))
         }
         if trend, years.count >= 3 {
+            // By calendar year: a year with nothing counts as 0 (not the next year that has something).
+            let byYear = Dictionary(years.map { ($0.year, $0.releases) }, uniquingKeysWith: +)
             var pts: [NSPoint] = []
-            for i in years.indices {
-                let win = years[max(0, i - 1)...min(years.count - 1, i + 1)]
-                let avg = Double(win.reduce(0) { $0 + $1.releases }) / Double(win.count)
+            for (i, y) in years.enumerated() {
+                let win = (y.year - 1...y.year + 1).filter { span.contains($0) }
+                let avg = Double(win.reduce(0) { $0 + (byYear[$1] ?? 0) }) / Double(max(1, win.count))
                 pts.append(NSPoint(x: centres[i].x, y: p.maxY - p.height * CGFloat(avg / top)))
             }
             let line = AreaChart.smoothPath(pts, floor: p.maxY)
@@ -778,14 +780,19 @@ final class StatsPage: NSScrollView {
 
         // Added per year (by file date), for "this year vs last year".
         var perYear: [Int: Int] = [:]
+        // Last year up to this month, to compare this year so far with (not all of last year).
+        let thisYear = Calendar.current.component(.year, from: Date()), thisMonth = Calendar.current.component(.month, from: Date())
+        var lastYearSoFar = 0
         var previous = 0
         for g in s.growth {
-            if let y = Int(g.month.prefix(4)) { perYear[y, default: 0] += g.total - previous }
+            let n = g.total - previous
             previous = g.total
+            guard let y = Int(g.month.prefix(4)) else { continue }
+            perYear[y, default: 0] += n
+            if y == thisYear - 1, let m = Int(g.month.dropFirst(5).prefix(2)), m <= thisMonth { lastYearSoFar += n }
         }
-        let thisYear = Calendar.current.component(.year, from: Date())
-        let added = perYear[thisYear] ?? 0, before = perYear[thisYear - 1] ?? 0
-        let delta: (String, Bool)? = before > 0 ? (String(format: "%.0f%% vs %d", abs(Double(added - before) / Double(before) * 100), thisYear - 1),
+        let added = perYear[thisYear] ?? 0, before = lastYearSoFar
+        let delta: (String, Bool)? = before > 0 ? (String(format: "%.0f%% vs %d so far", abs(Double(added - before) / Double(before) * 100), thisYear - 1),
                                                    added >= before) : nil
         let spark = (thisYear - 9...thisYear).map { Double(perYear[$0] ?? 0) }
         let display = HiFiDisplay()
@@ -981,7 +988,8 @@ final class HiFiDisplay: StatsChart {
                      options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             NSGraphicsContext.restoreGraphicsState()
             // The level meter: bars of the recent values, the last one brightest.
-            if let m = item.meter, let hi = m.max(), hi > 0 {
+            // Scaled to the bars shown (a big year out of view would flatten them).
+            if let m = item.meter, let hi = m.suffix(6).max(), hi > 0 {
                 let w = lit.size().width, bars = m.suffix(6)
                 let mx = x + w + 10, mh = size * 0.8
                 for (j, v) in bars.enumerated() {
