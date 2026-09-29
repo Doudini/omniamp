@@ -125,30 +125,26 @@ final class LiveArchiveDownloads {
         changed()
         jobs[r.id]?.task = Task { [weak self] in
             do {
-                try? FileManager.default.removeItem(at: staging)
-                try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
-                let files = try await Self.files(r.id, format)
-                for (i, name) in files.enumerated() {
+                // Files and tags off the main thread; only the progress comes back to it.
+                try await Task.detached {
+                    try? FileManager.default.removeItem(at: staging)
+                    try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+                }.value
+                let item = try await Self.item(r.id, format)
+                for (i, f) in item.files.enumerated() {
                     try Task.checkCancellation()
-                    self?.set(r.id, .running(done: i, total: files.count))
-                    try await Self.download(r.id, name, into: staging.path)
+                    self?.set(r.id, .running(done: i, total: item.files.count))
+                    try await Self.download(r.id, f.name, into: staging)
                 }
                 try Task.checkCancellation()
-                // Complete: into the library in one go.
-                let target = URL(exactPath: dest, isDirectory: true)
-                try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-                for f in try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil) {
-                    let to = target.appendingExact(f.lastPathComponent)
-                    try? FileManager.default.removeItem(at: to)
-                    try FileManager.default.moveItem(at: f, to: to)
-                }
-                try? FileManager.default.removeItem(at: staging)
+                self?.set(r.id, .running(done: item.files.count - 1, total: item.files.count))
+                try await Task.detached { try Self.install(item, r, artist: artist, from: staging, to: dest) }.value
                 self?.set(r.id, .finished)
                 if MusicCollection.shared.roots.contains(where: { dest.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }) {
                     MusicCollection.shared.rescan(folder: dest)
                 }
             } catch {
-                try? FileManager.default.removeItem(at: staging)
+                Task.detached { try? FileManager.default.removeItem(at: staging) }
                 if Task.isCancelled || (error as? URLError)?.code == .cancelled || error is CancellationError {
                     self?.jobs[r.id] = nil
                     self?.changed()
@@ -175,8 +171,16 @@ final class LiveArchiveDownloads {
 
     struct Failure: Error { let message: String }
 
-    /// The item's audio in that format (its info text too), by name.
-    private static func files(_ id: String, _ format: Format) async throws -> [String] {
+    /// One recording's files to fetch, and what archive.org says about them.
+    struct Item: Sendable {
+        struct File: Sendable { let name: String; var title: String?; var track: String? }
+        var files: [File] = []
+        var artist: String?
+        static func isAudio(_ name: String) -> Bool { ["flac", "mp3"].contains((name as NSString).pathExtension.lowercased()) }
+    }
+
+    /// The item's audio in that format (its info text too), with each file's title and track number.
+    nonisolated private static func item(_ id: String, _ format: Format) async throws -> Item {
         var req = URLRequest(url: URL(string: "https://archive.org/metadata/\(id)")!, timeoutInterval: 20)
         req.setValue(MetadataLookup.userAgent, forHTTPHeaderField: "User-Agent")
         guard let (data, resp) = try? await URLSession.shared.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
@@ -184,7 +188,14 @@ final class LiveArchiveDownloads {
         else { throw Failure(message: "archive.org didn't answer") }
         let picked = pick(files, format)
         if picked.isEmpty { throw Failure(message: "no downloadable audio") }
-        return picked
+        var item = Item()
+        item.artist = (json["metadata"] as? [String: Any])?["creator"] as? String
+        item.files = picked.map { name in
+            let f = files.first { ($0["name"] as? String) == name }
+            return Item.File(name: name, title: (f?["title"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                             track: (f?["track"] as? String).flatMap { $0.isEmpty ? nil : $0 })
+        }
+        return item
     }
 
     /// Lossless: the FLAC originals (else the MP3s); MP3: the VBR copies archive.org makes. Plus the taper's notes.
@@ -203,7 +214,7 @@ final class LiveArchiveDownloads {
         return audio + notes.sorted()
     }
 
-    private static func download(_ id: String, _ name: String, into folder: String) async throws {
+    nonisolated private static func download(_ id: String, _ name: String, into folder: URL) async throws {
         let path = name.split(separator: "/").map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }.joined(separator: "/")
         guard let url = URL(string: "https://archive.org/download/\(id)/\(path)") else { throw Failure(message: "bad file name") }
         var req = URLRequest(url: url, timeoutInterval: 60)
@@ -214,9 +225,67 @@ final class LiveArchiveDownloads {
             try? FileManager.default.removeItem(at: tmp)
             throw Failure(message: status == 401 || status == 403 ? "stream only (the artist doesn't allow downloads)" : "archive.org answered \(status)")
         }
-        let dest = URL(exactPath: folder, isDirectory: true).appendingExact(safeName(String(name.split(separator: "/").last ?? "")))
+        let dest = folder.appendingPathComponent(safeName(String(name.split(separator: "/").last ?? "")))
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
+    }
+
+    /// Tags each track (while it's still on the local disk), then moves the show into the library: off the main
+    /// thread (moving onto a NAS copies every byte).
+    nonisolated private static func install(_ item: Item, _ r: LiveRecording, artist: String, from staging: URL, to dest: String) throws {
+        func local(_ name: String) -> URL { staging.appendingPathComponent(safeName(String(name.split(separator: "/").last ?? ""))) }
+        let notes = item.files.filter { !Item.isAudio($0.name) }.compactMap { f -> String? in
+            guard let data = try? Data(contentsOf: local(f.name)) else { return nil }
+            return String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+        }.joined(separator: "\n")
+        for (file, t) in tags(item, r, artist: artist, notes: notes) {
+            _ = TagWriter.write(t, to: local(file).path, backupDir: nil)
+        }
+        let target = URL(exactPath: dest, isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        for f in try FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil) {
+            let to = target.appendingExact(f.lastPathComponent)
+            try? FileManager.default.removeItem(at: to)
+            try FileManager.default.moveItem(at: f, to: to)
+        }
+        try? FileManager.default.removeItem(at: staging)
+    }
+
+    /// Each audio file's tags: the artist, the show as the album ("2008-06-25 Zebulon, Brooklyn, NY"), the date,
+    /// and the song and its number from archive.org, else from the setlist in the taper's notes.
+    nonisolated static func tags(_ item: Item, _ r: LiveRecording, artist: String, notes: String) -> [(String, BasicTags)] {
+        let audio = item.files.filter { Item.isAudio($0.name) }
+        let setlist = setlist(notes, count: audio.count)
+        let album = [r.date, [r.venue, r.city].compactMap { $0 }.joined(separator: ", ")].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+        return audio.enumerated().map { i, f in
+            let flac = (f.name as NSString).pathExtension.lowercased() == "flac"
+            return (f.name, BasicTags(artist: item.artist ?? artist, album: album.isEmpty ? nil : album,
+                                      year: flac ? r.date : r.date.map { String($0.prefix(4)) }, genre: nil,
+                                      title: f.title ?? setlist?[i], track: f.track ?? String(i + 1)))
+        }
+    }
+
+    /// The songs in a taper's notes, in order ("01. I Wish I Knew", "d1t03 - Strong [4:12]"): numbered lines that
+    /// count up from 1 (a second disc starting again at 1), as many as there are tracks; nil when they don't add up.
+    nonisolated static func setlist(_ text: String, count: Int) -> [String]? {
+        guard count > 0 else { return nil }
+        let line = try! NSRegularExpression(pattern: #"^\s*(?:d\d+\s*)?t?(\d{1,3})\s*[.):\-]?\s+(.+?)\s*(?:[\[(]?\d{1,2}:\d{2}(?::\d{2})?[\])]?)?\s*$"#,
+                                            options: [.caseInsensitive])
+        var runs: [[String]] = [], current: [String] = []
+        for raw in text.components(separatedBy: .newlines) {
+            let ns = raw as NSString
+            guard let m = line.firstMatch(in: raw, range: NSRange(location: 0, length: ns.length)),
+                  let n = Int(ns.substring(with: m.range(at: 1))) else { continue }
+            let title = ns.substring(with: m.range(at: 2)).trimmingCharacters(in: .whitespaces)
+            guard !title.isEmpty, title.count <= 120 else { continue }
+            if n == current.count + 1 { current.append(title) }
+            else if n == 1 { if !current.isEmpty { runs.append(current) }; current = [title] }
+        }
+        if !current.isEmpty { runs.append(current) }
+        // One list of the right length, or discs that add up to it.
+        if let one = runs.first(where: { $0.count == count }) { return one }
+        let all = runs.flatMap { $0 }
+        return all.count == count ? all : nil
     }
 
     /// A name that's safe as one folder or file name on a NAS: no slashes or colons, precomposed accents.

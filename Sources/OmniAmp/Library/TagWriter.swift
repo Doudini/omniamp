@@ -7,11 +7,14 @@ struct BasicTags: Equatable, Sendable {
     var album: String?
     var year: String?
     var genre: String?
+    /// Per track (downloads that come untagged): the song's title and its number ("3" or "3/12").
+    var title: String?
+    var track: String?
 
-    var isEmpty: Bool { [artist, album, year, genre].allSatisfy { ($0 ?? "").isEmpty } }
+    var isEmpty: Bool { [artist, album, year, genre, title, track].allSatisfy { ($0 ?? "").isEmpty } }
 }
 
-/// Writes album artist, album, year and genre into MP3 (ID3v2.3/2.4) and FLAC files. Every other tag,
+/// Writes album artist, album, year and genre (and a track's title and number) into MP3 (ID3v2.3/2.4) and FLAC files. Every other tag,
 /// picture and the audio stay as they are.
 ///
 /// When the new tag fits in the space the old one had (tags usually carry padding), only the tag is
@@ -168,6 +171,8 @@ enum TagWriter {
             add.append(textFrame(version == 4 ? "TDRC" : "TYER", y, version: version))
         }
         if let g = tags.genre, !g.isEmpty { replace.insert("TCON"); add.append(textFrame("TCON", g, version: version)) }
+        if let t = tags.title, !t.isEmpty { replace.insert("TIT2"); add.append(textFrame("TIT2", t, version: version)) }
+        if let n = tags.track, !n.isEmpty { replace.insert("TRCK"); add.append(textFrame("TRCK", n, version: version)) }
         let body = add.flatMap { $0 } + frames.filter { !replace.contains($0.id) }.flatMap(\.raw)
         func tag(padding: Int) -> [UInt8] {
             Array("ID3".utf8) + [version, 0, 0] + synchsafe(body.count + padding) + body + [UInt8](repeating: 0, count: padding)
@@ -229,6 +234,8 @@ enum TagWriter {
         if let a = tags.album, !a.isEmpty { drop.insert("ALBUM"); add.append("ALBUM=\(a)") }
         if let y = tags.year, !y.isEmpty { drop.formUnion(["DATE", "YEAR"]); add.append("DATE=\(y)") }
         if let g = tags.genre, !g.isEmpty { drop.insert("GENRE"); add.append("GENRE=\(g)") }
+        if let t = tags.title, !t.isEmpty { drop.insert("TITLE"); add.append("TITLE=\(t)") }
+        if let n = tags.track, !n.isEmpty { drop.insert("TRACKNUMBER"); add.append("TRACKNUMBER=\(n)") }
         let list = comments.filter { !drop.contains(key($0)) } + add
         func le(_ n: Int) -> [UInt8] { [UInt8(n & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 24 & 0xFF)] }
         var comment = le(vendor.count) + vendor + le(list.count)

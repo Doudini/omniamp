@@ -109,4 +109,34 @@ final class DiscographyTests: XCTestCase {
         XCTAssertEqual(LiveArchiveDownloads.pick([["name": "a.shn", "format": "Shorten"], ["name": "a.mp3", "format": "VBR MP3"]], .lossless), ["a.mp3"])
         XCTAssertEqual(LiveArchiveDownloads.pick([["name": "a.shn", "format": "Shorten"]], .mp3), [])
     }
+
+    func testSetlistFromNotes() {
+        let notes = """
+            Sharon Van Etten
+            2008-06-25 Zebulon, Brooklyn, NY
+            Lineage: DPA 4021 > V3 > 1. Sound Devices
+
+            01. I Wish I Knew [3:39]
+            02 - Strong (3:36)
+            d1t03 Have You Seen
+            4) Carry On 3:58
+            """
+        XCTAssertEqual(LiveArchiveDownloads.setlist(notes, count: 4), ["I Wish I Knew", "Strong", "Have You Seen", "Carry On"])
+        // Two discs, numbered again from 1.
+        XCTAssertEqual(LiveArchiveDownloads.setlist("d1t01 A\nd1t02 B\nd2t01 C", count: 3), ["A", "B", "C"])
+        XCTAssertNil(LiveArchiveDownloads.setlist(notes, count: 9), "doesn't add up: no guessing")
+    }
+
+    func testTagsForDownloadedShow() {
+        var item = LiveArchiveDownloads.Item()
+        item.artist = "Sharon Van Etten"
+        item.files = [.init(name: "t01.flac", title: "I Wish I Knew", track: "01"), .init(name: "t02.flac"), .init(name: "info.txt")]
+        let r = LiveRecording(id: "x", date: "2008-06-25", venue: "Zebulon", city: "Brooklyn, NY", source: "AUD")
+        let tags = LiveArchiveDownloads.tags(item, r, artist: "sharon van etten", notes: "1. I Wish I Knew\n2. Strong")
+        XCTAssertEqual(tags.map(\.0), ["t01.flac", "t02.flac"])
+        XCTAssertEqual(tags[0].1, BasicTags(artist: "Sharon Van Etten", album: "2008-06-25 Zebulon, Brooklyn, NY", year: "2008-06-25",
+                                            title: "I Wish I Knew", track: "01"))
+        XCTAssertEqual(tags[1].1.title, "Strong", "from the notes")
+        XCTAssertEqual(tags[1].1.track, "2")
+    }
 }
