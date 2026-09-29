@@ -225,10 +225,7 @@ final class SongPage: NSScrollView {
         title.font = Dash.font(24, .semibold)
         title.textColor = Dash.text
         title.lineBreakMode = .byTruncatingTail
-        let artist = NSButton(title: first.track.artist, target: self, action: #selector(openArtist))
-        artist.isBordered = false
-        artist.attributedTitle = NSAttributedString(string: first.track.artist, attributes: [.font: Dash.font(14, .semibold),
-                                                                                             .foregroundColor: Dash.accent])
+        let artist = Pill(first.track.artist, glyph: LibraryWindowController.Section.artists.glyph, target: self, action: #selector(openArtist))
         artist.toolTip = "Open the artist"
         let official = versions.filter { $0.kind.isOfficial }.count
         let years = versions.compactMap { $0.when.map { Int($0) } }

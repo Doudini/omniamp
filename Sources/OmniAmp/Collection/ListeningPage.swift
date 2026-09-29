@@ -125,7 +125,8 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
         map.onSelect = { [weak self] iso, name in self?.select(iso: iso, name: name) }
         countryArtists.onClick = { [weak self] in self?.onArtist?($0.id) }
         // Only while on screen: appear() reloads when it's shown again (lookups change the figures every few seconds).
-        for name in [ListeningHistory.changed, MusicCollection.changed] {
+        // A new day ("On this day", "last 7 days") or time zone: the figures again, if on screen.
+        for name in [ListeningHistory.changed, MusicCollection.changed, .NSCalendarDayChanged, .NSSystemTimeZoneDidChange] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { if self?.isHidden == false { self?.reload() } }
             })
@@ -177,7 +178,8 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
             }
             let s = data.stats, river = data.river, today = data.today, years = data.years
             DispatchQueue.main.async { [weak self] in
-                guard let self, gen == self.generation, let s else { return }
+                // No figures (the query failed): the page still builds, with its name field and a note.
+                guard let self, gen == self.generation else { return }
                 self.stats = s
                 self.river = river
                 self.today = today
@@ -355,7 +357,7 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
                   meter: (year - 9...year).map { Double(perYear[$0] ?? 0) }, delta: delta),
             .init(value: s.artists.formatted(), label: "artists"),
             .init(value: (showOwned ? s.ownedByCountry : s.playsByCountry).count.formatted(), label: "countries",
-                  tip: String(format: "%.0f%% of plays placed on the map", placed * 100)),
+                  tip: showOwned ? "Countries of the artists in your library" : String(format: "%.0f%% of plays placed on the map", placed * 100)),
             .init(value: topArtist.map { $0.label } ?? "–", label: "most played",
                   tip: topArtist.map { "\($0.label): \(Int($0.value).formatted()) plays" }),
             .init(value: since.map(String.init) ?? "–", label: "since"),
@@ -506,7 +508,8 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
     }
 
     @objc private func yearChosen() {
-        guard let y = Int(yearMenu.titleOfSelectedItem ?? "") else { period = .days(365); updatePeriodControls(); loadTop(); return }
+        // "Year…" is a heading, not a choice: the period stays.
+        guard let y = Int(yearMenu.titleOfSelectedItem ?? "") else { updatePeriodControls(); return }
         period = .year(y)
         updatePeriodControls()
         loadTop()
@@ -515,18 +518,14 @@ final class ListeningPage: NSScrollView, NSTextFieldDelegate {
     /// The chosen period's top artists, read off the main thread; the card keeps its place.
     private func loadTop() {
         let p = period
-        var from: Int?, to: Int?
-        let now = Date()
+        var from: Int?, year: Int?
         switch p {
-        case .days(let n): from = Int(now.timeIntervalSince1970) - n * 86400
-        case .year(let y):
-            let c = Calendar.current
-            from = c.date(from: DateComponents(year: y, month: 1, day: 1)).map { Int($0.timeIntervalSince1970) }
-            to = c.date(from: DateComponents(year: y + 1, month: 1, day: 1)).map { Int($0.timeIntervalSince1970) }
+        case .days(let n): from = Int(Date().timeIntervalSince1970) - n * 86400
+        case .year(let y): year = y
         case .all: break
         }
         DispatchQueue.global(qos: .userInitiated).async {
-            let bars = (try? CollectionDB().topArtists(from: from, to: to)) ?? []
+            let bars = (try? CollectionDB().topArtists(from: from, to: nil, year: year)) ?? []
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.period == p else { return }
                 let total = bars.reduce(0) { $0 + Int($1.value) }

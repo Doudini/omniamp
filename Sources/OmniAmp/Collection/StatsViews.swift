@@ -30,11 +30,16 @@ class StatsChart: NSView, NSViewToolTipOwner {
         super.layout()
         layoutRegions()
         removeAllToolTips()
-        for r in regions { addToolTip(r.rect, owner: self, userData: nil) }
+        for r in regions + extraTipAreas().map({ Region(rect: $0, tip: "", action: nil) }) { addToolTip(r.rect, owner: self, userData: nil) }
     }
 
+    /// The region under a point: by rectangle, unless a chart knows its shapes better (the donut's ring).
+    func regionIndex(at p: NSPoint) -> Int? { regions.firstIndex { $0.rect.contains(p) } }
+    /// More areas with tooltips than the regions' rectangles (resolved by regionIndex).
+    func extraTipAreas() -> [NSRect] { [] }
+
     func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData: UnsafeMutableRawPointer?) -> String {
-        regions.first { $0.rect.contains(point) }?.tip ?? ""
+        regionIndex(at: point).map { regions[$0].tip } ?? ""
     }
 
     override func updateTrackingAreas() {
@@ -44,10 +49,7 @@ class StatsChart: NSView, NSViewToolTipOwner {
                                        owner: self))
     }
 
-    private func index(_ e: NSEvent) -> Int? {
-        let p = convert(e.locationInWindow, from: nil)
-        return regions.firstIndex { $0.rect.contains(p) }
-    }
+    private func index(_ e: NSEvent) -> Int? { regionIndex(at: convert(e.locationInWindow, from: nil)) }
     override func mouseMoved(with event: NSEvent) { hovered = index(event) }
     override func mouseExited(with event: NSEvent) { hovered = nil }
     override func mouseDown(with event: NSEvent) { if let i = index(event) { regions[i].action?() } }
@@ -480,6 +482,24 @@ final class DonutChart: StatsChart {
         return NSPoint(x: c.x + r + 22, y: (bounds.height - h) / 2 + 2)
     }
 
+    /// The ring itself: the slice under the pointer, by its angle (the legend rows are the regions).
+    override func regionIndex(at p: NSPoint) -> Int? {
+        let (c, r) = ring
+        let width: CGFloat = max(10, r * 0.28), d = hypot(p.x - c.x, p.y - c.y)
+        if d >= r - width / 2 - 3, d <= r + width / 2 + 3 {
+            // Flipped: angles run clockwise from the right; slices start at the top (-90°).
+            var deg = atan2(p.y - c.y, p.x - c.x) * 180 / .pi
+            if deg < -90 { deg += 360 }
+            if let i = angles().firstIndex(where: { deg >= $0.start && deg < $0.end }), i < regions.count { return i }
+        }
+        return super.regionIndex(at: p)
+    }
+
+    override func extraTipAreas() -> [NSRect] {
+        let (c, r) = ring
+        return [NSRect(x: c.x - r - 12, y: c.y - r - 12, width: 2 * r + 24, height: 2 * r + 24)]
+    }
+
     override func layoutRegions() {
         let o = legendOrigin
         regions = slices.enumerated().map { i, s in
@@ -525,7 +545,15 @@ final class DonutChart: StatsChart {
 
 /// Shows owned by month of the concert: a column per year, a row per month; stronger red for more shows.
 final class ShowCalendar: StatsChart {
-    var months: [String: Int] = [:] { didSet { needsLayout = true; needsDisplay = true } }
+    /// Shows per month ("1977-05"); a date with only a year has no cell, so it's left out (it would stretch the
+    /// years and the scale).
+    var months: [String: Int] = [:] {
+        didSet {
+            let valid = months.filter { $0.key.count == 7 && $0.key.dropFirst(4).first == "-" }
+            if valid.count != months.count { months = valid; return }
+            needsLayout = true; needsDisplay = true
+        }
+    }
     var onClick: ((Int) -> Void)?
     private static let gap: CGFloat = 2, labelW: CGFloat = 30, top: CGFloat = 4
 
@@ -582,7 +610,7 @@ final class ShowCalendar: StatsChart {
             return
         }
         for m in stride(from: 0, to: 12, by: 3) {
-            Self.text(Self.monthNames[m], 8, Dash.text3).draw(at: NSPoint(x: 0, y: rect(col: 0, month: m).minY + cell / 2 - 6))
+            Self.text(Self.monthNames[m], 8.5, Dash.text3).draw(at: NSPoint(x: 0, y: rect(col: 0, month: m).minY + cell / 2 - 6))
         }
         let most = CGFloat(max(months.values.max() ?? 1, 1))
         let hotRect = hovered.flatMap { $0 < regions.count ? regions[$0].rect : nil }
@@ -592,7 +620,7 @@ final class ShowCalendar: StatsChart {
         for (col, y) in years.enumerated() {
             let x = rect(col: col, month: 0).minX
             if (y % 5 == 0 || col == 0 || col == years.count - 1), x - lastLabel > 30 {
-                Self.text(String(y), 8, Dash.text3).draw(at: NSPoint(x: x, y: bottom + 3))
+                Self.text(String(y), 8.5, Dash.text3).draw(at: NSPoint(x: x, y: bottom + 3))
                 lastLabel = x
             }
             for m in 0..<12 {

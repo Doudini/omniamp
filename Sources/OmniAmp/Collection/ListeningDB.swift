@@ -318,14 +318,16 @@ struct OnThisDay: Sendable {
 
 extension CollectionDB {
     /// Most played artists between two times (nil: no limit), with whether they're in the library.
-    func topArtists(from: Int?, to: Int?, limit: Int = 15) throws -> [LibraryStats.Bar] {
+    /// `year`: by the year each play was stored under (as the year charts count), not a time range.
+    func topArtists(from: Int?, to: Int?, year: Int? = nil, limit: Int = 15) throws -> [LibraryStats.Bar] {
         var owned: [String: Int] = [:]
         try db.query("SELECT artist_key, sum(tracks) FROM albums GROUP BY artist_key") { owned[$0.text(0)] = $0.int(1) }
         var out: [LibraryStats.Bar] = []
+        let (condition, args): (String, [SQLValue?]) = year.map { ("year = ?", [$0]) } ?? ("ts >= ? AND ts < ?", [from ?? 0, to ?? Int.max])
         try db.query("""
-            SELECT artist_key, min(artist), count(*) AS n FROM scrobbles WHERE ts >= ? AND ts < ?
+            SELECT artist_key, min(artist), count(*) AS n FROM scrobbles WHERE \(condition)
             GROUP BY artist_key ORDER BY n DESC LIMIT ?
-            """, [from ?? 0, to ?? Int.max, limit]) { r in
+            """, args + [limit]) { r in
             out.append(.init(id: r.text(0), label: r.text(1), value: Double(r.int(2)), count: owned[r.text(0)]))
         }
         return out

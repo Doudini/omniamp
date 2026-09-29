@@ -443,8 +443,13 @@ final class LetterStrip: NSView {
     override var isFlipped: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
+        // A card like the lists beside it.
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
         Dash.card.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+        card.fill()
+        Dash.border.setStroke()
+        card.lineWidth = 1
+        card.stroke()
         let h = bounds.height / CGFloat(Self.letters.count)
         let size = min(10, max(7, h * 0.8))
         for (i, l) in Self.letters.enumerated() {
@@ -474,7 +479,7 @@ final class LetterStrip: NSView {
 /// albums) as covers standing at their year, title underneath and a bar in the kind's color; concerts and demos
 /// as dots on the line below, with a count when several share a year. When the covers don't fit, a year's
 /// releases share one cover (the biggest, "×3"). Hover names a release, click opens it.
-final class LibraryTimeline: NSView {
+final class LibraryTimeline: NSView, NSViewToolTipOwner {
     var albums: [LibraryAlbum] = [] { didSet { rebuild() } }
     var selectedKey: String? { didSet { needsDisplay = true } }
     var onSelect: ((LibraryAlbum) -> Void)?
@@ -494,7 +499,7 @@ final class LibraryTimeline: NSView {
     private var undated = 0
     private var covers: [String: CGImage] = [:]
     private var tokens: [(LibraryAlbum, Int)] = []
-    private var hovered: Hit? { didSet { if hovered != oldValue { needsDisplay = true; updateTip() } } }
+    private var hovered: Hit? { didSet { if hovered != oldValue { needsDisplay = true } } }
 
     private enum Hit: Equatable { case cover(Int), dot(Int) }
 
@@ -545,6 +550,7 @@ final class LibraryTimeline: NSView {
         }
         invalidateIntrinsicContentSize()
         needsDisplay = true
+        needsLayout = true   // the tooltip and cursor areas
     }
 
     private func loadCover(_ a: LibraryAlbum) {
@@ -751,8 +757,9 @@ final class LibraryTimeline: NSView {
         }
     }
 
-    private func hit(_ e: NSEvent) -> Hit? {
-        let pt = convert(e.locationInWindow, from: nil)
+    private func hit(_ e: NSEvent) -> Hit? { hit(at: convert(e.locationInWindow, from: nil)) }
+
+    private func hit(at pt: NSPoint) -> Hit? {
         let frames = coverFrames()
         // Topmost first, in the order they're drawn (a raised cover is what's under the mouse).
         if let i = coverOrder(frames.count).reversed().first(where: { frames[$0].contains(pt) }) { return .cover(i) }
@@ -770,11 +777,27 @@ final class LibraryTimeline: NSView {
         }
     }
 
-    private func updateTip() {
-        guard let h = hovered, let a = albumsAt(h).first else { toolTip = nil; return }
+    // Tooltips and the hand cursor: an area per cover and dot, the text by what's on top at the point (as clicks).
+    private var markAreas: [NSRect] {
+        coverFrames() + dotCenters().map { NSRect(x: $0.x - 7, y: $0.y - 9, width: 14, height: 18) }
+    }
+
+    override func layout() {
+        super.layout()
+        removeAllToolTips()
+        for r in markAreas { addToolTip(r, owner: self, userData: nil) }
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func resetCursorRects() {
+        for r in markAreas { addCursorRect(r, cursor: .pointingHand) }
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData: UnsafeMutableRawPointer?) -> String {
+        guard let h = hit(at: point), let a = albumsAt(h).first else { return "" }
         let list = albumsAt(h)
         func name(_ a: LibraryAlbum) -> String { a.kind == .show ? [a.showDate, a.venue].compactMap { $0 }.joined(separator: " ") : a.title }
-        toolTip = list.count == 1 ? "\(a.year.map(String.init) ?? "") · \(a.kind.title) · \(name(a))"
+        return list.count == 1 ? "\(a.year.map(String.init) ?? "") · \(a.kind.title) · \(name(a))"
             : "\(a.year.map(String.init) ?? "") · \(list.count) \(a.kind.title.lowercased()):\n" + list.prefix(10).map(name).joined(separator: "\n")
     }
 

@@ -92,7 +92,7 @@ final class RiverChart: StatsChart {
         // Direct labels: in the thickest year that has room and doesn't cover another label (thin bands rely on the legend).
         var placed: [NSRect] = []
         for (j, band) in b.enumerated() {
-            let label = Self.sans(band.name, 11.5, .white, .semibold)
+            let label = Self.sans(band.name, 11.5, Dash.text, .semibold)
             let w = label.size().width, lh = label.size().height
             let years = e[j].indices.sorted { e[j][$0].bottom - e[j][$0].top > e[j][$1].bottom - e[j][$1].top }
             for i in years {
@@ -129,9 +129,15 @@ final class RiverChart: StatsChart {
         guard river.years.count > 1 else { return nil }
         let pt = convert(e.locationInWindow, from: nil), p = plot
         guard p.insetBy(dx: -4, dy: 0).contains(pt) else { return nil }
-        let i = max(0, min(river.years.count - 1, Int(((pt.x - p.minX) / p.width * CGFloat(river.years.count - 1)).rounded())))
+        let at = max(0, min(CGFloat(river.years.count - 1), (pt.x - p.minX) / p.width * CGFloat(river.years.count - 1)))
+        let i = Int(at.rounded())
+        // The bands' edges where the pointer is, between the two years around it (they're drawn as curves there).
+        let i0 = Int(at.rounded(.down)), i1 = min(river.years.count - 1, i0 + 1), t = at - CGFloat(i0)
         let e = edges()
-        guard let j = e.indices.first(where: { pt.y >= e[$0][i].top && pt.y <= e[$0][i].bottom }) else { return nil }
+        func edge(_ j: Int) -> (top: CGFloat, bottom: CGFloat) {
+            (e[j][i0].top + (e[j][i1].top - e[j][i0].top) * t, e[j][i0].bottom + (e[j][i1].bottom - e[j][i0].bottom) * t)
+        }
+        guard let j = e.indices.first(where: { pt.y >= edge($0).top && pt.y <= edge($0).bottom }) else { return nil }
         return (j, i)
     }
 

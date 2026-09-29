@@ -117,7 +117,7 @@ final class AttentionPage: NSScrollView {
     private func buildGroup(_ g: LibraryAttention.Group?) {
         defer { window?.makeFirstResponder(documentView) }   // Esc goes back to the overview
         let backButton = Pill("‹  Needs Attention", target: self, action: #selector(back))
-        let title = Dash.label(g?.title ?? "Nothing left here", Dash.font(22, .semibold), Dash.text)
+        let title = Dash.label(g?.title ?? "Nothing left here", Dash.font(24, .semibold), Dash.text)
         let top = NSStackView(views: [backButton, title])
         top.spacing = 12
         var views: [NSView] = [top]
