@@ -404,134 +404,275 @@ final class LetterStrip: NSView {
 
 // MARK: Timeline
 
-/// An artist's releases along the years: a lane per kind (albums, live, shows, demos…), each year's releases
-/// as a block that's brighter the more there are. Click a block to go to that year's first release.
+/// An artist's releases along the years, as a shelf: the studio albums as covers standing at their year (title
+/// underneath), everything else (live albums, EPs, concerts, demos) as dots on the line below, with a count
+/// when several share a year. Hover names a release, click opens it.
 final class LibraryTimeline: NSView {
     var albums: [LibraryAlbum] = [] { didSet { rebuild() } }
     var selectedKey: String? { didSet { needsDisplay = true } }
     var onSelect: ((LibraryAlbum) -> Void)?
 
-    private var lanes: [ReleaseKind] = []
-    private var cells: [ReleaseKind: [Int: [LibraryAlbum]]] = [:]
+    /// The covers: one kind (albums, else live albums, else EPs and compilations), one per year (its biggest
+    /// release; the others are counted on it), oldest first.
+    private var shelf: [LibraryAlbum] = []
+    private var shelfYear: [[LibraryAlbum]] = []
+    /// Dots: per kind, per year.
+    private var dots: [(kind: ReleaseKind, year: Int, list: [LibraryAlbum])] = []
+    private var dotKinds: [ReleaseKind] = []
     private var span: ClosedRange<Int> = 2000...2001
     private var undated = 0
-    static let laneHeight: CGFloat = 13
-    private let labelWidth: CGFloat = 54
-    private let axisHeight: CGFloat = 14
+    private var covers: [String: CGImage] = [:]
+    private var tokens: [(LibraryAlbum, Int)] = []
+    private var hovered: Hit? { didSet { if hovered != oldValue { needsDisplay = true; updateTip() } } }
+
+    private enum Hit: Equatable { case cover(Int), dot(Int) }
+
+    private static let cover: CGFloat = 44
+    private let side: CGFloat = 10
+    private var shelfTop: CGFloat { 16 }
+    private var titleTop: CGFloat { shelfTop + Self.cover + 5 }
+    private var lineY: CGFloat { shelf.isEmpty ? 14 : titleTop + 30 }
+    private var axisY: CGFloat { lineY + 10 }
 
     override var isFlipped: Bool { true }
 
-    var preferredHeight: CGFloat { lanes.isEmpty ? 0 : CGFloat(lanes.count) * Self.laneHeight + axisHeight + 8 }
+    var preferredHeight: CGFloat { albums.isEmpty ? 0 : axisY + 16 }
 
     private func rebuild() {
-        cells = [:]
-        undated = 0
-        var years: [Int] = []
-        for a in albums {
-            guard let y = a.year else { undated += 1; continue }
-            cells[a.kind, default: [:]][y, default: []].append(a)
-            years.append(y)
-        }
-        lanes = ReleaseKind.allCases.filter { cells[$0] != nil }
-        // At least a decade wide, so a single year is a mark on a line, not a bar across it.
+        for (a, t) in tokens { LibraryArt.shared.cancel(a, token: t) }
+        tokens = []
+        covers = [:]
+        hovered = nil
+        let dated = albums.filter { $0.year != nil }
+        undated = albums.count - dated.count
+        let shelfKind: ReleaseKind? = [.album, .live, .single, .compilation].first { k in dated.contains { $0.kind == k } }
+        // Shows only (the Shows list): all dots, no shelf.
+        let onShelf = Dictionary(grouping: dated.filter { $0.kind == shelfKind && shelfKind != nil }, by: { $0.year! })
+        shelfYear = onShelf.keys.sorted().map { y in onShelf[y]!.sorted { ($0.tracks, $1.title) > ($1.tracks, $0.title) } }
+        shelf = shelfYear.map { $0[0] }
+        let rest = dated.filter { $0.kind != shelfKind }
+        var grouped: [ReleaseKind: [Int: [LibraryAlbum]]] = [:]
+        for a in rest { grouped[a.kind, default: [:]][a.year!, default: []].append(a) }
+        dotKinds = ReleaseKind.allCases.filter { grouped[$0] != nil }
+        dots = dotKinds.flatMap { k in grouped[k]!.map { (k, $0.key, $0.value) } }.sorted { ($0.year, $0.kind.rawValue) < ($1.year, $1.kind.rawValue) }
+        let years = dated.compactMap(\.year)
         if let lo = years.min(), let hi = years.max() {
             let pad = max(1, (10 - (hi - lo)) / 2)
             span = (lo - pad)...(hi + pad)
         }
-        toolTip = nil
+        for a in shelf {
+            let key = a.folder
+            let t = LibraryArt.shared.load(a) { [weak self] img in
+                guard let self, let img else { return }
+                self.covers[key] = img
+                self.needsDisplay = true
+            }
+            if t >= 0 { tokens.append((a, t)) }
+        }
         invalidateIntrinsicContentSize()
         needsDisplay = true
-        updateTrackingAreas()
     }
 
-    private static func short(_ k: ReleaseKind) -> String {
-        switch k {
-        case .album: "ALBUM"
-        case .single: "EP/SGL"
-        case .compilation: "COMP"
-        case .live: "LIVE"
-        case .show: "SHOWS"
-        case .unreleased: "DEMOS"
-        }
-    }
-
-    private var plot: NSRect { NSRect(x: labelWidth, y: 4, width: max(1, bounds.width - labelWidth - 8), height: CGFloat(lanes.count) * Self.laneHeight) }
+    private var plot: (minX: CGFloat, maxX: CGFloat) { (side + Self.cover / 2, max(side + Self.cover, bounds.width - side - Self.cover / 2)) }
 
     private func x(_ year: Int) -> CGFloat {
         let p = plot
-        return p.minX + p.width * CGFloat(year - span.lowerBound) / CGFloat(max(1, span.upperBound - span.lowerBound))
+        return p.minX + (p.maxX - p.minX) * CGFloat(year - span.lowerBound) / CGFloat(max(1, span.upperBound - span.lowerBound))
+    }
+
+    /// Each cover's left edge: at its year, pushed apart where years crowd; overlapping when there are too many.
+    private func coverFrames() -> [NSRect] {
+        guard !shelf.isEmpty else { return [] }
+        let minX = side, maxX = bounds.width - side
+        let step = min(Self.cover + 20, (maxX - minX - Self.cover) / CGFloat(max(1, shelf.count - 1)))
+        var left = shelf.map { x($0.year!) - Self.cover / 2 }
+        for i in left.indices {
+            left[i] = max(left[i], minX, i > 0 ? left[i - 1] + step : minX)
+        }
+        for i in left.indices.reversed() {
+            left[i] = min(left[i], maxX - Self.cover, i < left.count - 1 ? left[i + 1] - step : maxX - Self.cover)
+        }
+        return left.map { NSRect(x: max(minX, $0), y: shelfTop, width: Self.cover, height: Self.cover) }
+    }
+
+    /// Dot centres: at the year, kinds of the same year side by side.
+    private func dotCenters() -> [NSPoint] {
+        var seen: [Int: Int] = [:]
+        return dots.map { d in
+            let n = seen[d.year, default: 0]
+            seen[d.year] = n + 1
+            return NSPoint(x: x(d.year) + CGFloat(n) * 11, y: lineY)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard !lanes.isEmpty else { return }
-        let p = plot
-        let yearW = min(12, max(2, p.width / CGFloat(max(1, span.upperBound - span.lowerBound)) - 1))
-        let most = cells.values.flatMap { $0.values.map(\.count) }.max() ?? 1
-        let label: [NSAttributedString.Key: Any] = [.font: Fonts.hack(8, bold: true), .foregroundColor: Dash.text2]
-        for (i, kind) in lanes.enumerated() {
-            let y = p.minY + CGFloat(i) * Self.laneHeight
-            Theme.kind(kind).setFill()
-            NSBezierPath(roundedRect: NSRect(x: 3, y: y + 3, width: 6, height: 6), xRadius: 1.5, yRadius: 1.5).fill()
-            NSAttributedString(string: Self.short(kind), attributes: label).draw(at: NSPoint(x: 12, y: y + 1))
-            Dash.grid.setFill()
-            NSRect(x: p.minX, y: y + Self.laneHeight / 2, width: p.width, height: 1).fill()
-            for (year, list) in cells[kind] ?? [:] {
-                let strength = 0.35 + 0.65 * CGFloat(list.count) / CGFloat(most)
-                let r = NSRect(x: x(year) - yearW / 2, y: y + 2, width: yearW, height: Self.laneHeight - 4)
-                Theme.kind(kind).withAlphaComponent(strength).setFill()
-                NSBezierPath(roundedRect: r, xRadius: 1.5, yRadius: 1.5).fill()
-                if let sel = selectedKey, list.contains(where: { $0.key == sel }) {
-                    Theme.current.setStroke()
-                    let path = NSBezierPath(roundedRect: r.insetBy(dx: -1.5, dy: -1.5), xRadius: 2, yRadius: 2)
-                    path.lineWidth = 1.5
-                    path.stroke()
+        guard !albums.isEmpty else { return }
+        let frames = coverFrames()
+        // Room for a title: the space to the neighbours (covers can stand close where years crowd).
+        let room: [CGFloat] = frames.indices.map { i in
+            let left = i > 0 ? frames[i].midX - frames[i - 1].midX : 200
+            let right = i < frames.count - 1 ? frames[i + 1].midX - frames[i].midX : 200
+            return min(left, right, 110) - 6
+        }
+        let year: [NSAttributedString.Key: Any] = [.font: Fonts.hack(8.5), .foregroundColor: Dash.text3]
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.lineBreakMode = .byTruncatingTail
+
+        // The line the dots sit on, and the years under it.
+        Dash.border.setFill()
+        NSRect(x: side, y: lineY, width: bounds.width - 2 * side, height: 1).fill()
+        // What the dots are (the covers explain themselves) on the left, what has no year on the right, and the
+        // years in between where they fit.
+        var taken: [ClosedRange<CGFloat>] = []
+        var lx = side
+        for k in dotKinds {
+            let t = NSAttributedString(string: k.title, attributes: [.font: Dash.font(10.5), .foregroundColor: Dash.text2])
+            Theme.kind(k).setFill()
+            NSBezierPath(ovalIn: NSRect(x: lx, y: axisY + 3, width: 7, height: 7)).fill()
+            t.draw(at: NSPoint(x: lx + 11, y: axisY - 1))
+            lx += 11 + t.size().width + 14
+        }
+        if lx > side { taken.append(side...(lx - 8)) }
+        if undated > 0 {
+            let t = NSAttributedString(string: "+\(undated) undated", attributes: [.font: Dash.font(10.5), .foregroundColor: Dash.text3])
+            let ux = bounds.width - side - t.size().width
+            t.draw(at: NSPoint(x: ux, y: axisY - 1))
+            taken.append((ux - 8)...(bounds.width))
+        }
+        let years = span.upperBound - span.lowerBound
+        let every = years <= 12 ? 1 : years <= 30 ? 5 : 10
+        var yr = (span.lowerBound + every - 1) / every * every
+        while yr <= span.upperBound {
+            let s = NSAttributedString(string: String(yr), attributes: year)
+            let w = s.size().width, px = min(max(side, x(yr) - w / 2), bounds.width - w - side)
+            Dash.border.setFill()
+            NSRect(x: x(yr), y: lineY - 2, width: 1, height: 5).fill()
+            if !taken.contains(where: { $0.overlaps(px...(px + w)) }) { s.draw(at: NSPoint(x: px, y: axisY)) }
+            yr += every
+        }
+
+        var countRight: CGFloat = -1
+        for (i, d) in zip(dots.indices, dotCenters()) {
+            let item = dots[i]
+            let hot = hovered == .dot(i) || item.list.contains { $0.key == selectedKey }
+            let r = NSRect(x: d.x - 4, y: d.y - 4, width: 8, height: 8)
+            Dash.card.setFill()
+            NSBezierPath(ovalIn: r.insetBy(dx: -2, dy: -2)).fill()   // a gap where it crosses the line
+            Theme.kind(item.kind).setFill()
+            NSBezierPath(ovalIn: r).fill()
+            if hot {
+                Dash.text.setStroke()
+                let ring = NSBezierPath(ovalIn: r.insetBy(dx: -2.5, dy: -2.5))
+                ring.lineWidth = 1.5
+                ring.stroke()
+            }
+            // How many, above the dot, where it doesn't run into the one before (the tooltip has them all).
+            if item.list.count > 1 {
+                let c = NSAttributedString(string: "\(item.list.count)", attributes: [.font: Fonts.hack(8.5, bold: true), .foregroundColor: Dash.text2])
+                let cx = d.x - c.size().width / 2
+                if cx > countRight + 3 {
+                    c.draw(at: NSPoint(x: cx, y: d.y - 17))
+                    countRight = cx + c.size().width
                 }
             }
         }
-        // Axis: a label every 5 or 10 years, as fits.
-        let axis: [NSAttributedString.Key: Any] = [.font: Fonts.hack(8), .foregroundColor: Dash.text3]
-        let years = span.upperBound - span.lowerBound
-        let step = years <= 12 ? 1 : years <= 30 ? 5 : 10
-        var yr = (span.lowerBound + step - 1) / step * step
-        while yr <= span.upperBound {
-            let s = NSAttributedString(string: String(yr), attributes: axis)
-            let w = s.size().width
-            s.draw(at: NSPoint(x: min(max(p.minX, x(yr) - w / 2), bounds.width - w - 2), y: p.maxY + 2))
-            yr += step
+
+        // Covers last, the hovered and selected ones on top.
+        let order = frames.indices.sorted { a, b in
+            func rank(_ i: Int) -> Int { hovered == .cover(i) ? 2 : shelf[i].key == selectedKey ? 1 : 0 }
+            return (rank(a), a) < (rank(b), b)
         }
-        if undated > 0 {
-            let s = NSAttributedString(string: "+\(undated) undated", attributes: axis)
-            s.draw(at: NSPoint(x: 4, y: p.maxY + 2))
+        // Each cover's year above it, where it doesn't run into the one before.
+        var yearRight: CGFloat = -1
+        for i in frames.indices {
+            let s = NSAttributedString(string: String(shelf[i].year!), attributes: year)
+            let yx = frames[i].midX - s.size().width / 2
+            if yx > yearRight + 4 {
+                s.draw(at: NSPoint(x: yx, y: 3))
+                yearRight = yx + s.size().width
+            }
+        }
+        for i in order {
+            let a = shelf[i], r = frames[i]
+            let selected = a.key == selectedKey, hot = hovered == .cover(i)
+            let clip = NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4)
+            NSGraphicsContext.saveGraphicsState()
+            clip.addClip()
+            if let img = covers[a.folder] {
+                NSImage(cgImage: img, size: r.size).draw(in: r)
+            } else {
+                Dash.cardRaised.setFill()
+                r.fill()
+                let g = NSAttributedString(string: Fonts.Icon.music, attributes: [.font: Fonts.hack(16), .foregroundColor: Dash.text3])
+                g.draw(at: NSPoint(x: r.midX - g.size().width / 2, y: r.midY - g.size().height / 2))
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            (selected ? Dash.accent : hot ? Dash.text : Dash.border).setStroke()
+            clip.lineWidth = selected || hot ? 2 : 1
+            clip.stroke()
+            // Several that year: how many, on the cover's corner.
+            let more = shelfYear[i].count
+            if more > 1 {
+                let b = NSAttributedString(string: "×\(more)", attributes: [.font: Fonts.hack(8.5, bold: true), .foregroundColor: Dash.text])
+                let br = NSRect(x: r.maxX - b.size().width - 6, y: r.maxY - 13, width: b.size().width + 6, height: 12)
+                Dash.page.withAlphaComponent(0.85).setFill()
+                NSBezierPath(roundedRect: br.offsetBy(dx: 1, dy: 0), xRadius: 3, yRadius: 3).fill()
+                b.draw(at: NSPoint(x: br.minX + 3, y: br.minY))
+            }
+            let roomy = room[i] >= 40
+            if roomy || selected || hot {
+                let w = roomy ? room[i] : 150
+                let t = NSAttributedString(string: a.title, attributes: [
+                    .font: Dash.font(10.5, selected || hot ? .semibold : .regular),
+                    .foregroundColor: selected || hot ? Dash.text : Dash.text2, .paragraphStyle: para])
+                let tr = NSRect(x: min(max(side, r.midX - w / 2), bounds.width - side - w), y: titleTop, width: w, height: 28)
+                if !roomy {   // over its neighbours: on a backing
+                    Dash.card.setFill()
+                    NSBezierPath(roundedRect: tr.insetBy(dx: -2, dy: 0), xRadius: 3, yRadius: 3).fill()
+                }
+                t.draw(with: tr, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            }
         }
     }
 
-    private func hit(_ e: NSEvent) -> [LibraryAlbum]? {
+    private func hit(_ e: NSEvent) -> Hit? {
         let pt = convert(e.locationInWindow, from: nil)
-        let p = plot
-        guard pt.x >= p.minX - 4, pt.y >= p.minY, pt.y < p.maxY else { return nil }
-        let lane = Int((pt.y - p.minY) / Self.laneHeight)
-        guard lane < lanes.count, let row = cells[lanes[lane]] else { return nil }
-        // The nearest year that has something, within half a year's width or 4 points.
-        let yearW = p.width / CGFloat(max(1, span.upperBound - span.lowerBound))
-        let best = row.keys.min { abs(x($0) - pt.x) < abs(x($1) - pt.x) }
-        guard let y = best, abs(x(y) - pt.x) <= max(4, yearW / 2) else { return nil }
-        return row[y]
+        let frames = coverFrames()
+        // Topmost first: covers drawn later are on top.
+        if let i = frames.indices.reversed().first(where: { frames[$0].contains(pt) }) { return .cover(i) }
+        if abs(pt.y - lineY) <= 9 {
+            let c = dotCenters()
+            if let i = c.indices.min(by: { abs(c[$0].x - pt.x) < abs(c[$1].x - pt.x) }), abs(c[i].x - pt.x) <= 7 { return .dot(i) }
+        }
+        return nil
+    }
+
+    private func albumsAt(_ h: Hit) -> [LibraryAlbum] {
+        switch h {
+        case .cover(let i): i < shelfYear.count ? shelfYear[i] : []
+        case .dot(let i): i < dots.count ? dots[i].list : []
+        }
+    }
+
+    private func updateTip() {
+        guard let h = hovered, let a = albumsAt(h).first else { toolTip = nil; return }
+        let list = albumsAt(h)
+        func name(_ a: LibraryAlbum) -> String { a.kind == .show ? [a.showDate, a.venue].compactMap { $0 }.joined(separator: " ") : a.title }
+        toolTip = list.count == 1 ? "\(a.year.map(String.init) ?? "") · \(a.kind.title) · \(name(a))"
+            : "\(a.year.map(String.init) ?? "") · \(list.count) \(a.kind.title.lowercased()):\n" + list.prefix(10).map(name).joined(separator: "\n")
     }
 
     override func mouseDown(with event: NSEvent) {
-        if let list = hit(event), let first = list.first { onSelect?(first) }
+        if let h = hit(event), let first = albumsAt(h).first { onSelect?(first) }
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
 
-    override func mouseMoved(with event: NSEvent) {
-        guard let list = hit(event), let a = list.first else { toolTip = nil; return }
-        let what = list.count == 1 ? (a.kind == .show ? [a.showDate, a.venue].compactMap { $0 }.joined(separator: " ") : a.title)
-                                   : "\(list.count) \(a.kind.title.lowercased())"
-        toolTip = "\(a.year.map(String.init) ?? "") · \(what)"
-    }
+    override func mouseMoved(with event: NSEvent) { hovered = hit(event) }
+    override func mouseExited(with event: NSEvent) { hovered = nil }
 }

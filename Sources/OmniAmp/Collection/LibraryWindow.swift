@@ -627,7 +627,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         let withTimeline = (searching || section == .artists || section == .shows) && selectedEntry != nil
         if !withTimeline { timeline.albums = [] }
-        timelineHeight.constant = withTimeline ? min(timeline.preferredHeight, 100) : 0
+        timelineHeight.constant = withTimeline ? min(timeline.preferredHeight, 140) : 0
         timeline.isHidden = timelineHeight.constant == 0
 
         // Group titles with counts ("Shows & Bootlegs · 42", "1977 · 23").
