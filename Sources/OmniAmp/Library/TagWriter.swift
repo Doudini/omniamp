@@ -139,6 +139,23 @@ enum TagWriter {
         return Array(id.utf8) + size + [0, 0] + body
     }
 
+    /// The frames from `start`: nil unless each has a valid ID and a size that fits, and the walk ends exactly at
+    /// the tag's end or its padding.
+    static func frames(_ tag: [UInt8], from start: Int, synchsafe: Bool) -> [(id: String, raw: [UInt8])]? {
+        var out: [(id: String, raw: [UInt8])] = [], p = start
+        while p + 10 <= tag.count, tag[p] != 0 {
+            let idBytes = tag[p..<(p + 4)]
+            guard idBytes.allSatisfy({ (0x41...0x5A).contains($0) || (0x30...0x39).contains($0) }) else { return nil }
+            let len = synchsafe ? unsynch(tag, p + 4) : be32(tag, p + 4)
+            guard len >= 0, p + 10 + len <= tag.count else { return nil }
+            out.append((String(decoding: idBytes, as: UTF8.self), Array(tag[p..<(p + 10 + len)])))
+            p += 10 + len
+        }
+        // What's left is padding (zeros) or nothing.
+        guard tag[min(p, tag.count)...].allSatisfy({ $0 == 0 }) else { return nil }
+        return out
+    }
+
     static func writeID3(_ tags: BasicTags, fd: Int32, head: [UInt8], path: String, backupDir: URL?) -> Outcome {
         var version: UInt8 = 3
         var frames: [(id: String, raw: [UInt8])] = []
@@ -151,15 +168,13 @@ enum TagWriter {
             let size = unsynch(head, 6)
             oldEnd = 10 + Int64(size) + (flags & 0x10 != 0 ? 10 : 0)
             guard let tag = read(fd, 0, 10 + size) else { return .failed("couldn't read the tag") }
-            var p = 10
-            if flags & 0x40 != 0, p + 4 <= tag.count { p += version == 4 ? unsynch(tag, p) : be32(tag, p) + 4 }
-            while p + 10 <= tag.count, tag[p] != 0 {
-                let id = String(decoding: tag[p..<(p + 4)], as: UTF8.self)
-                let len = version == 4 ? unsynch(tag, p + 4) : be32(tag, p + 4)
-                guard len >= 0, p + 10 + len <= tag.count else { break }
-                frames.append((id, Array(tag[p..<(p + 10 + len)])))
-                p += 10 + len
-            }
+            var start = 10
+            if flags & 0x40 != 0, start + 4 <= tag.count { start += version == 4 ? unsynch(tag, start) : be32(tag, start) + 4 }
+            // Every frame must be read, or the rewritten tag would lose the ones after a misread (often the cover).
+            // v2.4 sizes are synchsafe, but some taggers (older iTunes) wrote plain ones: try both, else don't write.
+            guard let all = Self.frames(tag, from: start, synchsafe: version == 4) ?? (version == 4 ? Self.frames(tag, from: start, synchsafe: false) : nil)
+            else { return .unsupported("ID3 tag it can't read safely") }
+            frames = all
         }
         let hasArtist = frames.contains { $0.id == "TPE1" }
         var replace = Set<String>(), add: [[UInt8]] = []

@@ -109,6 +109,24 @@ final class TagWriterTests: XCTestCase {
         XCTAssertEqual(TagWriter.write(BasicTags(), to: v22.path, backupDir: nil), .unchanged)
     }
 
+    /// v2.4 tags with plain (not synchsafe) frame sizes, as older iTunes wrote them: every frame kept.
+    /// A tag that can't be read either way is left alone.
+    func testID3v24WithPlainFrameSizes() throws {
+        let long = String(repeating: "Long comment ", count: 30)   // over 127 bytes: the two size readings differ
+        let frames = frame("TXXX", long, v4: false) + frame("TIT2", "Keep Me", v4: false)
+        let url = try mp3(frames, padding: 64, version: 4)
+        XCTAssertEqual(TagWriter.write(tags, to: url.path, backupDir: nil), .written)
+        let bytes = try Data(contentsOf: url)
+        XCTAssertNotNil(bytes.range(of: Data("Keep Me".utf8)), "the frame after the long one survives")
+        XCTAssertNotNil(bytes.range(of: Data(long.utf8)))
+        XCTAssertNotNil(bytes.range(of: Data("Flightsafety".utf8)))
+
+        let broken = try mp3(frame("TIT2", "x") + [0x74, 0x69, 0x74, 0x32, 0, 0, 0, 9, 0, 0, 1, 2, 3], padding: 0, version: 3)
+        let before = try Data(contentsOf: broken)
+        XCTAssertEqual(TagWriter.write(tags, to: broken.path, backupDir: nil), .unsupported("ID3 tag it can't read safely"))
+        XCTAssertEqual(try Data(contentsOf: broken), before)
+    }
+
     // MARK: FLAC
 
     private func flac() throws -> URL {

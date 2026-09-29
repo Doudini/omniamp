@@ -90,7 +90,10 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         let form = NSGridView(numberOfColumns: 2, rows: 0)
         form.rowSpacing = 5
         form.columnSpacing = 8
-        for (name, field, now) in [("ARTIST", artist, album.artist), ("ALBUM", albumField, album.title),
+        // Placeholders ("Unknown Artist") aren't values: those fields start empty, so they're left alone unless filled.
+        let knownArtist = ["unknown artist", ""].contains(album.artistKey) ? "" : album.artist
+        let knownTitle = Keys.fold(album.title) == "unknown album" ? "" : album.title
+        for (name, field, now) in [("ARTIST", artist, knownArtist), ("ALBUM", albumField, knownTitle),
                                    ("YEAR", year, album.year.map(String.init) ?? ""), ("GENRE", genre, currentGenre ?? "")] {
             field.stringValue = now
             field.font = Dash.font(13)
