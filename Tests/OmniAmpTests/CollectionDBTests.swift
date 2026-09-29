@@ -211,6 +211,36 @@ final class CollectionDBTests: XCTestCase {
         XCTAssertEqual(group?.entries.first?.title, "scout niblett")
     }
 
+    /// A track in a folder, with its own artist and no album-artist tag.
+    private func track(_ i: Int, _ artist: String, album: String, folder: String) -> LibraryFile {
+        var r = row(i, artist: artist, album: album, title: "t\(i)")
+        r.key = "\(folder)/\(i).flac"
+        r.path = r.key
+        r.result = .init(kind: .album, artist: artist, album: album, year: 2020, showDate: nil, venue: nil, albumFolder: folder)
+        return r
+    }
+
+    func testVariousArtistsCompilationIsOneRelease() throws {
+        let d = try db()
+        let artists = ["Frightened Rabbit", "Biffy Clyro", "Manchester Orchestra", "Julien Baker", "Craig Finn"]
+        try d.upsert(artists.enumerated().map { track($0 + 1, $1, album: "Tiny Changes", folder: "/m/Tiny Changes") })
+        let va = try d.albums(artist: Keys.artist("Various Artists"), LibraryFilter())
+        XCTAssertEqual(va.map(\.title), ["Tiny Changes"])
+        XCTAssertEqual(va.first?.tracks, 5)
+        XCTAssertEqual(va.first?.kind, .compilation)
+        XCTAssertEqual(try d.tracks(album: va[0].key).map(\.artist).sorted(), artists.sorted(), "each track keeps its artist")
+        XCTAssertTrue(try d.albums(artist: Keys.artist("Biffy Clyro"), LibraryFilter()).isEmpty)
+        // A track read again (its own artist) goes back into the compilation.
+        try d.upsert([track(3, "Manchester Orchestra", album: "Tiny Changes", folder: "/m/Tiny Changes")])
+        XCTAssertEqual(try d.albums(artist: Keys.artist("Various Artists"), LibraryFilter()).first?.tracks, 5)
+
+        // A band's album with one "feat." track stays the band's.
+        try d.upsert((1...10).map { track(100 + $0, "Wye Oak", album: "Shriek", folder: "/m/Shriek") }
+                     + [track(111, "Wye Oak feat. Someone", album: "Shriek", folder: "/m/Shriek")])
+        XCTAssertEqual(try d.albums(artist: Keys.artist("Wye Oak"), LibraryFilter()).first?.tracks, 10)
+        XCTAssertEqual(try d.albums(artist: Keys.artist("Various Artists"), LibraryFilter()).count, 1)
+    }
+
     func testRetagMovesTrackBetweenAlbums() throws {
         let d = try db()
         try d.upsert([row(1, artist: "A", album: "X", title: "t")])

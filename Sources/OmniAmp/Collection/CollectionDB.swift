@@ -142,6 +142,7 @@ final class CollectionDB {
         try addColumn("albums", "unplayable", "INTEGER NOT NULL DEFAULT 0")
         try addColumn("albums", "unplayable_format", "TEXT")
         try db.exec("CREATE INDEX IF NOT EXISTS albums_folder ON albums(folder)")   // releases sharing a folder
+        try db.exec("CREATE INDEX IF NOT EXISTS files_folder ON files(folder)")     // a folder's tracks (compilations)
         try ensureListeningTables()
         // Song keys follow Keys.title: recomputed from the stored titles when its rules change (no files read).
         if (try db.scalar("SELECT value FROM meta WHERE key = 'songKeys'") ?? 1) < songKeyVersion {
@@ -152,6 +153,7 @@ final class CollectionDB {
                 try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('songKeys', ?)", [songKeyVersion])
             }
         }
+        try groupVariousOnce()
         // FLAC behind an ID3 tag couldn't be read before (no tags, no length): read just those again, once.
         if (try db.scalar("SELECT value FROM meta WHERE key = 'flacBehindID3'") ?? 0) < 1 {
             try db.run("UPDATE files SET mtime = -1 WHERE duration IS NULL AND lower(path) LIKE '%.flac'")
@@ -240,8 +242,9 @@ final class CollectionDB {
     func upsert(_ files: [LibraryFile], now: Double = Date().timeIntervalSince1970) throws {
         guard !files.isEmpty else { return }
         try db.transaction {
-            var albums = Set<String>(), artists = Set<String>()
+            var albums = Set<String>(), artists = Set<String>(), folders = Set<String>()
             for f in files {
+                folders.insert(f.result.albumFolder)
                 // The old album/artist too: a retagged file leaves them.
                 try db.query("SELECT album_key, artist_key FROM files WHERE key = ?", [f.key]) { s in
                     albums.insert(s.text(0)); artists.insert(s.text(1))
@@ -274,6 +277,7 @@ final class CollectionDB {
                 try db.run("DELETE FROM genres WHERE file_id = ?", [id])
                 for g in Self.genres(i.genre) { try db.run("INSERT INTO genres(file_id, genre) VALUES (?, ?)", [id, g]) }
             }
+            try groupVarious(folders: folders, albums: &albums, artists: &artists)
             try rollUp(albums: albums, artists: artists)
         }
     }
@@ -301,6 +305,57 @@ final class CollectionDB {
         var keys: [String] = []
         try db.query("SELECT key FROM files WHERE root = ?", [root]) { keys.append($0.text(0)) }
         try remove(keys: keys)
+    }
+
+    static let variousArtists = "Various Artists"
+
+    /// A compilation without an album-artist tag: its tracks share the album title and the folder but each has its
+    /// own artist, so it would be a release per artist. Those become one Various Artists release (a compilation);
+    /// each track keeps its own artist. From what's stored: no file is read.
+    private func groupVarious(folders: Set<String>, albums: inout Set<String>, artists: inout Set<String>) throws {
+        let va = Keys.artist(Self.variousArtists)
+        for folder in folders {
+            var rows: [(id: Int64, artist: String, album: String, title: String, performer: String)] = []
+            try db.query("SELECT id, artist_key, album_key, album, artist FROM files WHERE folder = ?", [folder]) { s in
+                rows.append((s.int64(0), s.text(1), s.text(2), s.text(3), Keys.artist(s.text(4))))
+            }
+            for (title, group) in Dictionary(grouping: rows, by: { Keys.fold($0.title) }) {
+                // By the tracks' own artists: at least three, none on most of the tracks (an album with a "feat."
+                // track, or a band spelled two ways, stays the band's; two loose files aren't a compilation).
+                // Or grouped before, and a track read again came back with its own artist.
+                let performers = Dictionary(grouping: group, by: \.performer)
+                let top = performers.values.map(\.count).max() ?? 0
+                let regrouped = Set(group.map(\.artist)).count > 1 && group.contains { $0.artist == va }
+                let various = regrouped || (group.count >= 3 && performers.count >= 3 && top * 2 <= group.count)
+                guard !title.isEmpty, title != "unknown album", various else { continue }
+                let key = va + "\u{1}" + title + "\u{1}" + folder
+                for r in group where r.album != key {
+                    albums.insert(r.album); artists.insert(r.artist)
+                    // A plain album becomes a compilation; live, shows and demos stay what they are.
+                    try db.run("""
+                        UPDATE files SET artist_key = ?, album_artist = ?, album_key = ?,
+                            kind = CASE WHEN kind = \(ReleaseKind.album.rawValue) THEN \(ReleaseKind.compilation.rawValue) ELSE kind END
+                        WHERE id = ?
+                        """, [va, Self.variousArtists, key, r.id])
+                }
+                albums.insert(key); artists.insert(va)
+            }
+        }
+    }
+
+    /// Once: the compilations stored as a release per artist before groupVarious existed.
+    private func groupVariousOnce() throws {
+        guard (try db.scalar("SELECT value FROM meta WHERE key = 'variousGroups'") ?? 0) < 1 else { return }
+        try db.transaction {
+            var folders = Set<String>()
+            try db.query("""
+                SELECT folder FROM files GROUP BY folder, lower(album) HAVING count(DISTINCT lower(artist)) > 2
+                """) { folders.insert($0.text(0)) }
+            var albums = Set<String>(), artists = Set<String>()
+            try groupVarious(folders: folders, albums: &albums, artists: &artists)
+            try rollUp(albums: albums, artists: artists)
+            try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('variousGroups', 1)")
+        }
     }
 
     private func rollUp(albums: Set<String>, artists: Set<String>) throws {
