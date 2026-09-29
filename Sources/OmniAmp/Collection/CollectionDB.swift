@@ -188,6 +188,15 @@ final class CollectionDB {
         try groupVariousOnce()
         // Once: artist names in their proper spelling, genre numbers as names, "added" by the files' dates (from what's
         // stored: nothing read again).
+        if (try db.scalar("SELECT value FROM meta WHERE key = 'sortNames'") ?? 0) < 1 {
+            // Once: sort names without leading brackets ("(Smog)" under S).
+            try db.transaction {
+                var keys = Set<String>()
+                try db.query("SELECT key FROM artists") { keys.insert($0.text(0)) }
+                try rollUp(albums: [], artists: keys)
+                try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('sortNames', 1)")
+            }
+        }
         if (try db.scalar("SELECT value FROM meta WHERE key = 'displayFixes'") ?? 0) < 1 {
             try db.transaction {
                 var keys = Set<String>()

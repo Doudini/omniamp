@@ -34,7 +34,9 @@ enum Keys {
 
     /// How an artist sorts: without a leading "The ".
     static func sortName(_ name: String) -> String {
-        let t = name.trimmingCharacters(in: .whitespaces)
+        // Brackets, quotes and dots in front don't count ("(Smog)" sorts under S, where its letter is).
+        let leading: Set<Character> = ["(", "[", "{", "\"", "'", ".", "-", "_", "¡", "¿"]
+        let t = String(name.trimmingCharacters(in: .whitespaces).drop { leading.contains($0) }).trimmingCharacters(in: .whitespaces)
         if t.count > 4, t.lowercased().hasPrefix("the ") { return String(t.dropFirst(4)) }
         return t
     }

@@ -18,6 +18,13 @@ final class CollectionClassifierTests: XCTestCase {
         }
     }
 
+    func testSortNamesFollowTheirLetter() {
+        XCTAssertEqual(Keys.sortName("(Smog)"), "Smog)")
+        XCTAssertEqual(Keys.letter("(Smog)"), "S")
+        XCTAssertEqual(Keys.sortName("The Beatles"), "Beatles")
+        XCTAssertEqual(Keys.sortName("...And You Will Know Us"), "And You Will Know Us")
+    }
+
     func testArtistKeys() {
         XCTAssertEqual(Keys.artist("The Beatles"), "beatles")
         XCTAssertEqual(Keys.artist("Beatles, The"), "beatles")

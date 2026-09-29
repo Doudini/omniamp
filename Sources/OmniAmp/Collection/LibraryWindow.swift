@@ -852,7 +852,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// First artist at or after the letter.
     private func jump(to letter: String) {
         letters.current = letter
-        guard let row = entries.firstIndex(where: { ($0.letter ?? "#") >= letter && ($0.letter != "#" || letter == "#") }) else { return }
+        // That letter's first artist; none: the next letter that has one (by letter, not by place in the list).
+        let later = Set(entries.compactMap(\.letter)).filter { $0 >= letter }.sorted()
+        guard let target = later.first, let row = entries.firstIndex(where: { ($0.letter ?? "#") == target }) else { return }
         middle.selectRowIndexes([row], byExtendingSelection: false)
         // The letter's first artist at the top of the list.
         middle.scrollRowToVisible(min(entries.count - 1, row + max(0, middle.rows(in: middle.visibleRect).length - 1)))
