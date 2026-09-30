@@ -46,9 +46,15 @@ final class ListeningHistory {
         let n = name.trimmingCharacters(in: .whitespaces)
         guard !n.isEmpty, n.lowercased() != user?.lowercased() else { return }
         UserDefaults.standard.set(n, forKey: Pref.lastfmHistoryUser)
+        // An import still running pages the old account: stop it before the plays go, or it writes them back.
+        let running = importTask
+        running?.cancel()
+        switching = true
         Task {
+            _ = await running?.value
             try? await onDB { try $0.forgetPlays() }
             lastSync = nil
+            switching = false
             sync()
         }
     }
@@ -82,6 +88,11 @@ final class ListeningHistory {
     // MARK: Import
 
     private var importing = false
+    private var importTask: Task<Void, Never>?
+    /// Between choosing another account and its old plays being gone: no import.
+    private var switching = false
+    /// Plays reach last.fm late with their own time (scrobbled offline; it takes them up to 14 days back).
+    static let lateScrobbles = 14 * 86_400
     private var lastPost = Date.distantPast
 
     private func post(force: Bool = false) {
@@ -106,24 +117,31 @@ final class ListeningHistory {
     }
 
     func sync() {
-        guard !importing, let user, canImport else { return }
+        guard !importing, !switching, let user, canImport else { return }
         importing = true
-        Task {
-            defer { importing = false; post(force: true) }
+        importTask = Task {
+            defer { importing = false; importTask = nil; post(force: true) }
             do {
                 let range = try await onDB { try $0.playRange() }
                 var stored = range.count
-                // 1. What's new since the newest play stored.
+                // 1. What's new since the last sync that got through, and late plays from before it (plays already
+                // stored are skipped). Pages come newest first: one that fails part-way leaves older new plays
+                // behind, so the mark only moves once all of them are in.
                 if let newest = range.newest {
+                    let through = (try await onDB { $0.meta("lastfmSyncedThrough") }) ?? newest
                     var page = 1, pages = 1
                     while page <= pages {
-                        let r = try await fetch(user, from: newest + 1, page: page)
+                        let r = try await fetch(user, from: max(0, min(through, newest) - Self.lateScrobbles) + 1, page: page)
                         pages = r.pages
                         let tracks = r.tracks
+                        try Task.checkCancellation()
                         stored += try await onDB { try $0.addPlays(tracks) }
                         phase = .importing(done: stored, total: stored + max(0, r.total - page * 200))
                         post()
                         page += 1
+                    }
+                    try await onDB { db in
+                        if let n = try db.playRange().newest { try db.setMeta("lastfmSyncedThrough", n) }
                     }
                 }
                 // 2. Older pages, until the start of the history (resumable).
@@ -131,6 +149,7 @@ final class ListeningHistory {
                     let oldest = try await onDB { try $0.playRange().oldest }
                     let r = try await fetch(user, to: oldest.map { $0 - 1 })
                     let tracks = r.tracks
+                    try Task.checkCancellation()
                     if tracks.isEmpty {
                         try await onDB { try $0.setMeta("lastfmComplete", 1) }
                         break
@@ -142,7 +161,10 @@ final class ListeningHistory {
                 phase = .idle
                 lastSync = Date()
                 startLookups()
+            } catch is CancellationError {
+                phase = .idle
             } catch {
+                guard !Task.isCancelled else { phase = .idle; return }
                 phase = .failed((error as? LocalizedError)?.errorDescription ?? "\(error)")
                 NSLog("OmniAmp: last.fm history: %@", "\(error)")
             }
@@ -179,10 +201,13 @@ final class ListeningHistory {
                         break outer
                     }
                     failures = 0
-                    var country = found.country
-                    if country == nil, let area = found.area { country = await self.country(ofArea: area) }
-                    let c = country
-                    try? await onDB { try $0.savePlace(a, mbid: found.mbid, country: c, found: found.found) }
+                    var country = found.country, retry: Double = 90
+                    if country == nil, let area = found.area {
+                        // Couldn't walk up to the country this time: try again tomorrow, not in 90 days.
+                        if let c = await self.country(ofArea: area) { country = c } else { retry = 1 }
+                    }
+                    let c = country, r = retry
+                    try? await onDB { try $0.savePlace(a, mbid: found.mbid, country: c, found: found.found, retryInDays: r) }
                     lookedUp += 1
                     post()
                 }
@@ -191,7 +216,8 @@ final class ListeningHistory {
     }
 
     /// Walk up from a city or region to its country (a few steps at most), remembering every area on the way.
-    private func country(ofArea start: String) async -> String? {
+    /// nil: a lookup failed; .some(nil): the area has no country.
+    private func country(ofArea start: String) async -> String?? {
         var id = start, visited: [String] = []
         for _ in 0..<6 {
             let current = id
@@ -202,7 +228,7 @@ final class ListeningHistory {
                 return known
             }
             let step = await MetadataLookup.shared.areaStep(current)
-            if step.failed { return nil }
+            if step.failed { return .none }
             visited.append(id)
             if let c = step.country {
                 let v = visited
@@ -214,6 +240,6 @@ final class ListeningHistory {
         }
         let v = visited
         try? await onDB { db in v.forEach { db.saveArea($0, country: nil) } }
-        return nil
+        return .some(nil)
     }
 }

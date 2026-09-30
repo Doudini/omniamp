@@ -1125,8 +1125,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
                 guard !Task.isCancelled, currentShow?.feedURL == show.feedURL else { return }
                 setEpisodes(eps)
                 status.stringValue = eps.isEmpty ? "This feed has no audio episodes." : "\(eps.count) episodes"
-                // Seen: the new-episode marks stay until the next visit.
-                try? await Task.sleep(for: .seconds(1))
+                // Seen: the new-episode marks stay until the next visit. Only a show looked at for a second: arrowing
+                // past it (which cancels this) leaves its marks.
+                guard (try? await Task.sleep(for: .seconds(1))) != nil, !Task.isCancelled else { return }
                 library.markSeen(show)
                 showsTable.reloadData(forRowIndexes: IndexSet(integersIn: 0..<shows.count), columnIndexes: [0])
             } catch {

@@ -107,7 +107,17 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         // A new day ("On this day", "last 7 days") or time zone: the figures again, if on screen.
         for name in [ListeningHistory.changed, MusicCollection.changed, .NSCalendarDayChanged, .NSSystemTimeZoneDidChange] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { if self?.isHidden == false { self?.reload() } }
+                MainActor.assumeIsolated { if self?.isHidden == false { self?.figuresChanged() } }
+            })
+        }
+        // Behind other windows or in the Dock, changes wait (lookups post every few seconds, for hours): the
+        // figures come when the window is seen again.
+        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let self, note.object as? NSWindow === self.window, self.stale, !self.isHidden, self.onScreen else { return }
+                    self.reload()
+                }
             })
         }
     }
@@ -123,16 +133,31 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
 
     private var lastBuild = Date.distantPast
     private var trailing = false
+    /// Figures changed while the window couldn't be seen.
+    private var stale = false
+    /// The figures the page shows (their version): the same again needs no rebuild.
+    private var builtVersion: String?
+
+    private var onScreen: Bool {
+        guard let w = window else { return false }
+        return w.isVisible && !w.isMiniaturized && w.occlusionState.contains(.visible)
+    }
+
+    /// Figures changed: new ones now if the page can be seen, else when it's seen again.
+    @MainActor private func figuresChanged() {
+        if onScreen { reload() } else { stale = true }
+    }
 
     /// New figures. While an import or lookups keep changing them, at most every 10 s (a rebuild resets hover).
     @MainActor func reload() {
+        stale = false
         updateStatus()
         let wait = 10 - Date().timeIntervalSince(lastBuild)
         if wait > 0, stats != nil {
             if !trailing {
                 trailing = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
-                    MainActor.assumeIsolated { self?.trailing = false; self?.reload() }
+                    MainActor.assumeIsolated { self?.trailing = false; self?.figuresChanged() }
                 }
             }
             return
@@ -158,6 +183,10 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
             DispatchQueue.main.async { [weak self] in
                 // No figures (the query failed): the page still builds, with its name field and a note.
                 guard let self, gen == self.generation else { return }
+                // Same figures (a new version each day) for the same account: the page as it is.
+                let built = data.version.isEmpty ? nil : data.version + "|\(self.history.user ?? "")|\(self.history.canImport)"
+                if built != nil, built == self.builtVersion { return }
+                self.builtVersion = built
                 self.stats = s
                 self.river = river
                 self.today = today
