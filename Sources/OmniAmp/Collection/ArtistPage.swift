@@ -492,7 +492,7 @@ final class ArtistPage: DashPage {
 
     /// The next page of the artist's recordings, added to the kept list.
     private func loadMoreLive() {
-        guard !liveLoadingMore, var d = discography, let recs = d.liveRecordings else { return }
+        guard !liveLoadingMore, let base = discography, let recs = base.liveRecordings else { return }
         liveLoadingMore = true
         fillDiscography()
         let key = dash.key, name = dash.name, gen = generation
@@ -502,11 +502,13 @@ final class ArtistPage: DashPage {
             guard let self, gen == self.generation else { return }
             self.liveLoadingMore = false
             if let more {
+                var d = base
                 let known = Set(recs.map(\.id))
                 d.liveRecordings = recs + more.recordings.filter { !known.contains($0.id) }
                 d.liveArchive = more.total
                 self.discography = d
-                _ = await Task.detached { try? CollectionDB().saveDiscography(key, d) }.value
+                let saved = d
+                _ = await Task.detached { try? CollectionDB().saveDiscography(key, saved) }.value
             }
             self.fillDiscography()
         })

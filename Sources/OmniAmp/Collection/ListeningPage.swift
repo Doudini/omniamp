@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// Plays by weekday and hour: when you listen. Rows Monday…Sunday, columns 0–23 h.
 final class ClockChart: StatsChart {
@@ -68,8 +69,8 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         let years: [Int]
     }
     /// Kept while the window is closed too: reopening Listening is instant until plays, places or the library change.
-    nonisolated(unsafe) private static var cache: Figures?
-    private static let lock = NSLock()
+    /// The last figures, for any page that opens next (read and written off the main thread).
+    nonisolated private static let cache = OSAllocatedUnfairLock<Figures?>(initialState: nil)
 
     private var stats: ListeningStats?
     private var river = ListeningRiver()
@@ -114,8 +115,9 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         // figures come when the window is seen again.
         for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification] {
             observers.add(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                let window = (note.object as AnyObject?).map(ObjectIdentifier.init)
                 MainActor.assumeIsolated {
-                    guard let self, note.object as? NSWindow === self.window, self.stale, !self.isHidden, self.onScreen else { return }
+                    guard let self, window == self.window.map(ObjectIdentifier.init), self.stale, !self.isHidden, self.onScreen else { return }
                     self.reload()
                 }
             })
@@ -171,12 +173,12 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
             // The same plays, places and library as last time (and the same day): the figures from then.
             let version = ((try? db?.listeningVersion()) ?? nil).map { $0 + "/" + Date().formatted(.iso8601.year().month().day()) }
             let data: ListeningPage.Figures
-            if let version, let hit = ListeningPage.lock.withLock({ ListeningPage.cache?.version == version ? ListeningPage.cache : nil }) {
+            if let version, let hit = ListeningPage.cache.withLock({ $0?.version == version ? $0 : nil }) {
                 data = hit
             } else {
                 data = ListeningPage.Figures(version: version ?? "", stats: try? db?.listeningStats(), river: (try? db?.river()) ?? ListeningRiver(),
                                     today: (try? db?.onThisDay()) ?? OnThisDay(), years: (try? db?.playYears()) ?? [])
-                if version != nil { ListeningPage.lock.withLock { ListeningPage.cache = data } }
+                if version != nil { ListeningPage.cache.withLock { $0 = data } }
             }
             let s = data.stats, river = data.river, today = data.today, years = data.years
             DispatchQueue.main.async { [weak self] in
@@ -582,12 +584,13 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
     /// The chosen period's top artists, read off the main thread; the card keeps its place.
     private func loadTop() {
         let p = period
-        var from: Int?, year: Int?
-        switch p {
-        case .days(let n): from = Int(Date().timeIntervalSince1970) - n * 86400
-        case .year(let y): year = y
-        case .all: break
-        }
+        let (from, year): (Int?, Int?) = {
+            switch p {
+            case .days(let n): return (Int(Date().timeIntervalSince1970) - n * 86400, nil)
+            case .year(let y): return (nil, y)
+            case .all: return (nil, nil)
+            }
+        }()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let bars = (try? CollectionDB().topArtists(from: from, to: nil, year: year)) ?? []
             DispatchQueue.main.async { [weak self] in

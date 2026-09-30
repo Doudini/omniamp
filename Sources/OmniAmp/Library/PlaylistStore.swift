@@ -55,7 +55,8 @@ final class PlaylistStore {
     /// a batch at a time, at most every 150 ms, and each batch starts stage 2 right away.
     /// `onBatch` gets each batch's insertion index and size; `done` the total.
     /// `known`: tracks whose tags can be reused besides the playlist's own (a playlist loaded over the old one).
-    func add(urls: [URL], at position: Int? = nil, known: [Track] = [], onBatch: ((Int, Int) -> Void)? = nil, done: ((Int) -> Void)? = nil) {
+    func add(urls: [URL], at position: Int? = nil, known: [Track] = [], onBatch: (@Sendable @MainActor (Int, Int) -> Void)? = nil,
+             done: (@Sendable @MainActor (Int) -> Void)? = nil) {
         let t0 = Date()
         let cached = Dictionary((tracks + known).map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         scansInProgress += 1
@@ -287,8 +288,9 @@ final class PlaylistStore {
         if activeLoads == 1 { loadStart = Date() }
         startFlushTimer()
 
+        let jobs = work
         DispatchQueue.global(qos: .utility).async {   // the volume check can stall on a slow share
-            TagQueue.read(work, chunk: { local in
+            TagQueue.read(jobs, chunk: { local in
                 self.pendingLock.lock()
                 self.pending.append(contentsOf: local)
                 self.pendingLock.unlock()

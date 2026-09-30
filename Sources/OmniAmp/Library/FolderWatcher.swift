@@ -240,12 +240,12 @@ final class FolderSync {
         for s in sorted where !scopes.contains(where: { s.hasPrefix($0 + "/") }) { scopes.append(s) }
         guard !scopes.isEmpty else { return }
 
-        let rootsSnapshot = roots
+        let rootsSnapshot = roots, scopeList = scopes
         scansRunning += 1
         DispatchQueue.global(qos: .utility).async {
             let canonical = Self.canonicalizer(roots: rootsSnapshot)
             var dirs: [String] = [], gone: [String] = [], found: [Track] = [], unreadable: [String] = []
-            for s in scopes {
+            for s in scopeList {
                 if let isDir = ExactPath.kind(s) {
                     if isDir { dirs.append(s) }
                     found += FolderScanner.scan([URL(exactPath: s, isDirectory: isDir)], unreadable: &unreadable).map { t in
@@ -258,7 +258,9 @@ final class FolderSync {
                 }
             }
             let unknown = unreadable.map(canonical)
+            let result = (dirs: dirs, gone: gone, found: found)
             DispatchQueue.main.async {
+                let (dirs, gone, found) = result
                 self.scansRunning -= 1
                 self.apply(dirs: dirs, gone: gone, found: found, unknown: unknown)
                 self.processedThrough = max(self.processedThrough, through)

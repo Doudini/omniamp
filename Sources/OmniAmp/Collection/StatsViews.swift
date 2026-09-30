@@ -816,7 +816,7 @@ class DashPage: NSScrollView {
 }
 
 /// Whoever can go Back from a page (the library window), for the Back keys.
-@objc protocol PageBack {
+@MainActor @objc protocol PageBack {
     func pageBack(_ sender: Any?)
 }
 

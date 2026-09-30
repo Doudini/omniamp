@@ -573,7 +573,7 @@ final class PodcastLibrary {
 
     /// Encoded and written on the serial `writes` queue, in order: the played list alone can hold 20,000
     /// entries, and it's saved at every mark and pause.
-    private func save<T: Encodable>(_ value: T, _ name: String) {
+    private func save<T: Encodable & Sendable>(_ value: T, _ name: String) {
         let url = dir.appendingPathComponent(name)
         Self.writes.async { try? JSONEncoder().encode(value).write(to: url, options: .atomic) }
     }

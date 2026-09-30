@@ -385,7 +385,7 @@ final class PlayerController {
     }
 
     /// Remove tracks whose files no longer exist. Calls back with the number removed.
-    func removeDeadFiles(completion: ((Int) -> Void)? = nil) {
+    func removeDeadFiles(completion: (@Sendable @MainActor (Int) -> Void)? = nil) {
         let paths = store.tracks.map(\.path)
         let streams = store.tracks.map(\.isRemote)
         let ids = store.tracks.indices.map { store.id(at: $0) }

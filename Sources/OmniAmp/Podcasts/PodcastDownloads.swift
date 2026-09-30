@@ -125,7 +125,7 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     /// Use another folder: the downloads already there move along, in the background (across disks that's a
     /// copy). A file that can't be moved stays listed where it is. `completion` (main thread) gets a problem to
     /// show, if there was one.
-    func setFolder(_ newFolder: URL, completion: @escaping (String?) -> Void) {
+    func setFolder(_ newFolder: URL, completion: @escaping @Sendable @MainActor (String?) -> Void) {
         let new = newFolder.standardizedFileURL
         guard !isMoving else { completion("The downloads are still being moved."); return }
         do { try FileManager.default.createDirectory(at: new, withIntermediateDirectories: true) } catch {
@@ -147,7 +147,9 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
                 }
                 if (try? fm.moveItem(at: src, to: new.appendingPathComponent(name))) != nil { moved[url] = name } else { failed.append(url) }
             }
+            let result = (moved: moved, failed: failed)
             DispatchQueue.main.async {
+                let (moved, failed) = result
                 for (url, name) in moved { self.entries[url]?.file = name; self.entries[url]?.folder = nil }
                 // Not moved (or finished downloading while moving): they stay in the old folder, still listed.
                 for (url, e) in self.entries where moved[url] == nil && e.folder == nil { self.entries[url]?.folder = old.path }

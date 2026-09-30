@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Stage 1: walk folders/files and produce bare tracks (no tag reading).
 enum FolderScanner {
@@ -39,7 +40,7 @@ enum FolderScanner {
         }
 
         /// A symlink's target's values (links to files and folders are followed, like Finder aliases aren't).
-        func values(_ url: URL) -> URLResourceValues? {
+        @Sendable func values(_ url: URL) -> URLResourceValues? {
             let v = try? url.resourceValues(forKeys: Set(keys))
             guard v?.isSymbolicLink == true else { return v }
             return try? URL(exactPath: ExactPath.resolved(url.path)).resourceValues(forKeys: Set(keys))
@@ -139,17 +140,21 @@ enum FolderScanner {
                 // trip on a network share, ~3.5 ms on NFS), so a few at a time and in slices: a 10k-entry playlist
                 // starts showing at once instead of after the last lookup.
                 let entries = PlaylistFile.entries(root)
-                var looked: [URLResourceValues?] = []
+                // What a lookup found: a file's size and date (URLResourceValues itself can't cross threads).
+                struct Found: Sendable { let size: Int64, mtime: Double }
+                var looked: [Found?] = []
                 for (n, e) in entries.enumerated() {
                     if n % 256 == 0 {
                         flushLoose()
                         let slice = entries[n..<min(n + 256, entries.count)].map(\.url)
-                        looked = [URLResourceValues?](repeating: nil, count: slice.count)
-                        looked.withUnsafeMutableBufferPointer { out in
-                            DispatchQueue.concurrentPerform(iterations: slice.count) { i in
-                                if slice[i].isFileURL { out[i] = values(slice[i]) }
-                            }
+                        // Each lookup fills its own slot; the lock is a few nanoseconds against a network round trip.
+                        let results = OSAllocatedUnfairLock(initialState: [Found?](repeating: nil, count: slice.count))
+                        DispatchQueue.concurrentPerform(iterations: slice.count) { i in
+                            guard slice[i].isFileURL, let v = values(slice[i]), v.isRegularFile == true else { return }
+                            let found = Found(size: Int64(v.fileSize ?? 0), mtime: v.contentModificationDate?.timeIntervalSince1970 ?? 0)
+                            results.withLock { $0[i] = found }
                         }
+                        looked = results.withLock { $0 }
                     }
                     let url = e.url
                     if !url.isFileURL, e.web {   // a web audio file, not a station
@@ -165,12 +170,12 @@ enum FolderScanner {
                         continue
                     }
                     if !url.isFileURL { loose.append(.stream(url.absoluteString, name: e.title, logo: e.logo)); continue }
-                    let v = looked[n % 256]
-                    guard v?.isRegularFile == true, audioExtensions.contains(url.pathExtension.lowercased()) else { continue }
+                    guard let f = looked[n % 256], audioExtensions.contains(url.pathExtension.lowercased()) else { continue }
+                    let found = Track(path: url.path, size: f.size, mtime: f.mtime)
                     if let start = e.cueStart {
                         // A saved CUE track: take it from its sheet again (titles), else rebuild it from the range.
                         if let t = cueTrack(url, start: start) { loose.append(t); continue }
-                        var t = track(url, v)
+                        var t = found
                         t.cueStart = start
                         t.cueEnd = e.cueEnd
                         t.cueNumber = e.cueNumber
@@ -178,7 +183,7 @@ enum FolderScanner {
                         loose.append(t)
                         continue
                     }
-                    loose.append(track(url, v))
+                    loose.append(found)
                 }
             } else if audioExtensions.contains(root.pathExtension.lowercased()) {
                 loose.append(track(root, rv))

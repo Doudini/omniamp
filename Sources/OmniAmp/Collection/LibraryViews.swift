@@ -535,8 +535,9 @@ final class LibraryTimeline: NSView, NSViewToolTipOwner {
         if !watchingCovers {
             watchingCovers = true
             observers.add(NotificationCenter.default.addObserver(forName: LibraryArt.coverChanged, object: nil, queue: .main) { [weak self] n in
+                let changed = n.object as? String
                 MainActor.assumeIsolated {
-                    guard let self, let folder = n.object as? String else { return }
+                    guard let self, let folder = changed else { return }
                     for a in self.official where a.folder == folder {
                         self.covers[LibraryArt.key(a)] = nil
                         self.loadCover(a)
@@ -747,10 +748,9 @@ final class LibraryTimeline: NSView, NSViewToolTipOwner {
 
     /// The order covers are drawn in (the last on top): hovered, then selected, over the rest.
     private func coverOrder(_ n: Int) -> [Int] {
-        (0..<min(n, shelf.count)).sorted { a, b in
-            func rank(_ i: Int) -> Int { hovered == .cover(i) ? 2 : shelf[i].key == selectedKey ? 1 : 0 }
-            return (rank(a), a) < (rank(b), b)
-        }
+        let hovered = hovered, keys = shelf.map(\.key), selected = selectedKey
+        func rank(_ i: Int) -> Int { hovered == .cover(i) ? 2 : keys[i] == selected ? 1 : 0 }
+        return (0..<min(n, keys.count)).sorted { a, b in (rank(a), a) < (rank(b), b) }
     }
 
     private func hit(_ e: NSEvent) -> Hit? { hit(at: convert(e.locationInWindow, from: nil)) }
