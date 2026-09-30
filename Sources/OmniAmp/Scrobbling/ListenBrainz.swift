@@ -1,6 +1,7 @@
 import Foundation
 
 /// ListenBrainz scrobbling (open, MetaBrainz). The user pastes their token from listenbrainz.org/settings.
+@MainActor
 final class ListenBrainz: ScrobbleService {
     static let shared = ListenBrainz()
 
@@ -52,7 +53,7 @@ final class ListenBrainz: ScrobbleService {
         UserDefaults.standard.removeObject(forKey: Pref.listenbrainzUser)
     }
 
-    static func payload(_ s: Scrobble, withTime: Bool) -> [String: Any] {
+    nonisolated static func payload(_ s: Scrobble, withTime: Bool) -> [String: Any] {
         var meta: [String: Any] = ["artist_name": s.artist, "track_name": s.title]
         if let a = s.album { meta["release_name"] = a }
         var info: [String: Any] = ["media_player": "OmniAmp", "submission_client": "OmniAmp"]

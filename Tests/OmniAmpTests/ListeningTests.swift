@@ -11,6 +11,7 @@ private struct CannedLastFM: HTTPTransport {
     }
 }
 
+@MainActor   // the Last.fm client is main-thread only
 final class ListeningTests: XCTestCase {
     private var tmp: URL!
 

@@ -37,6 +37,7 @@ struct RadioStation: Codable, Equatable {
 }
 
 /// Client for the free, community-run radio-browser.info directory (no API key).
+@MainActor
 final class RadioBrowser {
     static let shared = RadioBrowser()
 
@@ -65,7 +66,7 @@ final class RadioBrowser {
         throw lastError
     }
 
-    static func decode(_ data: Data) -> [RadioStation] {
+    nonisolated static func decode(_ data: Data) -> [RadioStation] {
         guard let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return [] }
         return arr.compactMap { d in
             guard let uuid = d["stationuuid"] as? String, let name = d["name"] as? String else { return nil }

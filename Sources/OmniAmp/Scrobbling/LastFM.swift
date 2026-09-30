@@ -6,6 +6,7 @@ import Foundation
 /// The app's API key/secret come from the build (Info.plist `LastFMAPIKey`/`LastFMSecret`, injected by
 /// scripts/make-app.sh from the untracked secrets.env) or the OMNIAMP_LASTFM_KEY/SECRET environment.
 /// Users can use their own key instead (Settings); its secret and the user's session key live in the Keychain.
+@MainActor
 final class LastFM: ScrobbleService {
     static let shared = LastFM()
 
@@ -61,7 +62,7 @@ final class LastFM: ScrobbleService {
     // MARK: Signing
 
     /// api_sig: md5 of the parameters sorted by name, concatenated as name+value, followed by the secret.
-    static func signature(_ params: [String: String], secret: String) -> String {
+    nonisolated static func signature(_ params: [String: String], secret: String) -> String {
         let s = params.keys.sorted().map { $0 + params[$0]! }.joined() + secret
         return Insecure.MD5.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined()
     }
@@ -98,7 +99,7 @@ final class LastFM: ScrobbleService {
         return json
     }
 
-    static func escape(_ s: String) -> String {
+    nonisolated static func escape(_ s: String) -> String {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s

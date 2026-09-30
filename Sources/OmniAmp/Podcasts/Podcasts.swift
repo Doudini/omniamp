@@ -40,6 +40,7 @@ enum PodcastFeedError: Error, LocalizedError {
 
 // MARK: - Directory (Apple's podcast search: free, no API key)
 
+@MainActor
 final class PodcastDirectory {
     static let shared = PodcastDirectory()
     var transport: HTTPTransport = URLSessionTransport()
@@ -58,7 +59,7 @@ final class PodcastDirectory {
     // when they come; results are kept for a while so going back to a search is instant.
 
     private var searchCache: [String: (at: Date, shows: [PodcastShow])] = [:]
-    private static let searchMaxAge: TimeInterval = 30 * 60
+    nonisolated private static let searchMaxAge: TimeInterval = 30 * 60
 
     @MainActor
     private func cachedSearch(_ key: String, _ fetch: () async throws -> [PodcastShow]) async throws -> [PodcastShow] {
@@ -71,7 +72,7 @@ final class PodcastDirectory {
 
     /// fyyd also matches episode texts, which brings in unrelated shows: keep those whose title or author
     /// has every word searched for.
-    static func relevant(_ shows: [PodcastShow], to term: String) -> [PodcastShow] {
+    nonisolated static func relevant(_ shows: [PodcastShow], to term: String) -> [PodcastShow] {
         let words = term.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
         guard !words.isEmpty else { return shows }
         return shows.filter { s in
@@ -81,7 +82,7 @@ final class PodcastDirectory {
     }
 
     /// `extra` shows not already in `first` (same feed, or same title and author).
-    static func merge(_ first: [PodcastShow], _ extra: [PodcastShow]) -> [PodcastShow] {
+    nonisolated static func merge(_ first: [PodcastShow], _ extra: [PodcastShow]) -> [PodcastShow] {
         func feedKey(_ s: String) -> String {
             var k = s.lowercased()
             for p in ["https://", "http://", "www."] where k.hasPrefix(p) { k.removeFirst(p.count) }
@@ -117,7 +118,7 @@ final class PodcastDirectory {
         }
     }
 
-    static func decodeFyyd(_ data: Data) -> [PodcastShow] {
+    nonisolated static func decodeFyyd(_ data: Data) -> [PodcastShow] {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let list = root["data"] as? [[String: Any]] else { return [] }
         return list.compactMap { r in
@@ -145,7 +146,7 @@ final class PodcastDirectory {
     // Top charts are kept on disk per country: the chart service takes ~2 s, and it changes slowly.
     private struct Chart: Codable { var fetched: Double; var shows: [PodcastShow] }
     private var charts: [String: Chart] = [:]
-    private static let chartMaxAge: TimeInterval = 6 * 3600
+    nonisolated private static let chartMaxAge: TimeInterval = 6 * 3600
 
     private func chartFile(_ country: String) -> URL {
         let d = LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("Podcasts/charts", isDirectory: true)
@@ -186,15 +187,15 @@ final class PodcastDirectory {
         return ids.compactMap { byID[$0] }
     }
 
-    static func decodeChartIDs(_ data: Data) -> [String] {
+    nonisolated static func decodeChartIDs(_ data: Data) -> [String] {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let feed = root["feed"] as? [String: Any], let results = feed["results"] as? [[String: Any]] else { return [] }
         return results.compactMap { $0["id"] as? String }
     }
 
-    static func decodeLookup(_ data: Data) -> [PodcastShow] { decodeLookup(data, keepingIDs: true).map(\.1) }
+    nonisolated static func decodeLookup(_ data: Data) -> [PodcastShow] { decodeLookup(data, keepingIDs: true).map(\.1) }
 
-    static func decodeLookup(_ data: Data, keepingIDs: Bool) -> [(String, PodcastShow)] {
+    nonisolated static func decodeLookup(_ data: Data, keepingIDs: Bool) -> [(String, PodcastShow)] {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let results = root["results"] as? [[String: Any]] else { return [] }
         return results.compactMap { r in

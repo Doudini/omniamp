@@ -204,6 +204,7 @@ final class ScrobbleTests: XCTestCase {
     }
 }
 
+@MainActor   // the Last.fm client is main-thread only
 final class LastFMKeyTests: XCTestCase {
     override func setUp() { setenv("OMNIAMP_KEYCHAIN_SERVICE", "OmniAmp.tests", 1) }   // never the real Keychain
     override func tearDown() {

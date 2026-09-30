@@ -10,6 +10,7 @@ struct Scrobble: Codable, Equatable {
 }
 
 /// A scrobbling service (Last.fm, ListenBrainz).
+@MainActor
 protocol ScrobbleService: AnyObject {
     var id: String { get }
     var isConnected: Bool { get }
@@ -34,7 +35,8 @@ enum ReconnectMark {
     static func set(_ id: String, _ on: Bool) { UserDefaults.standard.set(on ? true : nil, forKey: id + "NeedsReconnect") }
 }
 
-protocol HTTPTransport {
+/// Sendable: requests go out from the main-thread clients and are awaited elsewhere.
+protocol HTTPTransport: Sendable {
     func send(_ req: URLRequest) async throws -> (Data, Int)
 }
 
