@@ -150,6 +150,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             self.episodesTable.reloadData(forRowIndexes: [row], columnIndexes: [0])
             if self.episodesTable.selectedRow == row { self.updateNotes() }
         } }
+        t.tolerance = 1   // lets macOS batch its wake-ups with others
         RunLoop.main.add(t, forMode: .common)
         progressTimer = t
     }

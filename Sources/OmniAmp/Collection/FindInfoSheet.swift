@@ -211,7 +211,8 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
 
     private func loadThumb(_ url: URL) {
         Task { @MainActor [weak self] in
-            guard let data = await MetadataLookup.shared.image(url), let img = ArtworkStore.image(data, maxPixels: 120) else { return }
+            guard let data = await MetadataLookup.shared.image(url),
+                  let img = await Task.detached(operation: { ArtworkStore.image(data, maxPixels: 120) }).value else { return }
             self?.thumbs[url] = img
             if let self, let row = self.candidates.firstIndex(where: { $0.thumbURL == url }) {
                 self.table.reloadData(forRowIndexes: [row], columnIndexes: [0])
@@ -239,7 +240,9 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
             let data = await MetadataLookup.shared.image(url)
             guard let self, !Task.isCancelled, self.table.selectedRow == r else { return }
             self.coverData = data
-            if let data, let img = ArtworkStore.image(data, maxPixels: 300) { self.cover.image = img }
+            // Decoded off the main thread (a full-size original can take a moment).
+            if let data, let img = await Task.detached(operation: { ArtworkStore.image(data, maxPixels: 300) }).value,
+               !Task.isCancelled, self.table.selectedRow == r { self.cover.image = img }
         }
     }
 

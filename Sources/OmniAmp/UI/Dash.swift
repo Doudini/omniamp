@@ -199,6 +199,18 @@ final class Pill: NSControl {
         }
     }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+
+    // VoiceOver: it draws itself, so it says what it is (a button, its title, whether it's the chosen filter)
+    // and can be pressed from there.
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityLabel() -> String? { title.isEmpty ? toolTip : title }
+    override func isAccessibilitySelected() -> Bool { isOn }
+    override func isAccessibilityEnabled() -> Bool { isEnabled }
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        return sendAction(action, to: target)
+    }
 }
 
 /// Soft edges on a list in a card: rows fade into the card at the top and bottom instead of being cut off,

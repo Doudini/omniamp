@@ -97,9 +97,12 @@ final class ClassicLookController: NSObject, LookController, NSWindowDelegate {
         clock.track([mainWindow, playlistWindow, eqWindow])
     }
 
+    private var jumpCloseObserver: NSObjectProtocol?
+
     func dismantle() {
         clock?.stop()
         jumpPanel?.close()
+        if let o = jumpCloseObserver { NotificationCenter.default.removeObserver(o); jumpCloseObserver = nil }
         mainWindow.removeChildWindow(playlistWindow)
         mainWindow.removeChildWindow(eqWindow)
         playlistWindow.delegate = nil
@@ -285,7 +288,7 @@ extension ClassicLookController: PlayerUI {
             p.contentView?.addSubview(f)
             p.isReleasedWhenClosed = false
             // Closed with its X button: drop the filter too (it would stay on with nothing showing it).
-            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: p, queue: .main) { [weak self] _ in
+            jumpCloseObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: p, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, !self.controller.filterQuery.isEmpty else { return }
                     self.jumpField?.stringValue = ""

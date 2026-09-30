@@ -269,7 +269,7 @@ final class ArtistPage: DashPage {
 
     /// An artist's photo for elsewhere (the Listening display): from their saved info, looked up once when it's
     /// never been (as opening their page would). Nil when there's none or lookups are off.
-    static func photo(artistKey key: String, name: String) async -> CGImage? {
+    nonisolated static func photo(artistKey key: String, name: String) async -> CGImage? {
         let cached = await Task.detached { (try? CollectionDB().artistInfo(key)) ?? .unknown }.value
         var found: MetadataLookup.ArtistInfo?
         switch cached {
@@ -288,8 +288,9 @@ final class ArtistPage: DashPage {
         return await photo(url)
     }
 
-    /// The photo, from the disk cache or downloaded and kept there (small: 320 px).
-    private static func photo(_ url: URL) async -> CGImage? {
+    /// The photo, from the disk cache or downloaded and kept there (small: 320 px). Nonisolated: decoding a
+    /// multi-MB original and writing the PNG happen off the main thread.
+    nonisolated private static func photo(_ url: URL) async -> CGImage? {
         // A stable name (hashValue changes every launch).
         let name = "artist-" + SHA256.hash(data: Data(url.absoluteString.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined() + ".png"
         let file = LibraryArt.directory.appendingPathComponent(name)
