@@ -6,6 +6,9 @@ enum Pref {
     static let skinPath = "skinPath"
     static let modernTheme = "modernTheme"
     static let modernFinish = "modernFinish"
+    /// The library's chart palette (ChartPalette.id), and whether its categories use the color-blind safe set.
+    static let chartPalette = "chartPalette"
+    static let colorBlindCharts = "colorBlindCharts"
     static let modernDrawer = "modernDrawer"
     static let modernInfoHeight = "modernInfoHeight"
     static let modernEQVisible = "modernEQVisible"

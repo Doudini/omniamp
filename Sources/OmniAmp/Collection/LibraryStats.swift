@@ -34,6 +34,8 @@ struct LibraryStats: Sendable {
     var showMonths: [String: Int] = [:]
     var songs: [Song] = []
     var topArtists: [Bar] = []
+    /// The release added last.
+    var newest: LibraryAlbum?
 }
 
 extension CollectionDB {
@@ -121,6 +123,7 @@ extension CollectionDB {
             s.topArtists.append(.init(id: r.text(0), label: r.text(1), value: r.double(2) / 3600,
                                       count: r.int(4)))
         }
+        s.newest = try albumsWhere(f, [], order: "a.added DESC LIMIT 1").first
         return s
     }
 

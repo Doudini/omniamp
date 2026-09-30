@@ -136,6 +136,80 @@ enum Finish: String, CaseIterable {
                                                        playlist: Dash.rgb(0x070C0E))
 }
 
+/// The colors of the library's charts, apart from the theme: most are from pixel-art palettes on lospec.com, with
+/// the steps that stay readable on the dark cards. Amounts (bars, heatmaps, the map) take the palette's color
+/// nearest the theme's hue, so the charts sit with the display color without glowing like it.
+struct ChartPalette {
+    let id: String
+    let name: String
+    /// Eight colors for series (the top artists), in order, and the gray for the rest.
+    let series: [NSColor]
+    let other: NSColor
+    /// Kinds of recording (see Theme.kind).
+    let album, single, live, show, unreleased: NSColor
+    let up, down: NSColor
+    /// Per theme id: amounts, and a second series or a line over them. Nil: the theme's phosphor itself.
+    private let amounts: [String: UInt32]?
+    private let compares: [String: UInt32]
+
+    var amount: NSColor { amounts?[Theme.palette.id].map(Dash.rgb) ?? Theme.phosphor }
+    var compare: NSColor { Dash.rgb(compares[Theme.palette.id] ?? compares["green"]!) }
+
+    private init(id: String, name: String, series: [UInt32], other: UInt32, kinds: [UInt32], up: UInt32, down: UInt32,
+                 amounts: [String: UInt32]?, compares: [String: UInt32]) {
+        let c = Dash.rgb
+        self.id = id
+        self.name = name
+        self.series = series.map(c)
+        self.other = c(other)
+        (album, single, live, show, unreleased) = (c(kinds[0]), c(kinds[1]), c(kinds[2]), c(kinds[3]), c(kinds[4]))
+        self.up = c(up)
+        self.down = c(down)
+        self.amounts = amounts
+        self.compares = compares
+    }
+
+    static let all: [ChartPalette] = [
+        // Vinik24 (Vinik): muted and dusty.
+        ChartPalette(id: "vinik", name: "Vinik24",
+                     series: [0x7CA1C0, 0xC28D75, 0x6EAA78, 0xBE955C, 0xA593A5, 0x68ACA9, 0xC38890, 0x93A167], other: 0x5D6872,
+                     kinds: [0x416AA3, 0x7CA1C0, 0x6EAA78, 0xBE955C, 0xA593A5], up: 0x6EAA78, down: 0xC38890,
+                     amounts: ["green": 0x6EAA78, "amber": 0xBE955C, "blue": 0x7CA1C0, "cyan": 0x68ACA9, "mono": 0xC5CCB8],
+                     compares: ["green": 0xC28D75, "amber": 0x7CA1C0, "blue": 0xBE955C, "cyan": 0xC38890, "mono": 0xC28D75]),
+        // Apollo (AdamCYounis): soft, a little warmer.
+        ChartPalette(id: "apollo", name: "Apollo",
+                     series: [0x4F8FBA, 0xDE9E41, 0x75A743, 0xCF573C, 0xC65197, 0x73BED3, 0xDF84A5, 0xA8CA58], other: 0x577277,
+                     kinds: [0x3C5E8B, 0x4F8FBA, 0x75A743, 0xDE9E41, 0xC65197], up: 0xA8CA58, down: 0xCF573C,
+                     amounts: ["green": 0x75A743, "amber": 0xDE9E41, "blue": 0x4F8FBA, "cyan": 0x73BED3, "mono": 0xA8B5B2],
+                     compares: ["green": 0xE8C170, "amber": 0x73BED3, "blue": 0xE8C170, "cyan": 0xDF84A5, "mono": 0xDE9E41]),
+        // Lost Century (CalmRadish): faded print.
+        ChartPalette(id: "century", name: "Lost Century",
+                     series: [0x8CABA1, 0xC77B58, 0xB3A555, 0xD1B187, 0xAE5D40, 0xAB9B8E, 0x927441, 0x847875], other: 0x4D4539,
+                     kinds: [0x4B726E, 0x8CABA1, 0xB3A555, 0xC77B58, 0xAB9B8E], up: 0xB3A555, down: 0xC77B58,
+                     amounts: ["green": 0x8CABA1, "amber": 0xD1B187, "blue": 0x8CABA1, "cyan": 0x8CABA1, "mono": 0xAB9B8E],
+                     compares: ["green": 0xC77B58, "amber": 0x8CABA1, "blue": 0xC77B58, "cyan": 0xC77B58, "mono": 0xC77B58]),
+        // Sweetie 16 (GrafxKid): brighter, a pixel game.
+        ChartPalette(id: "sweetie", name: "Sweetie 16",
+                     series: [0x41A6F6, 0xEF7D57, 0x38B764, 0xFFCD75, 0xB13E53, 0x73EFF7, 0xA7F070, 0x94B0C2], other: 0x566C86,
+                     kinds: [0x3B5DC9, 0x41A6F6, 0x38B764, 0xEF7D57, 0xB13E53], up: 0xA7F070, down: 0xEF7D57,
+                     amounts: ["green": 0x38B764, "amber": 0xFFCD75, "blue": 0x41A6F6, "cyan": 0x73EFF7, "mono": 0x94B0C2],
+                     compares: ["green": 0xFFCD75, "amber": 0x41A6F6, "blue": 0xFFCD75, "cyan": 0xEF7D57, "mono": 0xEF7D57]),
+        // The first look: amounts in the phosphor color, categories the color-blind safe ones.
+        ChartPalette(id: "phosphor", name: "Phosphor", series: safeSeries, other: 0x4A5A61, kinds: safeKinds,
+                     up: 0x5FD38A, down: 0xE8736B, amounts: nil, compares: safeCompares),
+    ]
+
+    /// Categorical colors checked on our cards so neighbours stay apart for colour-blind eyes too. Series: the
+    /// dataviz reference palette's dark steps. Kinds: from AAP-64 (Adigun A. Polack); its orange a step darker and
+    /// its darker green, since orange next to a brighter green blurs for red-green colour blindness.
+    static let colorBlindSafe = ChartPalette(id: "safe", name: "Color-Blind Safe", series: safeSeries, other: 0x4A5A61, kinds: safeKinds,
+                                             up: 0x5FD38A, down: 0xE8736B, amounts: nil, compares: safeCompares)
+    private static let safeSeries: [UInt32] = [0x3987E5, 0xD95926, 0x199E70, 0xC98500, 0xD55181, 0x008300, 0x9085E9, 0xE66767]
+    private static let safeKinds: [UInt32] = [0x285CC4, 0x249FDE, 0x1A7A3E, 0xD67A14, 0xBC4A9B]
+    /// Complementary to the theme.
+    private static let safeCompares: [String: UInt32] = ["green": 0x6FA8DC, "amber": 0x4FC3C7, "blue": 0xF2B84B, "cyan": 0xF2B84B, "mono": 0x6FA8DC]
+}
+
 /// Colors and fonts for the modern look. Phosphor colors come from the selected theme.
 enum Theme {
     static let changed = Notification.Name("OmniAmpThemeChanged")
@@ -200,19 +274,46 @@ enum Theme {
         return t < 0.6 ? a.blended(withFraction: t / 0.6, of: b)! : b.blended(withFraction: (t - 0.6) / 0.4, of: c)!
     }
 
-    /// The kind of a recording, the same in every theme. From AAP-64 (Adigun A. Polack, lospec.com), checked so the
-    /// five stay apart on the cards for colour-blind eyes too: blues for official studio releases, a deep green for
-    /// official live albums, orange for shows and bootlegs (red read as an error), magenta for demos and unreleased
-    /// tracks. The orange is a step darker than AAP-64's #f9a31b and the green AAP-64's darker one: orange next to
-    /// a brighter green blurs for red-green colour blindness.
-    /// Identity only: amounts stay in the phosphor color, and text stays in text colors.
+    /// The chart colors in use: the picked palette, its categories swapped for the color-blind safe ones when
+    /// that's switched on.
+    static private(set) var chart: ChartPalette = {
+        let parts = ProcessInfo.processInfo.environment["OMNIAMP_CHARTS"]?.split(separator: ":").map(String.init)
+        let id = parts?.first ?? UserDefaults.standard.string(forKey: Pref.chartPalette) ?? ChartPalette.all[0].id
+        return ChartPalette.all.first { $0.id == id } ?? ChartPalette.all[0]
+    }()
+
+    static private(set) var colorBlindCharts: Bool = {
+        if let v = ProcessInfo.processInfo.environment["OMNIAMP_CHARTS"] { return v.hasSuffix(":cb") }
+        return UserDefaults.standard.bool(forKey: Pref.colorBlindCharts)
+    }()
+
+    static func selectChart(_ id: String) {
+        guard let p = ChartPalette.all.first(where: { $0.id == id }) else { return }
+        chart = p
+        UserDefaults.standard.set(id, forKey: Pref.chartPalette)
+        NotificationCenter.default.post(name: changed, object: nil)
+    }
+
+    static func setColorBlindCharts(_ on: Bool) {
+        colorBlindCharts = on
+        UserDefaults.standard.set(on, forKey: Pref.colorBlindCharts)
+        NotificationCenter.default.post(name: changed, object: nil)
+    }
+
+    /// Categories (artists, kinds of recording) come from here: the palette's, or the color-blind safe set.
+    static var categories: ChartPalette { colorBlindCharts ? .colorBlindSafe : chart }
+
+    /// The kind of a recording, from the chart palette: blues for official studio releases, green for official
+    /// live albums, ochre or orange for shows and bootlegs (red read as an error), mauve for demos and unreleased.
+    /// Identity only: amounts are in the palette's amount color, and text stays in text colors.
     static func kind(_ k: ReleaseKind) -> NSColor {
-        switch k {
-        case .album: ThemePalette.rgb(0x28 / 255, 0x5C / 255, 0xC4 / 255)
-        case .single, .compilation: ThemePalette.rgb(0x24 / 255, 0x9F / 255, 0xDE / 255)
-        case .live: ThemePalette.rgb(0x1A / 255, 0x7A / 255, 0x3E / 255)
-        case .show: ThemePalette.rgb(0xD6 / 255, 0x7A / 255, 0x14 / 255)
-        case .unreleased: ThemePalette.rgb(0xBC / 255, 0x4A / 255, 0x9B / 255)
+        let c = categories
+        return switch k {
+        case .album: c.album
+        case .single, .compilation: c.single
+        case .live: c.live
+        case .show: c.show
+        case .unreleased: c.unreleased
         }
     }
 

@@ -123,7 +123,7 @@ final class WorldMapView: NSView {
         let all = paths()
         for (c, p) in zip(map.countries, all) {
             let s = Self.step(values[c.iso] ?? 0, max: most)
-            (s < 0 ? Dash.cardRaised : Dash.accent.withAlphaComponent(Self.steps[s])).setFill()
+            (s < 0 ? Dash.cardRaised : Dash.amount.withAlphaComponent(Self.steps[s])).setFill()
             p.fill()
             Dash.card.setStroke()
             p.lineWidth = 0.6

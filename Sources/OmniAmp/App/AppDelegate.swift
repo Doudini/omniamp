@@ -388,6 +388,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         rebuildModern()
     }
 
+    /// Only the library draws charts; its pages repaint on Theme.changed.
+    @objc private func pickChartColors(_ sender: NSMenuItem) {
+        if let id = sender.representedObject as? String, id != Theme.chart.id { Theme.selectChart(id) }
+    }
+    @objc private func toggleColorBlindCharts(_ sender: Any?) { Theme.setColorBlindCharts(!Theme.colorBlindCharts) }
+
     private func rebuildModern() {
         guard mode == .modern, let old = look as? ModernWindowController else { return }
         // The rebuilt window picks up where you were: the same rows selected, the list focused.
@@ -449,6 +455,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             it.target = self
             it.representedObject = f.rawValue
         }
+        // The library's charts.
+        themes.addItem(.separator())
+        themes.addItem(.sectionHeader(title: "Chart Colors"))
+        for c in ChartPalette.all {
+            let it = themes.addItem(withTitle: c.name, action: #selector(pickChartColors(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = c.id
+        }
+        themes.addItem(withTitle: "Color-Blind Safe Colors", action: #selector(toggleColorBlindCharts(_:)), keyEquivalent: "").target = self
         themeItem.submenu = themes
         m.addItem(themeItem)
         let anItem = NSMenuItem(title: "Visualizer", action: nil, keyEquivalent: "")
@@ -545,6 +560,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if item.action == #selector(pickPlaylistFont(_:)) { item.state = (item.representedObject as? String) == PlaylistStyle.font.rawValue ? .on : .off }
         if item.action == #selector(toggleNumbers(_:)) { item.state = PlaylistStyle.showNumbers ? .on : .off }
         if item.action == #selector(pickTheme(_:)) { item.state = (item.representedObject as? String) == Theme.palette.id ? .on : .off }
+        if item.action == #selector(pickChartColors(_:)) { item.state = (item.representedObject as? String) == Theme.chart.id ? .on : .off }
+        if item.action == #selector(toggleColorBlindCharts(_:)) { item.state = Theme.colorBlindCharts ? .on : .off }
         if item.action == #selector(pickFinish(_:)) { item.state = (item.representedObject as? String) == Theme.finish.rawValue ? .on : .off }
         if item.action == #selector(setScale(_:)) { item.state = Int(SkinLibrary.scale) == item.tag ? .on : .off }
         if item.action == #selector(pickInstalledSkin(_:)) {

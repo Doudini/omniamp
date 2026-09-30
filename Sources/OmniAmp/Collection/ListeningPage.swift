@@ -39,7 +39,7 @@ final class ClockChart: StatsChart {
             for h in 0..<24 {
                 let r = rect(row: row, hour: h)
                 let n = CGFloat(clock[d][h])
-                (n == 0 ? Dash.cardRaised : Dash.accent.withAlphaComponent(0.15 + 0.85 * n / most)).setFill()
+                (n == 0 ? Dash.cardRaised : Dash.amount.withAlphaComponent(0.15 + 0.85 * n / most)).setFill()
                 NSBezierPath(roundedRect: r, xRadius: 2, yRadius: 2).fill()
                 if hovered == row * 24 + h {
                     Dash.text.setStroke()
@@ -88,6 +88,8 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
     private let yearMenu = NSPopUpButton()
     private let periodNote = NSTextField(labelWithString: "")
     private var showOwned = false
+    /// The most played artist's photo, kept across rebuilds.
+    private var topPhoto: (key: String, image: CGImage?)?
     private var country: (iso: String, name: String)?
     private let map = WorldMapView()
     private let countryArtists = BarListChart()
@@ -294,7 +296,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         if let st = stats, st.plays > 0, let first = st.firstPlay, let u = MainActor.assumeIsolated({ history.user }) {
             let f = DateFormatter()
             f.dateStyle = .medium
-            subtitle = "\(st.plays.formatted()) plays by \(u) since \(f.string(from: first))"
+            subtitle = "\(st.plays.formatted()) plays of \(st.artists.formatted()) artists by \(u) since \(f.string(from: first))"
         }
         var rows: [NSView] = [dashHeading("Your listening", subtitle), controls()]
         guard MainActor.assumeIsolated({ history.canImport }) else {
@@ -307,27 +309,61 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         }
         guard let s = stats else { return finish(rows) }
 
-        // 1. Key figures: six tiles, this year against last.
+        // 1. Key figures: the most played artist with their photo, then this year, countries, artists and time.
         let year = Calendar.current.component(.year, from: Date())
         let perYear = Dictionary(uniqueKeysWithValues: s.years.map { ($0.year, $0.releases) })
         // This year so far against last year up to the same date (not all of last year).
         let now = perYear[year] ?? 0, last = s.lastYearToDate
         let delta: (String, Bool)? = last > 0 ? (String(format: "%.0f%% vs ’%02d", abs(Double(now - last) / Double(last) * 100), (year - 1) % 100), now >= last) : nil
         let placed = s.plays > 0 ? Double(s.mappedPlays) / Double(s.plays) : 0
-        let since = s.firstPlay.map { Calendar.current.component(.year, from: $0) }
-        let topArtist = s.topArtists.first
+        var pace: (year: Int, projected: Int)?
+        if now > 0, let start = Calendar.current.date(from: DateComponents(year: year, month: 1, day: 1)),
+           let end = Calendar.current.date(from: DateComponents(year: year + 1, month: 1, day: 1)) {
+            let done = Date().timeIntervalSince(start) / end.timeIntervalSince(start)
+            if done > 0.05, done < 1 { pace = (year, Int((Double(now) / done).rounded())) }
+        }
+        let byCountry = showOwned ? s.ownedByCountry : s.playsByCountry
+        let topCountries = byCountry.sorted { $0.value > $1.value }.prefix(3).map(\.key)
+        let ownedShare = s.artists > 0 ? Double(s.ownedArtists) / Double(s.artists) : 0
+        // Scrobbles have no length: reckoned at the library's average track (4 minutes when there's no library).
+        let perPlay = s.averageTrackSeconds > 30 ? s.averageTrackSeconds : 240
+        let listenedDays = Double(s.plays) * perPlay / 86400
         let display = HiFiDisplay()
+        if let top = s.topArtists.first {
+            let years = s.topArtistByYear.filter { Keys.artist($0.value.name) == top.id }.keys.sorted()
+            var lines = [String(format: "%@ plays · %.0f%%", Int(top.value).formatted(), top.value / Double(max(s.plays, 1)) * 100)]
+            if years.count == 1 { lines.append("#1 in \(years[0])") }
+            else if years.count > 1 { lines.append("#1 in \(years.count) years") }
+            if let owned = top.count { lines.append("\(owned.formatted()) tracks owned") }
+            display.feature = .init(kicker: "most played", title: top.label, lines: lines,
+                                    tip: "\(top.label) · click for the artist", action: { [weak self] in self?.onArtist?(top.id) })
+            if topPhoto?.key == top.id {
+                display.featureImage = topPhoto?.image
+            } else {
+                Task { @MainActor [weak self, weak display] in
+                    let img = await ArtistPage.photo(artistKey: top.id, name: top.label)
+                    self?.topPhoto = (top.id, img)
+                    display?.featureImage = img
+                }
+            }
+        }
         display.items = [
-            .init(value: s.plays.formatted(), label: "plays"),
             .init(value: now.formatted(), label: "plays \(year)",
-                  tip: last > 0 ? "\(now.formatted()) plays in \(year) so far, \(last.formatted()) by this date in \(year - 1)" : nil,
-                  meter: (year - 9...year).map { Double(perYear[$0] ?? 0) }, delta: delta),
-            .init(value: s.artists.formatted(), label: "artists"),
-            .init(value: (showOwned ? s.ownedByCountry : s.playsByCountry).count.formatted(), label: "countries",
-                  tip: showOwned ? "Countries of the artists in your library" : String(format: "%.0f%% of plays placed on the map", placed * 100)),
-            .init(value: topArtist.map { $0.label } ?? "–", label: "most played",
-                  tip: topArtist.map { "\($0.label): \(Int($0.value).formatted()) plays" }),
-            .init(value: since.map(String.init) ?? "–", label: "since"),
+                  tip: (last > 0 ? "\(now.formatted()) plays in \(year) so far, \(last.formatted()) by this date in \(year - 1)" : "\(now.formatted()) plays in \(year) so far")
+                    + (pace.map { " · on pace for ~\($0.projected.formatted())" } ?? ""),
+                  meter: (year - 9...year).map { Double(perYear[$0] ?? 0) }, delta: delta,
+                  note: delta == nil ? pace.map { "~\($0.projected.formatted()) at this pace" } : nil),
+            .init(value: byCountry.count.formatted(), label: "countries",
+                  tip: showOwned ? "Countries of the artists in your library" : String(format: "%.0f%% of plays placed on the map", placed * 100),
+                  flags: topCountries.map(Self.flag).joined(),
+                  note: byCountry.count > topCountries.count ? "+\(byCountry.count - topCountries.count) more" : nil),
+            .init(value: s.artists.formatted(), label: "artists",
+                  tip: "\(s.ownedArtists.formatted()) of the \(s.artists.formatted()) artists you've played are in your library",
+                  share: ownedShare, note: "\(s.ownedArtists.formatted()) owned"),
+            .init(value: listenedDays >= 365 ? String(format: "%.1f", listenedDays / 365.25) : String(format: "%.0f", listenedDays),
+                  label: listenedDays >= 365 ? "years listened" : "days listened",
+                  tip: "\(s.plays.formatted()) plays at \(Int(perPlay) / 60)m \(Int(perPlay) % 60)s each (your library's average track): about \(Int(listenedDays).formatted()) days",
+                  note: listenedDays >= 365 ? "\(Int(listenedDays).formatted()) days" : nil),
         ]
         rows.append(dashGrid([(display, 1)], columns: 1))
 
@@ -337,11 +373,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         area.years = s.years
         area.unit = "play"
         area.valueLabels = true
-        if let so = perYear[year], so > 0, let start = Calendar.current.date(from: DateComponents(year: year, month: 1, day: 1)),
-           let end = Calendar.current.date(from: DateComponents(year: year + 1, month: 1, day: 1)) {
-            let done = Date().timeIntervalSince(start) / end.timeIntervalSince(start)
-            if done > 0.05, done < 1 { area.pace = (year, Int((Double(so) / done).rounded())) }
-        }
+        area.pace = pace
         let paceNow = area.pace
         area.more = { [top = s.topArtistByYear] y in
             var lines: [String] = []
@@ -356,13 +388,14 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         }
         area.onClick = { [weak self] y in self?.showYear(y) }
         let owned = DonutChart()
-        owned.slices = [DonutChart.Slice(label: "Artists in your library", value: Double(s.ownedPlays), color: Dash.accent),
-                        DonutChart.Slice(label: "Not in your library", value: Double(max(0, s.plays - s.ownedPlays)), color: Dash.accent2)]
+        owned.showsRing = true
+        owned.slices = [DonutChart.Slice(label: "Artists in your library", value: Double(s.ownedPlays), color: Dash.amount),
+                        DonutChart.Slice(label: "Not in your library", value: Double(max(0, s.plays - s.ownedPlays)), color: Dash.compare)]
         owned.center = (s.plays > 0 ? String(format: "%.0f%%", Double(s.ownedPlays) / Double(s.plays) * 100) : "–", "owned")
         owned.unit = "plays"
         rows.append(dashGrid([(panel("Plays per year", area, note: paceNow == nil ? "hover for more · click a year"
                                                                   : "\(year): so far, dashed: at this pace · click a year"), 2),
-                              (panel("Do you own what you play?", owned, note: "by artist"), 1)]))
+                              (panel("Artists you own", owned, note: "by artist"), 1)]))
 
         // 3. Who, through the years.
         let riverChart = RiverChart()
@@ -377,8 +410,8 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         let weekend = s.clock.enumerated().filter { $0.offset == 0 || $0.offset == 6 }.reduce(0) { $0 + $1.element.reduce(0, +) }
         let week = s.clock.flatMap { $0 }.reduce(0, +) - weekend
         let days = DonutChart()
-        days.slices = [DonutChart.Slice(label: "Weekdays", value: Double(week), color: Dash.accent),
-                       DonutChart.Slice(label: "Weekends", value: Double(weekend), color: Dash.accent2)]
+        days.slices = [DonutChart.Slice(label: "Weekdays", value: Double(week), color: Dash.amount),
+                       DonutChart.Slice(label: "Weekends", value: Double(weekend), color: Dash.compare)]
         days.center = (week + weekend > 0 ? String(format: "%.0f%%", Double(weekend) / Double(week + weekend) * 100) : "–", "weekends")
         days.unit = "plays"
         let when = NSStackView(views: [clock, days])
@@ -435,7 +468,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         // 6. Nice to know: gaps in the library, and this day in other years.
         let notOwned = BarListChart()
         notOwned.bars = Array(s.notOwned.prefix(10))
-        notOwned.color = { _ in Dash.accent2 }
+        notOwned.color = { _ in Dash.compare }
         notOwned.tip = { "\($0.label): \(Int($0.value).formatted()) plays, nothing in the library · click for the artist page" }
         notOwned.onClick = { [weak self] b in self?.onArtist?(b.id) }
         let never = BarListChart()

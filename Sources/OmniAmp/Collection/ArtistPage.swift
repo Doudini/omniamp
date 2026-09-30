@@ -149,15 +149,15 @@ final class CareerChart: StatsChart {
                 area.line(to: NSPoint(x: pts.last!.x, y: bottom))
                 area.line(to: NSPoint(x: pts[0].x, y: bottom))
                 area.close()
-                NSGradient(starting: Dash.accent.withAlphaComponent(0.38), ending: Dash.accent.withAlphaComponent(0.03))?.draw(in: area, angle: 90)
-                Dash.accent.setStroke()
+                NSGradient(starting: Dash.amount.withAlphaComponent(0.38), ending: Dash.amount.withAlphaComponent(0.03))?.draw(in: area, angle: 90)
+                Dash.amount.setStroke()
                 line.lineWidth = 1.6
                 line.stroke()
             }
             if let h = hovered, h >= marks.count, h - marks.count < months.count, let r = monthRect(h - marks.count, most: most) {
                 Dash.text3.withAlphaComponent(0.6).setFill()
                 NSRect(x: r.midX, y: playsTop, width: 1, height: Self.playsH).fill()
-                Dash.accent.setFill()
+                Dash.amount.setFill()
                 NSBezierPath(ovalIn: NSRect(x: r.midX - 4, y: r.minY - 4, width: 8, height: 8)).fill()
             }
         }
@@ -265,6 +265,27 @@ final class ArtistPage: DashPage {
                 self.photo.isHidden = false
             }
         })
+    }
+
+    /// An artist's photo for elsewhere (the Listening display): from their saved info, looked up once when it's
+    /// never been (as opening their page would). Nil when there's none or lookups are off.
+    static func photo(artistKey key: String, name: String) async -> CGImage? {
+        let cached = await Task.detached { (try? CollectionDB().artistInfo(key)) ?? .unknown }.value
+        var found: MetadataLookup.ArtistInfo?
+        switch cached {
+        case .found(let c): found = c
+        case .none: return nil
+        case .unknown: break
+        }
+        let online = UserDefaults.standard.object(forKey: Pref.libraryOnlineLookups) as? Bool ?? true
+        if found == nil, online, !name.isEmpty, !["unknown artist", "various artists"].contains(key) {
+            let mbid = await Task.detached { try? CollectionDB().artistMBID(key) }.value ?? nil
+            let r = await MetadataLookup.shared.artistInfo(name: name, mbid: mbid)
+            if !r.failed { let i = r.info; _ = await Task.detached { try? CollectionDB().saveArtistInfo(key, i) }.value }
+            found = r.info
+        }
+        guard let url = found?.imageURL else { return nil }
+        return await photo(url)
     }
 
     /// The photo, from the disk cache or downloaded and kept there (small: 320 px).

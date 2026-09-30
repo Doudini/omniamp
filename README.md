@@ -13,7 +13,7 @@ It's written in Swift with AppKit and AVAudioEngine and has no third-party depen
 
 ## The modern look
 
-A resizable native window with an LCD-style display, album art and the Hack Nerd Font. **View → Theme** has two choices. The color comes in five themes inspired by old monochrome monitors:
+A resizable native window with an LCD-style display, album art and the Hack Nerd Font. **View → Theme** has three choices. The color comes in five themes inspired by old monochrome monitors:
 - Green (default)
 - Amber
 - Blue
@@ -24,6 +24,8 @@ The finish sets the windows around the display, and it applies to the Music Libr
 - **Tinted** (default): dark greys that lean towards the color.
 - **Hardware**: neutral grey.
 - **Studio**: slate blue-green.
+
+The chart colors set the Music Library's graphs. There are four soft pixel-art palettes from [Lospec](https://lospec.com): Vinik24 (default), Apollo, Lost Century and Sweetie 16. There's also Phosphor, which draws the data in the theme's own color. **Color-Blind Safe Colors** swaps the artist and recording-kind colors for a set that stays distinct with color blindness.
 
 The **INFO** drawer shows full tags, the file format, the album and cover art. The **EQ** drawer has the 10-band equalizer with presets.
 
@@ -45,8 +47,8 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
 - **Artist pages:** every release on a timeline next to your own listening, your top songs, and the albums you don't have yet. Including live recordings and bootlegs.
 - **Shows and bootlegs:** live recordings are recognized and sorted by date and venue, apart from the official albums. Missing shows can be downloaded from the [Live Music Archive](https://archive.org/details/etree).
 - **Browse** by artist, show, year or genre, see what's new, and search artists, albums, songs and venues.
-- **Stats:** your collection at a glance.
-- **Listening:** connect [Last.fm](https://www.last.fm) to see your whole history: plays per year, your top artists through the years, and where your music comes from.
+- **Stats:** your collection at a glance, from the newest addition to what's lossless.
+- **Listening:** connect [Last.fm](https://www.last.fm) to see your whole history: your most played artist, plays per year, your top artists through the years, and where your music comes from.
 - **Needs Attention:** finds files with missing tags, duplicates and artists spelled several ways, and helps you fix them.
 
 <p align="center">
@@ -54,8 +56,8 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
   <img src="docs/library-shows.png" alt="Shows: an artist's live recordings by date and venue" width="49%">
 </p>
 <p align="center">
-  <img src="docs/library-stats.png" alt="Collection stats: key figures, release years, kinds of recordings" width="49%">
-  <img src="docs/library-listening.png" alt="Listening history from Last.fm: plays per year, how much of what you play you own, top artists through the years" width="49%">
+  <img src="docs/library-stats.png" alt="Collection stats: the newest release and key figures, release years, kinds of recordings" width="49%">
+  <img src="docs/library-listening.png" alt="Listening history from Last.fm: your most played artist and key figures, plays per year, how much of what you play you own" width="49%">
 </p>
 
 ## Internet radio

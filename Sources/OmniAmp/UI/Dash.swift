@@ -30,31 +30,27 @@ enum Dash {
 
     // Accents.
     static let accent = live { Theme.phosphor }
-    /// Complementary to the theme: for a second series.
-    static let accent2 = live {
-        switch Theme.palette.id {
-        case "amber": rgb(0x4FC3C7)
-        case "blue", "cyan": rgb(0xF2B84B)
-        default: rgb(0x6FA8DC)
-        }
-    }
     static let selection = live { Theme.phosphor.withAlphaComponent(0.16) }
 
-    /// Categorical colors for artists (the dataviz reference palette, dark steps), checked on our cards: neighbours
-    /// stay apart for color-blind eyes too. Fixed order; a ninth artist folds into "other" (gray).
-    static let series: [NSColor] = [0x3987E5, 0xD95926, 0x199E70, 0xC98500, 0xD55181, 0x008300, 0x9085E9, 0xE66767].map { rgb(UInt32($0)) }
-    static let other = rgb(0x4A5A61)
+    // Data (the chart palette, View → Theme → Chart Colors). Titles, selections and controls keep the accent.
+    /// Amounts: bars, heatmaps, the map.
+    static let amount = live { Theme.chart.amount }
+    /// A second series, or a line over the amounts.
+    static let compare = live { Theme.chart.compare }
+    /// Categorical colors for artists, in a fixed order; a ninth artist folds into "other" (gray).
+    static let series: [NSColor] = (0..<8).map { i in live { Theme.categories.series[i] } }
+    static let other = live { Theme.categories.other }
 
     /// Up and down, for changes ("▲ +12%").
-    static let up = rgb(0x5FD38A)
-    static let down = rgb(0xE8736B)
+    static let up = live { Theme.chart.up }
+    static let down = live { Theme.chart.down }
 
     // Fonts.
     static func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont { .systemFont(ofSize: size, weight: weight) }
     static func mono(_ size: CGFloat, bold: Bool = false) -> NSFont { Fonts.hack(size, bold: bold) }
-    /// Section titles: small Hack capitals in the accent.
+    /// Section titles: plain, in the text color (the phosphor accent is for the display, selections and controls).
     static func title(_ s: String) -> NSAttributedString {
-        NSAttributedString(string: s.uppercased(), attributes: [.font: mono(10, bold: true), .foregroundColor: accent, .kern: 0.6])
+        NSAttributedString(string: s, attributes: [.font: font(13, .semibold), .foregroundColor: text])
     }
 
     /// Everything in a page gives way sideways (labels truncate, rows clip) instead of setting the window's

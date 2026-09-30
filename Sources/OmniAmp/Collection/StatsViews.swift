@@ -1,7 +1,7 @@
 import AppKit
 
 // The library's charts (see Dash for the tokens). Names and labels in text colors, numbers in Hack, data in the
-// theme's accent (amounts) or a kind's color (identity); recessive grid and axes. Every mark has a tooltip, and
+// chart palette's amount color or a kind's color (identity); recessive grid and axes. Every mark has a tooltip, and
 // most open the library at what they show.
 
 /// A chart with hover tooltips and clickable marks. Subclasses fill `regions` in `layoutRegions()` and draw.
@@ -69,10 +69,10 @@ class StatsChart: NSView, NSViewToolTipOwner {
         NSAttributedString(string: s, attributes: [.font: Dash.font(size, weight), .foregroundColor: color])
     }
 
-    /// A bar with rounded ends, in the accent unless given a color (full strength when hovered).
+    /// A bar with rounded ends, in the amount color unless given a color (full strength when hovered).
     static func bar(_ r: NSRect, color: NSColor? = nil, strength: CGFloat = 0.85, hot: Bool, radius: CGFloat = 3) {
         guard r.width > 0.5, r.height > 0.5 else { return }
-        (color ?? Dash.accent).withAlphaComponent(hot ? 1 : strength).setFill()
+        (color ?? Dash.amount).withAlphaComponent(hot ? 1 : strength).setFill()
         let rad = min(radius, r.width / 2, r.height / 2)
         NSBezierPath(roundedRect: r, xRadius: rad, yRadius: rad).fill()
     }
@@ -125,7 +125,7 @@ final class BarListChart: StatsChart {
     var format: (Double) -> String = { Int($0).formatted() }
     var tip: (LibraryStats.Bar) -> String = { "\($0.label): \(Int($0.value).formatted())" }
     var onClick: ((LibraryStats.Bar) -> Void)?
-    /// A color per bar (what kind of recording it is); nil: the accent.
+    /// A color per bar (what kind of recording it is); nil: the amount color.
     var color: ((LibraryStats.Bar) -> NSColor?)?
     var footnote: String? { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }
     static let rowHeight: CGFloat = 26
@@ -186,13 +186,13 @@ final class BarListChart: StatsChart {
 }
 
 /// Values per year as rounded columns on a light grid, decades underneath; optionally a smoothed trend line
-/// of the same values (same unit, same axis) in the second accent.
+/// of the same values (same unit, same axis) in the compare color.
 final class YearsChart: StatsChart {
     var years: [(year: Int, releases: Int)] = [] { didSet { needsLayout = true; needsDisplay = true } }
     var onClick: ((Int) -> Void)?
     /// What the columns count ("release", "play").
     var unit = "release"
-    /// The columns' color when they're all one kind of thing (shows); nil: the accent.
+    /// The columns' color when they're all one kind of thing (shows); nil: the amount color.
     var color: NSColor?
     /// A 3-year moving average over the columns.
     var trend = false
@@ -246,7 +246,7 @@ final class YearsChart: StatsChart {
             let hot = hovered == i
             // Rounded at the top only: a column standing on the axis.
             let r = NSRect(x: x + gap / 2, y: p.maxY - h, width: max(1.5, s - gap), height: h)
-            (color ?? Dash.accent).withAlphaComponent(hot ? 1 : 0.8).setFill()
+            (color ?? Dash.amount).withAlphaComponent(hot ? 1 : 0.8).setFill()
             let rad = min(3, r.width / 2)
             let path = NSBezierPath(roundedRect: r, xRadius: rad, yRadius: rad)
             path.append(NSBezierPath(rect: NSRect(x: r.minX, y: r.maxY - rad, width: r.width, height: rad)))
@@ -259,7 +259,7 @@ final class YearsChart: StatsChart {
                                            xRadius: rad, yRadius: rad)
                 outline.setLineDash([3, 2], count: 2, phase: 0)
                 outline.lineWidth = 1
-                (color ?? Dash.accent).withAlphaComponent(0.7).setStroke()
+                (color ?? Dash.amount).withAlphaComponent(0.7).setStroke()
                 outline.stroke()
                 labelTop = p.maxY - ph
             }
@@ -281,7 +281,7 @@ final class YearsChart: StatsChart {
                 pts.append(NSPoint(x: centres[i].x, y: p.maxY - p.height * CGFloat(avg / top)))
             }
             let line = AreaChart.smoothPath(pts, floor: p.maxY)
-            Dash.accent2.setStroke()
+            Dash.compare.setStroke()
             line.lineWidth = 2
             line.stroke()
         }
@@ -369,7 +369,7 @@ class AreaChart: StatsChart {
             return
         }
         let r = Self.grid(in: frameRect, top: top)
-        let c = color ?? Dash.accent
+        let c = color ?? Dash.amount
         let pts = points.map { pos($0, in: r) }
         let line = Self.smoothPath(pts, floor: r.maxY)
         let area = line.copy() as! NSBezierPath
@@ -445,7 +445,7 @@ final class GrowthChart: AreaChart {
 }
 
 /// Parts of a whole as a ring: a gap between slices, the total (or a share) in the middle, a legend with
-/// percentages beside it. Slices carry their own colors (kinds) or take the accent's family.
+/// percentages beside it. Slices carry their own colors (kinds) or take the amount color's family.
 final class DonutChart: StatsChart {
     struct Slice {
         let label: String
@@ -463,6 +463,11 @@ final class DonutChart: StatsChart {
         return bounds.width < 150 + 30 + legend
     }
     private static let rowH: CGFloat = 22
+    /// A ring (a share you read at a glance, its figure in the middle) or, by default, one proportion bar with
+    /// the legend under it.
+    var showsRing = false { didSet { needsLayout = true; needsDisplay = true } }
+    private var asBar: Bool { !showsRing }
+    private static let barH: CGFloat = 16
     private lazy var height: NSLayoutConstraint = {
         let c = heightAnchor.constraint(equalToConstant: 160)
         c.isActive = true
@@ -470,7 +475,8 @@ final class DonutChart: StatsChart {
     }()
 
     override func layout() {
-        let h = stacked ? min(150, bounds.width * 0.6) + 14 + CGFloat(slices.count) * Self.rowH : max(150, CGFloat(slices.count) * Self.rowH + 10)
+        let h = asBar ? Self.barH + 16 + CGFloat(slices.count) * Self.rowH
+            : stacked ? min(150, bounds.width * 0.6) + 14 + CGFloat(slices.count) * Self.rowH : max(150, CGFloat(slices.count) * Self.rowH + 10)
         if bounds.width > 0, abs(height.constant - h) > 0.5 { height.constant = h }
         super.layout()
     }
@@ -497,6 +503,7 @@ final class DonutChart: StatsChart {
 
     /// Where the legend starts (x) and its first row (y).
     private var legendOrigin: NSPoint {
+        if asBar { return NSPoint(x: 4, y: Self.barH + 16) }
         let (c, r) = ring
         if stacked {
             // Centred as a block under the ring.
@@ -509,6 +516,10 @@ final class DonutChart: StatsChart {
 
     /// The ring itself: the slice under the pointer, by its angle (the legend rows are the regions).
     override func regionIndex(at p: NSPoint) -> Int? {
+        if asBar {
+            if p.y <= Self.barH, let i = barSegments().firstIndex(where: { p.x >= $0.minX && p.x < $0.maxX }), i < regions.count { return i }
+            return super.regionIndex(at: p)
+        }
         let (c, r) = ring
         let width: CGFloat = max(10, r * 0.28), d = hypot(p.x - c.x, p.y - c.y)
         if d >= r - width / 2 - 3, d <= r + width / 2 + 3 {
@@ -520,7 +531,17 @@ final class DonutChart: StatsChart {
         return super.regionIndex(at: p)
     }
 
+    private func barSegments() -> [NSRect] {
+        var x: CGFloat = 0
+        return slices.map { sl in
+            let w = bounds.width * CGFloat(sl.value / total)
+            defer { x += w }
+            return NSRect(x: x, y: 0, width: w, height: Self.barH)
+        }
+    }
+
     override func extraTipAreas() -> [NSRect] {
+        if asBar { return [NSRect(x: 0, y: 0, width: bounds.width, height: Self.barH)] }
         let (c, r) = ring
         return [NSRect(x: c.x - r - 12, y: c.y - r - 12, width: 2 * r + 24, height: 2 * r + 24)]
     }
@@ -536,6 +557,16 @@ final class DonutChart: StatsChart {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        if asBar {
+            for (i, (sl, seg)) in zip(slices, barSegments()).enumerated() where sl.value > 0 {
+                let hot = hovered == i
+                sl.color.withAlphaComponent(hovered == nil || hot ? 1 : 0.55).setFill()
+                // A hairline between segments.
+                NSRect(x: seg.minX, y: seg.minY, width: max(1, seg.width - (i < slices.count - 1 ? 2 : 0)), height: seg.height).fill()
+            }
+            drawLegend()
+            return
+        }
         let (c, r) = ring
         let width: CGFloat = max(10, r * 0.28)
         let gapDeg: CGFloat = slices.filter { $0.value > 0 }.count > 1 ? 1.5 : 0
@@ -553,6 +584,10 @@ final class DonutChart: StatsChart {
             v.draw(at: NSPoint(x: c.x - v.size().width / 2, y: c.y - v.size().height + 2))
             cap.draw(at: NSPoint(x: c.x - cap.size().width / 2, y: c.y + 2))
         }
+        drawLegend()
+    }
+
+    private func drawLegend() {
         let o = legendOrigin
         for (i, s) in slices.enumerated() {
             let y = o.y + CGFloat(i) * Self.rowH
@@ -679,7 +714,7 @@ final class ShowCalendar: StatsChart {
     }
 }
 
-/// A card around a chart: an accent title, an optional grey note, the chart.
+/// A card around a chart: a title, an optional grey note, the chart.
 final class StatsPanel: NSView {
     init(_ title: String, _ content: NSView, note: String? = nil) {
         super.init(frame: .zero)
@@ -688,7 +723,12 @@ final class StatsPanel: NSView {
         let t = NSTextField(labelWithAttributedString: Dash.title(title))
         t.maximumNumberOfLines = 1
         t.lineBreakMode = .byTruncatingTail
-        let n = Dash.label(note ?? "", Dash.font(11), Dash.text3)
+        // The note says what's shown; how to use it ("click a year", "hover for details") is the card's tooltip.
+        let parts = (note ?? "").components(separatedBy: " · ")
+        let isHint = { (p: String) in p.hasPrefix("click") || p.hasPrefix("hover") }
+        let n = Dash.label(parts.filter { !isHint($0) }.joined(separator: " · "), Dash.font(11), Dash.text3)
+        let hints = parts.filter(isHint)
+        if !hints.isEmpty { toolTip = hints.joined(separator: " · ").prefix(1).uppercased() + hints.joined(separator: " · ").dropFirst() }
         // The note gives way first (below the 240 that relaxWidth gives labels), then the title.
         n.setContentCompressionResistancePriority(.init(200), for: .horizontal)
         for v in [t, n, content] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
@@ -908,18 +948,28 @@ final class StatsPage: DashPage {
         let spark = (thisYear - 9...thisYear).map { Double(perYear[$0] ?? 0) }
         let display = HiFiDisplay()
         let gb = Double(s.bytes) / 1_000_000_000
+        // The newest release with its cover, then time, space, this year's additions and artists.
+        if let n = s.newest {
+            let when = RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: n.added), relativeTo: Date())
+            display.feature = .init(kicker: "newest", title: n.title, lines: [n.artist, "added \(when)"],
+                                    tip: "\(n.artist) – \(n.title) · click for the artist", action: { [weak self] in self?.onArtist?(n.artistKey) },
+                                    placeholder: LibraryWindowController.Section.added.glyph)
+            LibraryArt.shared.load(n) { [weak display] img in display?.featureImage = img }
+        }
+        let losslessShare = s.tracks > 0 ? Double(s.losslessTracks) / Double(s.tracks) : 0
         display.items = [
-            .init(value: s.tracks.formatted(), label: "tracks",
-                  tip: s.unplayable > 0 ? "\(s.tracks.formatted()) tracks, \(s.unplayable.formatted()) of them in formats OmniAmp can't play" : nil),
-            .init(value: s.releases.formatted(), label: "releases"),
-            .init(value: s.artists.formatted(), label: "artists"),
             .init(value: days >= 1 ? String(format: "%.1f", days) : String(format: "%.1f", s.seconds / 3600), label: days >= 1 ? "days of music" : "hours of music",
-                  tip: "\(Int(s.seconds / 3600).formatted()) hours: that long to play everything once"),
-            .init(value: gb >= 1000 ? String(format: "%.2f", gb / 1000) : String(format: "%.1f", gb), label: gb >= 1000 ? "TB on disk" : "GB on disk"),
+                  tip: "\(Int(s.seconds / 3600).formatted()) hours: that long to play everything once"
+                    + (s.unplayable > 0 ? " · \(s.unplayable.formatted()) tracks in formats OmniAmp can't play" : ""),
+                  note: days >= 1 ? "\(Int(s.seconds / 3600).formatted()) hours" : nil),
+            .init(value: gb >= 1000 ? String(format: "%.2f", gb / 1000) : String(format: "%.1f", gb), label: gb >= 1000 ? "TB on disk" : "GB on disk",
+                  tip: "\(s.losslessTracks.formatted()) of \(s.tracks.formatted()) tracks lossless",
+                  share: losslessShare, note: String(format: "%.0f%% lossless", losslessShare * 100)),
             .init(value: added.formatted(), label: "added \(thisYear)",
                   tip: "\(added.formatted()) tracks added in \(thisYear), by the date of the files"
                     + (before > 0 ? " · \(before.formatted()) by this month of \(thisYear - 1)" : ""),
                   meter: spark, delta: delta),
+            .init(value: s.artists.formatted(), label: "artists", note: "\(s.releases.formatted()) releases"),
         ]
         rows.append(dashGrid([(display, 1)], columns: 1))
 
@@ -953,8 +1003,8 @@ final class StatsPage: DashPage {
         growth.growth = s.growth
         let formats = DonutChart()
         let lossy = s.tracks - s.losslessTracks - s.unplayable
-        formats.slices = [DonutChart.Slice(label: "Lossless", value: Double(s.losslessTracks), color: Dash.accent),
-                          DonutChart.Slice(label: "Lossy", value: Double(max(0, lossy)), color: Dash.accent2)]
+        formats.slices = [DonutChart.Slice(label: "Lossless", value: Double(s.losslessTracks), color: Dash.amount),
+                          DonutChart.Slice(label: "Lossy", value: Double(max(0, lossy)), color: Dash.compare)]
             + (s.unplayable > 0 ? [DonutChart.Slice(label: "Can't play", value: Double(s.unplayable), color: Dash.text3)] : [])
         formats.center = (String(format: "%.0f%%", lossless * 100), "lossless")
         formats.unit = "tracks"
@@ -1022,31 +1072,62 @@ final class HiFiDisplay: StatsChart {
         var meter: [Double]? = nil
         /// A change against before ("25% vs 2025").
         var delta: (text: String, up: Bool)? = nil
+        /// A share (0…1) as a segmented bar under the figure.
+        var share: Double? = nil
+        /// Flags (emoji) under the figure.
+        var flags: String? = nil
+        /// A quieter line under the label ("619 hours").
+        var note: String? = nil
+    }
+    /// A wider first cell: a picture (an artist, a cover) with a name and a few lines about it.
+    struct Feature {
+        let kicker: String
+        let title: String
+        var lines: [String] = []
+        var tip: String? = nil
+        var action: (() -> Void)? = nil
+        /// Shown until the picture arrives, or when there's none.
+        var placeholder = LibraryWindowController.Section.artists.glyph
     }
     var items: [Item] = [] { didSet { needsLayout = true; needsDisplay = true } }
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 96) }
+    var feature: Feature? { didSet { needsLayout = true; needsDisplay = true } }
+    var featureImage: CGImage? { didSet { needsDisplay = true } }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 108) }
+
+    /// The feature takes two figures' width.
+    private var units: CGFloat { CGFloat(items.count + (feature == nil ? 0 : 2)) }
+    private var unit: CGFloat { bounds.width / max(units, 1) }
+    private var featureRect: NSRect { NSRect(x: 0, y: 0, width: feature == nil ? 0 : unit * 2, height: bounds.height) }
 
     private func cell(_ i: Int) -> NSRect {
-        let w = bounds.width / CGFloat(max(items.count, 1))
-        return NSRect(x: CGFloat(i) * w, y: 0, width: w, height: bounds.height)
+        NSRect(x: featureRect.width + CGFloat(i) * unit, y: 0, width: unit, height: bounds.height)
     }
 
     override func layoutRegions() {
-        regions = items.indices.map { i in Region(rect: cell(i), tip: items[i].tip ?? "\(items[i].value) \(items[i].label.lowercased())", action: nil) }
+        var r = items.indices.map { i in Region(rect: cell(i), tip: items[i].tip ?? "\(items[i].value) \(items[i].label.lowercased())", action: nil) }
+        if let f = feature { r.insert(Region(rect: featureRect, tip: f.tip ?? f.title, action: f.action), at: 0) }
+        regions = r
     }
 
     private static func isNumeric(_ s: String) -> Bool { s.allSatisfy { $0.isNumber || ".,'’ –-".contains($0) } }
 
-    /// The figures' size: as large as the widest number fits its cell (30 pt down to 14), the same for all numbers.
-    /// A name (not a number) doesn't count: it's cut to its column instead.
+    /// The figures' size: as large as the widest number fits its cell (26 pt down to 14), the same for all numbers.
     private func digitSize() -> CGFloat {
-        let room = bounds.width / CGFloat(max(items.count, 1)) - 28
-        var size: CGFloat = 30
+        let room = unit - 28
+        var size: CGFloat = 26
         while size > 14, items.contains(where: { Self.isNumeric($0.value)
                 && ($0.value as NSString).size(withAttributes: [.font: Dash.mono(size, bold: true)]).width + ($0.meter == nil ? 0 : 30) > room }) {
             size -= 1
         }
         return size
+    }
+
+    private var glow: NSShadow {
+        let g = NSShadow()
+        g.shadowColor = Theme.phosphor.withAlphaComponent(0.55)
+        g.shadowBlurRadius = 8
+        g.shadowOffset = .zero
+        return g
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1066,16 +1147,14 @@ final class HiFiDisplay: StatsChart {
         glass.lineWidth = 1
         glass.stroke()
 
+        if let f = feature { drawFeature(f) }
         let size = digitSize()
-        // The block (figure, then label) centred in the panel.
-        let top = ((bounds.height - (size * 1.25 + 6 + 12)) / 2).rounded()
-        let glow = NSShadow()
-        glow.shadowColor = Theme.phosphor.withAlphaComponent(0.55)
-        glow.shadowBlurRadius = 8
-        glow.shadowOffset = .zero
+        // Every cell's block: figure, a row for its picture (bar, flags), label, note; centred in the panel.
+        let visualH: CGFloat = 14, block = size * 1.25 + 4 + visualH + 4 + 12 + 3 + 12
+        let top = ((bounds.height - block) / 2).rounded()
         for (i, item) in items.enumerated() {
             let r = cell(i)
-            if i > 0 {
+            if i > 0 || feature != nil {
                 Theme.phosphorDim.withAlphaComponent(0.25).setFill()
                 NSRect(x: r.minX, y: 16, width: 1, height: bounds.height - 32).fill()
             }
@@ -1098,7 +1177,7 @@ final class HiFiDisplay: StatsChart {
             }
             NSGraphicsContext.saveGraphicsState()
             glow.set()
-            let lit = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: hovered == i ? Theme.current : Theme.phosphor])
+            let lit = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: hovered == i + (feature == nil ? 0 : 1) ? Theme.current : Theme.phosphor])
             lit.draw(with: NSRect(x: x, y: textTop, width: room, height: font.pointSize * 1.4),
                      options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             NSGraphicsContext.restoreGraphicsState()
@@ -1113,14 +1192,75 @@ final class HiFiDisplay: StatsChart {
                     NSRect(x: mx + CGFloat(j) * 4, y: top + size * 1.1 - h, width: 3, height: h).fill()
                 }
             }
-            var label = item.label.uppercased()
-            if item.delta != nil { label += "  " }
-            let l = NSMutableAttributedString(string: label, attributes: [.font: Dash.mono(9, bold: true), .foregroundColor: Theme.phosphorDim, .kern: 0.8])
+            let vy = top + size * 1.25 + 4
+            // A share: LCD segments, lit up to it.
+            if let share = item.share {
+                let n = max(6, min(16, Int(room / 7))), lit = Int((Double(n) * share).rounded())
+                for j in 0..<n {
+                    Theme.phosphor.withAlphaComponent(j < lit ? 0.85 : 0.12).setFill()
+                    NSRect(x: x + CGFloat(j) * 7, y: vy + 3, width: 5, height: 8).fill()
+                }
+            }
+            if let flags = item.flags {
+                NSAttributedString(string: flags, attributes: [.font: Dash.font(12), .kern: 2])
+                    .draw(with: NSRect(x: x, y: vy - 1, width: room, height: visualH + 2), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            }
+            let ly = vy + visualH + 4
+            NSAttributedString(string: item.label.uppercased(), attributes: [.font: Dash.mono(9, bold: true), .foregroundColor: Theme.phosphorDim, .kern: 0.8])
+                .draw(with: NSRect(x: x, y: ly, width: r.width - 22, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            // The line under the label: the change first (it has its own color), then the note.
+            let n = NSMutableAttributedString()
             if let d = item.delta {
-                l.append(NSAttributedString(string: (d.up ? "▲ " : "▼ ") + d.text, attributes: [.font: Dash.mono(9, bold: true),
+                n.append(NSAttributedString(string: (d.up ? "▲ " : "▼ ") + d.text, attributes: [.font: Dash.mono(9.5, bold: true),
                                                                                               .foregroundColor: d.up ? Dash.up : Dash.down]))
             }
-            l.draw(with: NSRect(x: x, y: top + size * 1.25 + 6, width: r.width - 22, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            if let note = item.note {
+                n.append(NSAttributedString(string: (n.length > 0 ? "  " : "") + note, attributes: [.font: Dash.mono(9.5), .foregroundColor: Theme.phosphor.withAlphaComponent(0.5)]))
+            }
+            n.draw(with: NSRect(x: x, y: ly + 15, width: r.width - 22, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        }
+    }
+
+    /// The picture on the left, then kicker, name and lines, centred in the cell.
+    private func drawFeature(_ f: Feature) {
+        let r = featureRect, side = bounds.height - 30
+        let pic = NSRect(x: r.minX + 16, y: (bounds.height - side) / 2, width: side, height: side)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: pic, xRadius: 6, yRadius: 6).addClip()
+        if let img = featureImage {
+            // Filled, not stretched: the middle of the picture.
+            let s = max(side / CGFloat(img.width), side / CGFloat(img.height))
+            let w = CGFloat(img.width) * s, h = CGFloat(img.height) * s
+            NSImage(cgImage: img, size: .zero).draw(in: NSRect(x: pic.midX - w / 2, y: pic.midY - h / 2, width: w, height: h),
+                                                    from: .zero, operation: .sourceOver, fraction: 0.92, respectFlipped: true, hints: nil)
+        } else {
+            Theme.phosphor.withAlphaComponent(0.08).setFill()
+            pic.fill()
+            let g = NSAttributedString(string: f.placeholder, attributes: [.font: Fonts.hack(side * 0.36), .foregroundColor: Theme.phosphorDim])
+            g.draw(at: NSPoint(x: pic.midX - g.size().width / 2, y: pic.midY - g.size().height / 2))
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        Theme.phosphor.withAlphaComponent(0.2).setStroke()
+        NSBezierPath(roundedRect: pic.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6).stroke()
+
+        let x = pic.maxX + 14, room = r.maxX - x - 14
+        var size: CGFloat = 20
+        while size > 12, (f.title as NSString).size(withAttributes: [.font: Dash.mono(size, bold: true)]).width > room { size -= 1 }
+        let block = 12 + 4 + size * 1.25 + 4 + CGFloat(f.lines.count) * 14
+        var y = ((bounds.height - block) / 2).rounded()
+        NSAttributedString(string: f.kicker.uppercased(), attributes: [.font: Dash.mono(9, bold: true), .foregroundColor: Theme.phosphorDim, .kern: 0.8])
+            .draw(with: NSRect(x: x, y: y, width: room, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        y += 16
+        NSGraphicsContext.saveGraphicsState()
+        glow.set()
+        NSAttributedString(string: f.title, attributes: [.font: Dash.mono(size, bold: true), .foregroundColor: hovered == 0 ? Theme.current : Theme.phosphor])
+            .draw(with: NSRect(x: x, y: y, width: room, height: size * 1.4), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        NSGraphicsContext.restoreGraphicsState()
+        y += size * 1.25 + 4
+        for line in f.lines {
+            NSAttributedString(string: line, attributes: [.font: Dash.mono(10), .foregroundColor: Theme.phosphor.withAlphaComponent(0.65)])
+                .draw(with: NSRect(x: x, y: y, width: room, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            y += 14
         }
     }
 }
