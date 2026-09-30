@@ -5,12 +5,14 @@ import XCTest
 final class PodcastDownloadTests: XCTestCase {
     private var dir: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-dl-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: dir)
+    }
 
     private let show = PodcastShow(feedURL: "https://example.com/feed", title: "Llama Radio Hour", author: "Nullsoft Fans")
 

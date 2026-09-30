@@ -15,11 +15,13 @@ private struct CannedLastFM: HTTPTransport {
 final class ListeningTests: XCTestCase {
     private var tmp: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         tmp = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-listening-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
     }
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: tmp) }
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: tmp)
+    }
 
     private func db() throws -> CollectionDB { try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite")) }
 

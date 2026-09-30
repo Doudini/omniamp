@@ -5,13 +5,13 @@ import XCTest
 final class PlaylistEditingTests: XCTestCase {
     private var cacheDir: URL!
 
-    override func setUp() {
+    override func setUp() async throws {
         // Keep the controller away from the real playlist cache.
         cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-edit-\(UUID().uuidString)")
         setenv("OMNIAMP_CACHE_DIR", cacheDir.path, 1)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         unsetenv("OMNIAMP_CACHE_DIR")
         try? FileManager.default.removeItem(at: cacheDir)
     }

@@ -1,3 +1,4 @@
+import os
 import XCTest
 @testable import OmniAmp
 
@@ -25,14 +26,14 @@ final class RadioTests: XCTestCase {
 
         for chunk in [1, 3, 7, 16, 17, 1000] {
             let src = StreamSource(url: URL(string: "http://example.com")!)
-            var titles: [String] = []
-            src.onTitle = { titles.append($0) }
+            let titles = OSAllocatedUnfairLock(initialState: [String]())   // filled from the stream's callback
+            src.onTitle = { t in titles.withLock { $0.append(t) } }
             var i = 0
             while i < stream.count {
                 src.feedForTesting(stream[i..<min(i + chunk, stream.count)], metaInterval: 16)
                 i += chunk
             }
-            XCTAssertEqual(titles, ["One - First", "Two - Second"], "chunk size \(chunk)")
+            XCTAssertEqual(titles.withLock { $0 }, ["One - First", "Two - Second"], "chunk size \(chunk)")
         }
     }
 

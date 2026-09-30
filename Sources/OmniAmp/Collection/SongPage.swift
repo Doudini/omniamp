@@ -288,7 +288,7 @@ final class SongPage: DashPage {
 
     /// The song's name without version notes ("About A Girl", not "About A Girl (Live Version)"): the most common
     /// spelling among the plain ones, studio recordings first.
-    static func bestTitle(_ versions: [SongVersion]) -> String {
+    nonisolated static func bestTitle(_ versions: [SongVersion]) -> String {
         let plain = versions.filter { Keys.fold($0.track.title) == Keys.title($0.track.title) }
         let pool = plain.contains { $0.kind == .album } ? plain.filter { $0.kind == .album } : (plain.isEmpty ? versions : plain)
         let counts = Dictionary(grouping: pool.map(\.track.title), by: { $0 }).mapValues(\.count)

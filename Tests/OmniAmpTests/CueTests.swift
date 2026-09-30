@@ -5,12 +5,14 @@ import XCTest
 final class CueTests: XCTestCase {
     private var dir: URL!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-cue-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: dir)
+    }
 
     private let sheet = """
     REM GENRE "Trip Hop"

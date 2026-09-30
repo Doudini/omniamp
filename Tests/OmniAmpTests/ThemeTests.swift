@@ -7,13 +7,14 @@ final class ThemeTests: XCTestCase {
     private var savedFinish: Finish!
     private var savedDefaults: (Any?, Any?)
 
-    override func setUp() {
+    // The async forms run on the class's actor (the main thread) without further ado.
+    override func setUp() async throws {
         savedColor = Theme.palette.id
         savedFinish = Theme.finish
         savedDefaults = (UserDefaults.standard.object(forKey: Pref.modernTheme), UserDefaults.standard.object(forKey: Pref.modernFinish))
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         Theme.select(savedColor)
         Theme.selectFinish(savedFinish)
         for (key, value) in [(Pref.modernTheme, savedDefaults.0), (Pref.modernFinish, savedDefaults.1)] {

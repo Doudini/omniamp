@@ -1,5 +1,5 @@
-# Build and test on every push and pull request, and keep the Swift 6 readiness count from growing
-# (scripts/concurrency-check.sh).
+# Build and test on every push and pull request. The package is in the Swift 6 language mode, so a data race
+# is a compile error: the build step checks for them.
 name: CI
 
 on:
@@ -35,15 +35,3 @@ jobs:
       - name: Release build
         run: swift build -c release
 
-  concurrency:
-    name: Swift 6 readiness
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - name: Use the newest Xcode on the runner
-        run: |
-          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
-          swift --version
-      - name: Concurrency warnings (no more than the baseline)
-        run: ./scripts/concurrency-check.sh

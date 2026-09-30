@@ -7,12 +7,12 @@ import XCTest
 final class PlayOrderTests: XCTestCase {
     private var cacheDir: URL!
 
-    override func setUp() {
+    override func setUp() async throws {
         cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-order-\(UUID().uuidString)")
         setenv("OMNIAMP_CACHE_DIR", cacheDir.path, 1)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         unsetenv("OMNIAMP_CACHE_DIR")
         try? FileManager.default.removeItem(at: cacheDir)
     }

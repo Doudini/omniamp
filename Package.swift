@@ -1,14 +1,14 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.0
 import PackageDescription
 
+// Swift 6 language mode: data races are compile errors, and main-actor code checks at run time that it really
+// runs on the main thread.
 let package = Package(
     name: "OmniAmp",
     platforms: [.macOS(.v14)],
     targets: [
-        // Complete concurrency checking in every build (Swift 6's data-race checks, as warnings; the language mode
-        // stays Swift 5, so there are no runtime isolation traps). CI keeps the count at 0: scripts/concurrency-check.sh.
-        .executableTarget(name: "OmniAmp", path: "Sources/OmniAmp",
-                          swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]),
+        .executableTarget(name: "OmniAmp", path: "Sources/OmniAmp"),
         .testTarget(name: "OmniAmpTests", dependencies: ["OmniAmp"], path: "Tests/OmniAmpTests"),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

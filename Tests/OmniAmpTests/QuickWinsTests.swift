@@ -5,13 +5,13 @@ import XCTest
 final class QuickWinsTests: XCTestCase {
     private var cacheDir: URL!
 
-    override func setUp() {
+    override func setUp() async throws {
         cacheDir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-qw-\(UUID().uuidString)")
         setenv("OMNIAMP_CACHE_DIR", cacheDir.path, 1)
         UserDefaults.standard.removeObject(forKey: "replayGain")
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         unsetenv("OMNIAMP_CACHE_DIR")
         UserDefaults.standard.removeObject(forKey: "replayGain")
         try? FileManager.default.removeItem(at: cacheDir)
@@ -105,6 +105,7 @@ final class QuickWinsTests: XCTestCase {
     }
 }
 
+@MainActor   // builds a view
 final class KeyStripTests: XCTestCase {
     /// Tooltips are answered by the strip itself (a temporary owner string crashed AppKit when the tooltip showed).
     func testTooltipsComeFromTheStrip() {

@@ -12,38 +12,30 @@ final class NowPlaying {
     func setupRemoteCommands() {
         let cc = MPRemoteCommandCenter.shared()
         // Headsets often send "play" when they reconnect: while playing that must not restart the track.
-        cc.playCommand.addTarget { [weak self] _ in
-            guard let c = self?.controller else { return .success }
-            if c.player.state != .playing { c.playOrResume() }
-            return .success
-        }
-        cc.pauseCommand.addTarget { [weak self] _ in
-            guard let c = self?.controller, c.player.state == .playing else { return .success }
+        cc.playCommand.addTarget(handler: Self.command { [weak self] in
+            guard let c = self?.controller, c.player.state != .playing else { return }
+            c.playOrResume()
+        })
+        cc.pauseCommand.addTarget(handler: Self.command { [weak self] in
+            guard let c = self?.controller, c.player.state == .playing else { return }
             c.pause()   // like every other pause: the position is remembered
-            return .success
-        }
-        cc.togglePlayPauseCommand.addTarget { [weak self] _ in self?.controller?.togglePlayPause(); return .success }
-        cc.stopCommand.addTarget { [weak self] _ in self?.controller?.stop(); return .success }
-        cc.nextTrackCommand.addTarget { [weak self] _ in self?.controller?.next(); return .success }
-        cc.previousTrackCommand.addTarget { [weak self] _ in self?.controller?.previous(); return .success }
-        cc.changePlaybackPositionCommand.addTarget { [weak self] e in
-            guard let c = self?.controller, let e = e as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            c.seek(to: e.positionTime)
-            return .success
-        }
+        })
+        cc.togglePlayPauseCommand.addTarget(handler: Self.command { [weak self] in self?.controller?.togglePlayPause() })
+        cc.stopCommand.addTarget(handler: Self.command { [weak self] in self?.controller?.stop() })
+        cc.nextTrackCommand.addTarget(handler: Self.command { [weak self] in self?.controller?.next() })
+        cc.previousTrackCommand.addTarget(handler: Self.command { [weak self] in self?.controller?.previous() })
+        cc.changePlaybackPositionCommand.addTarget(handler: Self.seekCommand { [weak self] t in self?.controller?.seek(to: t) })
         // Podcasts: 15 s back / 30 s forward instead of previous / next (switched per track in update()).
         cc.skipBackwardCommand.preferredIntervals = [15]
         cc.skipForwardCommand.preferredIntervals = [30]
-        cc.skipBackwardCommand.addTarget { [weak self] _ in
-            guard let c = self?.controller else { return .commandFailed }
+        cc.skipBackwardCommand.addTarget(handler: Self.command { [weak self] in
+            guard let c = self?.controller else { return }
             c.seek(to: max(0, c.player.currentTime - 15))
-            return .success
-        }
-        cc.skipForwardCommand.addTarget { [weak self] _ in
-            guard let c = self?.controller else { return .commandFailed }
+        })
+        cc.skipForwardCommand.addTarget(handler: Self.command { [weak self] in
+            guard let c = self?.controller else { return }
             c.seek(to: min(c.player.duration, c.player.currentTime + 30))
-            return .success
-        }
+        })
         cc.skipBackwardCommand.isEnabled = false
         cc.skipForwardCommand.isEnabled = false
     }
@@ -57,14 +49,40 @@ final class NowPlaying {
         guard artRequest != t.key else { return nil }
         artRequest = t.key
         let key = t.key
-        let deliver: (CGImage?) -> Void = { [weak self] img in
+        let deliver: @MainActor (CGImage?) -> Void = { [weak self] img in
             guard let self, let img, self.controller?.currentTrack?.key == key else { return }
-            let image = NSImage(cgImage: img, size: NSSize(width: img.width, height: img.height))
-            self.art = (key, MPMediaItemArtwork(boundsSize: image.size) { _ in image })
+            self.art = (key, Self.artwork(img))
             self.update()
         }
         if t.isRemote { LogoStore.shared.load(t.logo, completion: deliver) } else { ArtworkStore.shared.load(t.path) { deliver($0.thumb) } }
         return nil
+    }
+
+    /// A remote command's handler, running `action` on the main thread. MediaPlayer may call handlers on a queue of
+    /// its own: made here, outside main-actor code, the handler isn't checked (and trapped) for that; it hops over.
+    nonisolated private static func command(_ action: @escaping @Sendable @MainActor () -> Void)
+        -> (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        { _ in
+            if Thread.isMainThread { MainActor.assumeIsolated { action() } } else { DispatchQueue.main.async { action() } }
+            return .success
+        }
+    }
+
+    /// The same for "go to this position" (the scrubber in Now Playing).
+    nonisolated private static func seekCommand(_ action: @escaping @Sendable @MainActor (Double) -> Void)
+        -> (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        { e in
+            guard let t = (e as? MPChangePlaybackPositionCommandEvent)?.positionTime else { return .commandFailed }
+            if Thread.isMainThread { MainActor.assumeIsolated { action(t) } } else { DispatchQueue.main.async { action(t) } }
+            return .success
+        }
+    }
+
+    /// MediaPlayer asks for the image on a thread of its own: the handler is made outside main-actor code, or Swift 6
+    /// would check (and trap) that it runs on the main thread.
+    nonisolated private static func artwork(_ img: CGImage) -> MPMediaItemArtwork {
+        let size = NSSize(width: img.width, height: img.height)
+        return MPMediaItemArtwork(boundsSize: size) { _ in NSImage(cgImage: img, size: size) }
     }
 
     func update() {

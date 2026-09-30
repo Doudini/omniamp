@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import os
 import XCTest
 @testable import OmniAmp
 
@@ -36,9 +37,10 @@ final class EpisodeGuidTests: XCTestCase {
         _ = try awaitResult { try await lib.episodes(show, maxAge: 0) }
         lib.markPlayed(["https://cdn1.example.com/a.mp3", "https://cdn1.example.com/c.mp3"])
 
-        var moved: [String: String]?
-        let obs = NotificationCenter.default.addObserver(forName: PodcastLibrary.episodesMoved, object: nil, queue: nil) {
-            moved = $0.userInfo?["moved"] as? [String: String]
+        let movedBox = OSAllocatedUnfairLock<[String: String]?>(initialState: nil)   // set from the notification
+        let obs = NotificationCenter.default.addObserver(forName: PodcastLibrary.episodesMoved, object: nil, queue: nil) { n in
+            let m = n.userInfo?["moved"] as? [String: String]
+            movedBox.withLock { $0 = m }
         }
         defer { NotificationCenter.default.removeObserver(obs) }
         // A tracking prefix appears in front of every address.
@@ -48,6 +50,7 @@ final class EpisodeGuidTests: XCTestCase {
         XCTAssertEqual(eps.first?.guid, "a")
         XCTAssertTrue(lib.isPlayed("https://track.example.net/cdn1/a.mp3"), "played mark moved with the guid")
         XCTAssertFalse(lib.isPlayed("https://track.example.net/cdn1/c.mp3"), "a guid shared by several items identifies nothing")
+        let moved = movedBox.withLock { $0 }
         XCTAssertEqual(moved?["https://cdn1.example.com/b.mp3"], "https://track.example.net/cdn1/b.mp3")
         XCTAssertNil(moved?["https://cdn1.example.com/c.mp3"])
     }

@@ -2,7 +2,7 @@ import XCTest
 @testable import OmniAmp
 
 /// Records requests and answers with canned responses.
-final class MockTransport: HTTPTransport {
+final class MockTransport: HTTPTransport, @unchecked Sendable {   // used by one test at a time
     var requests: [URLRequest] = []
     var status = 200
     var body: [String: Any] = [:]
@@ -43,13 +43,13 @@ final class FakeService: ScrobbleService {
 final class ScrobbleTests: XCTestCase {
     private var dir: URL!
 
-    override func setUp() {
+    override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-scrobble-\(UUID().uuidString)")
         setenv("OMNIAMP_CACHE_DIR", dir.path, 1)
         setenv("OMNIAMP_KEYCHAIN_SERVICE", "OmniAmp.tests", 1)   // never touch the real login
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         unsetenv("OMNIAMP_CACHE_DIR")
         unsetenv("OMNIAMP_KEYCHAIN_SERVICE")
         try? FileManager.default.removeItem(at: dir)
@@ -207,7 +207,7 @@ final class ScrobbleTests: XCTestCase {
 @MainActor   // the Last.fm client is main-thread only
 final class LastFMKeyTests: XCTestCase {
     override func setUp() { setenv("OMNIAMP_KEYCHAIN_SERVICE", "OmniAmp.tests", 1) }   // never the real Keychain
-    override func tearDown() {
+    override func tearDown() async throws {
         LastFM().setCustomKey(nil, secret: nil)
         unsetenv("OMNIAMP_KEYCHAIN_SERVICE")
     }
