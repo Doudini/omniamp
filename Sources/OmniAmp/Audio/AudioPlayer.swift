@@ -1175,11 +1175,13 @@ final class AudioPlayer {
             // .dataRendered: the end is known once the last audio has gone through the mixer, while it is still on
             // its way to the speakers. A next track that can't be queued behind this one (another format) starts
             // then, right behind it, instead of after the tail has played out (a quarter-second gap before).
+            // Written out as a typed constant: inline in the call (`last ? { … } : nil`), Swift 6.4's strict
+            // concurrency checking crashes ("failed to produce diagnostic").
+            let done: AVAudioPlayerNodeCompletionHandler? = last ? { [weak self] _ in
+                DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
+            } : nil
             node.scheduleSegment(item.file, startingFrame: p.start, frameCount: p.frames, at: nil,
-                                 completionCallbackType: .dataRendered,
-                                 completionHandler: last ? { [weak self] _ in
-                                     DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
-                                 } : nil)
+                                 completionCallbackType: .dataRendered, completionHandler: done)
         }
     }
 

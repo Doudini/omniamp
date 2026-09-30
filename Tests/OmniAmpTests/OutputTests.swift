@@ -18,10 +18,10 @@ final class OutputTests: XCTestCase {
         XCTAssertNil(AudioDevices.bestRate(for: 44100, supported: []))
     }
 
-    func testDefaultOutputExists() {
-        // Every Mac running the tests has some output; the list must contain the default device.
+    func testDefaultOutputExists() throws {
+        // The list must contain the default device. CI machines (GitHub's macOS runners) have no audio device at all.
         let def = AudioDevices.defaultOutputID()
-        XCTAssertNotEqual(def, 0)
+        try XCTSkipIf(def == 0, "no audio output here")
         XCTAssertTrue(AudioDevices.outputDevices().contains { $0.id == def })
         XCTAssertGreaterThan(AudioDevices.nominalRate(def), 0)
         // Rendering to the speakers: a few ms at least (one IO buffer), well under a second.
