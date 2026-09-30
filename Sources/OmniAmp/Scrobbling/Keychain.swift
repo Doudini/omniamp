@@ -43,16 +43,22 @@ enum Keychain {
     static func set(_ account: String, _ value: String?) -> Bool {
         let key = service + "|" + account
         let base: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
-        SecItemDelete(base as CFDictionary)
-        var ok = true
+        var status: OSStatus
         if let v = value, let data = v.data(using: .utf8) {
-            var add = base
-            add[kSecValueData] = data
-            add[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlock
-            let status = SecItemAdd(add as CFDictionary, nil)
-            ok = status == errSecSuccess
-            if !ok { NSLog("OmniAmp: couldn't save %@ in the Keychain (%d)", account, status) }
+            // Changed in place, not deleted first: a write that fails then keeps the old login.
+            status = SecItemUpdate(base as CFDictionary, [kSecValueData: data] as CFDictionary)
+            if status == errSecItemNotFound {
+                var add = base
+                add[kSecValueData] = data
+                add[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlock
+                status = SecItemAdd(add as CFDictionary, nil)
+            }
+        } else {
+            status = SecItemDelete(base as CFDictionary)
+            if status == errSecItemNotFound { status = errSecSuccess }
         }
+        let ok = status == errSecSuccess
+        if !ok { NSLog("OmniAmp: couldn't save %@ in the Keychain (%d)", account, status) }
         lock.lock()
         if ok { cache[key] = .some(value) } else { cache.removeValue(forKey: key) }   // read it again next time
         retryAfter.removeValue(forKey: key)

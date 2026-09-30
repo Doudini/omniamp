@@ -99,6 +99,14 @@ final class PodcastTests: XCTestCase {
         XCTAssertNil(eps.first?.links)
     }
 
+    /// A feed can't make Download copy a local file: episodes are web addresses only.
+    func testEpisodesAreWebAddresses() {
+        XCTAssertTrue(PodcastFeedParser.isAudio(url: "https://example.com/ep1.mp3", type: "audio/mpeg"))
+        XCTAssertTrue(PodcastFeedParser.isAudio(url: "http://example.com/ep1.mp3", type: nil))
+        XCTAssertFalse(PodcastFeedParser.isAudio(url: "file:///Users/me/.ssh/id_rsa", type: "audio/mpeg"))
+        XCTAssertFalse(PodcastFeedParser.isAudio(url: "/etc/passwd.mp3", type: nil))
+    }
+
     func testDurationAndDates() {
         XCTAssertEqual(PodcastFeedParser.duration("62:03"), 3723)
         XCTAssertEqual(PodcastFeedParser.duration("45"), 45)

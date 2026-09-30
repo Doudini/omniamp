@@ -59,7 +59,7 @@ final class LogoStore {
 
     /// Calls back on the main queue with the logo (nil if there is none or it can't be loaded).
     func load(_ url: String?, size: Size = .regular, completion: @escaping (CGImage?) -> Void) {
-        guard let url, !url.isEmpty, let remote = URL(string: url),
+        guard let url, !url.isEmpty, let remote = URL(string: url), ["http", "https"].contains(remote.scheme?.lowercased() ?? ""),
               failed[url].map({ Date().timeIntervalSince($0) > Self.retryAfter }) ?? true else { completion(nil); return }
         let key = Self.key(url, size)
         if let img = memory[key] { completion(img); return }
@@ -95,11 +95,17 @@ final class LogoStore {
                 var req = URLRequest(url: remote)
                 req.setValue("OmniAmp/1.0", forHTTPHeaderField: "User-Agent")
                 req.timeoutInterval = 15
-                if let (tmp, r) = try? await URLSession.shared.download(for: req), (r as? HTTPURLResponse)?.statusCode ?? 200 < 400 {
-                    let bytes = (try? tmp.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                    if bytes > Self.maxFileBytes { tooBig = true; try? FileManager.default.removeItem(at: tmp) }
-                    else { try? FileManager.default.removeItem(at: disk); try? FileManager.default.moveItem(at: tmp, to: disk) }
-                }
+                do {
+                    // Stopped at the limit, not checked after: a logo address can point at a stream or a huge file.
+                    let (tmp, r) = try await BoundedFetch.download(for: req, limit: Self.maxFileBytes, deadline: 60)
+                    if (r as? HTTPURLResponse)?.statusCode ?? 200 < 400 {
+                        try? FileManager.default.removeItem(at: disk); try? FileManager.default.moveItem(at: tmp, to: disk)
+                    } else {
+                        try? FileManager.default.removeItem(at: tmp)
+                    }
+                } catch is BoundedFetch.TooLarge {
+                    tooBig = true
+                } catch {}
             }
             let img = autoreleasepool { Self.decode(disk, maxPixels: maxPixels) }
             if img == nil { try? FileManager.default.removeItem(at: disk) }   // don't keep serving an unreadable file

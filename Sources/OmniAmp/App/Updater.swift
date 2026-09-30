@@ -193,8 +193,13 @@ enum Updater {
         T=\(q(target.path)); N=\(q(newApp.path))
         rm -rf "$T.old"
         if mv "$T" "$T.old"; then
-          # Only once the old bundle is safely aside: copy the new one, or put the old one back.
-          if /usr/bin/ditto "$N" "$T"; then rm -rf "$T.old"; else rm -rf "$T"; mv "$T.old" "$T"; fi
+          # Only once the old bundle is safely aside: copy the new one, or put the old one back. The copy is checked
+          # again (the same test as before the download was accepted): the staged app could have changed since.
+          if /usr/bin/ditto "$N" "$T" && /usr/bin/codesign --verify --deep --strict \(q("-R=" + requirement)) "$T"; then
+            rm -rf "$T.old"
+          else
+            rm -rf "$T"; mv "$T.old" "$T"
+          fi
         fi
         /usr/bin/open "$T"
         rm -rf \(q(newApp.deletingLastPathComponent().path))

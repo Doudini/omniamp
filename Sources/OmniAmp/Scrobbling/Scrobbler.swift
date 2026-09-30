@@ -40,7 +40,8 @@ protocol HTTPTransport {
 
 struct URLSessionTransport: HTTPTransport {
     func send(_ req: URLRequest) async throws -> (Data, Int) {
-        let (d, r) = try await URLSession.shared.data(for: req)
+        // Podcast feeds come from addresses anyone can edit: 64 MB is several times the biggest real feed.
+        let (d, r) = try await BoundedFetch.data(for: req, limit: 64 << 20, deadline: max(120, req.timeoutInterval * 4))
         return (d, (r as? HTTPURLResponse)?.statusCode ?? 0)
     }
 }
@@ -211,7 +212,10 @@ final class Scrobbler {
                     self.oneByOne.insert(svc.id)
                 } else {
                     NSLog("OmniAmp: %@ refused a scrobble (%@), dropping it", svc.id, msg)
-                    self.queues[svc.id] = Array((self.queues[svc.id] ?? []).dropFirst())
+                    // That one, not whatever is first now (the queue may have been trimmed at the front meanwhile).
+                    var q = self.queues[svc.id] ?? []
+                    if let i = q.firstIndex(of: batch[0]) { q.remove(at: i) }
+                    self.queues[svc.id] = q
                     self.oneByOne.remove(svc.id)
                     self.saveQueue()
                 }

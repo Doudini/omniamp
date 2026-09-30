@@ -95,12 +95,13 @@ PLIST
 # Sign with the self-signed "OmniAmp Code Signing" certificate when it's in the Keychain (see README → Signing):
 # every build then counts as the same app, so macOS stops asking for the password before OmniAmp can read its
 # saved logins, and Check for Updates can tell a real update from anything else. Otherwise: ad-hoc.
+# Hardened runtime: no code injected at launch (DYLD_INSERT_LIBRARIES), which would pass as OmniAmp to the Keychain.
 IDENTITY=${OMNIAMP_SIGN_IDENTITY:-OmniAmp Code Signing}
 if security find-identity -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
-  codesign --force --sign "$IDENTITY" --timestamp=none "$APP" >/dev/null
+  codesign --force --options runtime --sign "$IDENTITY" --timestamp=none "$APP" >/dev/null
   SIGNED="signed with \"$IDENTITY\""
 else
-  codesign --force --sign - "$APP" >/dev/null
+  codesign --force --options runtime --sign - "$APP" >/dev/null
   SIGNED="ad-hoc signed (no \"$IDENTITY\" certificate)"
 fi
 # The bundle was deleted and recreated: make Finder and the Dock drop the cached (placeholder) icon.

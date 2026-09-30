@@ -366,6 +366,8 @@ final class PodcastFeedParser: NSObject, XMLParserDelegate {
     }
 
     static func isAudio(url: String, type: String?) -> Bool {
+        // Only web addresses: a feed's file:// "episode" would copy a local file on Download.
+        guard let scheme = URL(string: url)?.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return false }
         if let t = type?.lowercased(), !t.isEmpty { return t.hasPrefix("audio/") || t == "application/octet-stream" && hasAudioExtension(url) }
         return hasAudioExtension(url)
     }
