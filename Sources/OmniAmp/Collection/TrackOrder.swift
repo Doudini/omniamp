@@ -6,7 +6,8 @@ import Foundation
 /// dropped folder that way too).
 ///
 /// - No disc number is disc 1, so a disc number on some files only doesn't split the album in two.
-/// - Tracks with no number come after the numbered ones, in Finder order.
+/// - Tracks with no number fill the gaps in the numbering when there are exactly as many of them as gaps ("02"–"20"
+///   and one file without a number: it's the opener), else they come after the numbered ones, in Finder order.
 /// - When two tracks claim the same place (disc and number), this album's tags aren't trusted: the numbers in the
 ///   file names are used when every file has its own, else Finder order.
 /// A CUE sheet's tracks keep their order inside their file.
@@ -14,15 +15,28 @@ enum TrackOrder {
     static func sorted(_ tracks: [LibraryTrack]) -> [LibraryTrack] {
         var places = Set<Place>()
         let clash = tracks.contains { t in t.number.map { !places.insert(Place(disc: disc(t), number: $0)).inserted } ?? false }
-        let numbers: [String: Int]
         if !clash {
-            return tracks.sorted { before($0, $0.number, $1, $1.number) }
-        } else if let fromNames = fileNumbers(tracks) {
-            numbers = fromNames
-        } else {
-            numbers = [:]
+            let filled = gapFill(tracks)
+            return tracks.sorted { before($0, $0.number ?? filled[$0.id], $1, $1.number ?? filled[$1.id]) }
         }
-        return tracks.sorted { before($0, numbers[$0.path], $1, numbers[$1.path]) }
+        let fromNames = fileNumbers(tracks) ?? [:]
+        return tracks.sorted { before($0, fromNames[$0.path], $1, fromNames[$1.path]) }
+    }
+
+    /// Numbers for the tracks without one, when they exactly fill their disc's gaps (in Finder order). CUE tracks
+    /// always have theirs.
+    private static func gapFill(_ tracks: [LibraryTrack]) -> [Int64: Int] {
+        var out: [Int64: Int] = [:]
+        for list in Dictionary(grouping: tracks, by: disc).values {
+            let missing = list.filter { $0.number == nil }
+            let used = Set(list.compactMap(\.number))
+            guard !missing.isEmpty, missing.allSatisfy({ $0.cueStart == nil }), let top = used.max(), top >= 1 else { continue }
+            let gaps = (1...top).filter { !used.contains($0) }
+            guard gaps.count == missing.count else { continue }
+            let inOrder = missing.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+            for (t, n) in zip(inOrder, gaps) { out[t.id] = n }
+        }
+        return out
     }
 
     private struct Place: Hashable { let disc: Int, number: Int }
