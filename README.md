@@ -12,6 +12,7 @@ It's written in Swift with AppKit and AVAudioEngine and has no third-party depen
 <p align="center"><sub>The modern look (left) and the classic look with the original Winamp 2.91 skin (right).</sub></p>
 
 **Highlights**
+- **Simplicity first:** if you just want to listen to your music, drag folders in and play, like in the old days. No library to set up, no account, no subscription, and no full-screen app for 10,000 files. It's free.
 - **Made for bootlegs:** official albums, live albums, shows and bootlegs, and demos are kept apart. Browse by show (date and venue) instead of by artist.
 - **See what you're missing:** each artist page lists the official albums you don't have yet and the bootlegs known to exist on [MusicBrainz](https://musicbrainz.org).
 - **Download live shows:** for artists who allow taping (Sharon Van Etten, for example), get missing shows from the [Live Music Archive](https://archive.org/details/etree).
@@ -25,7 +26,7 @@ It's written in Swift with AppKit and AVAudioEngine and has no third-party depen
 
 ## The player
 
-A small window with a playlist and controls, like Winamp. That's all it takes to play albums, podcasts and radio.
+A small window with a playlist and controls, like Winamp. That's all it takes to play albums, podcasts and radio. A music player shouldn't need your whole screen.
 
 For browsing your whole collection, the Music Library opens in its own window (**LIBRARY** or ⌘4). Anything you play there plays in the player. An album already in the playlist plays from there instead of being added twice.
 
@@ -42,7 +43,7 @@ Real Winamp 2.x skins, pixel-exact at 1×–4×. OmniAmp ships with the original
 
 ## Music Library
 
-Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4). OmniAmp turns them into a collection you can browse, even when it's big and loosely organized. The screenshots use Green and Blue, Tinted, with Apollo charts.
+Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4). OmniAmp turns them into a collection you can browse, even when it's big and loosely organized.
 
 <p align="center"><img src="docs/library-artist.png" alt="An artist page: photo and bio, every release on a timeline above your own plays, your top songs" width="820"></p>
 
