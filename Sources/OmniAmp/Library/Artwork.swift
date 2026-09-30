@@ -6,6 +6,8 @@ import Darwin.malloc
 ///
 /// Memory: images are decoded straight to the size they are shown at (ImageIO thumbnails, never the full
 /// multi-megapixel cover), and only a handful of entries are kept. The large hover image is made on demand.
+/// Main-thread cache; decoding runs on its own queue and hands results back to the main thread.
+@MainActor
 final class ArtworkStore {
     static let shared = ArtworkStore()
 
@@ -21,10 +23,10 @@ final class ArtworkStore {
     private let queue = DispatchQueue(label: "omniamp.artwork", qos: .userInitiated)
     private let capacity = 6
     /// Thumbnails are rendered at this pixel size (drawer shows 140 pt @2x).
-    static let thumbPixels = 280
+    nonisolated static let thumbPixels = 280
 
     /// Calls back on the main queue (immediately if cached).
-    func load(_ path: String, completion: @escaping (Entry) -> Void) {
+    func load(_ path: String, completion: @escaping @MainActor (Entry) -> Void) {
         if let e = cache[path] { touch(path); completion(e); return }
         if waiting[path] != nil { waiting[path]!.append(completion); return }
         waiting[path] = [completion]
@@ -53,7 +55,7 @@ final class ArtworkStore {
     func cached(_ path: String) -> Entry? { cache[path] }
 
     /// A large rendering (hover card), read again from disk so no big bitmap or bytes stay in memory.
-    func largeImage(_ path: String, maxPixels: Int, completion: @escaping (CGImage?) -> Void) {
+    func largeImage(_ path: String, maxPixels: Int, completion: @escaping @Sendable @MainActor (CGImage?) -> Void) {
         queue.async {
             let img = autoreleasepool { DetailsReader.read(path: path).artwork.flatMap { Self.image($0, maxPixels: maxPixels) } }
             malloc_zone_pressure_relief(nil, 0)
@@ -62,18 +64,18 @@ final class ArtworkStore {
     }
 
     /// Decode compressed image bytes directly at a bounded size.
-    static func image(_ data: Data, maxPixels: Int) -> CGImage? {
+    nonisolated static func image(_ data: Data, maxPixels: Int) -> CGImage? {
         guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         return thumbnail(src, maxPixels: maxPixels)
     }
 
     /// Straight from a file: ImageIO reads what it needs, the whole file never sits in memory.
-    static func image(contentsOf url: URL, maxPixels: Int) -> CGImage? {
+    nonisolated static func image(contentsOf url: URL, maxPixels: Int) -> CGImage? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         return thumbnail(src, maxPixels: maxPixels)
     }
 
-    private static func thumbnail(_ src: CGImageSource, maxPixels: Int) -> CGImage? {
+    nonisolated private static func thumbnail(_ src: CGImageSource, maxPixels: Int) -> CGImage? {
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -93,7 +95,7 @@ final class ArtworkStore {
     }
 
     /// Pixel size of the original artwork (for the info line), without decoding it.
-    static func pixelSize(_ data: Data) -> CGSize? {
+    nonisolated static func pixelSize(_ data: Data) -> CGSize? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
               let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
               let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int else { return nil }

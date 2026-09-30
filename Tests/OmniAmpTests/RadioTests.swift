@@ -101,6 +101,7 @@ final class RadioTests: XCTestCase {
 }
 
 final class CacheUpgradeTests: XCTestCase {
+    @MainActor   // LibraryCache.load() is main-thread only
     func testOlderCacheKeepsStationNames() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-cacheup-\(UUID().uuidString)")
         setenv("OMNIAMP_CACHE_DIR", dir.path, 1)

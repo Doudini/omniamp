@@ -33,10 +33,10 @@ enum LibraryCache {
         let done = DispatchSemaphore(value: 0)
         var result: Payload?
     }
-    private static var pending: Pending?
+    @MainActor private static var pending: Pending?
 
     /// Read and decode in the background now (while AppKit starts up); `load()` then waits only for what's left.
-    static func preload() {
+    @MainActor static func preload() {
         let p = Pending()
         pending = p
         DispatchQueue.global(qos: .userInitiated).async {
@@ -45,7 +45,7 @@ enum LibraryCache {
         }
     }
 
-    static func load() -> Payload? {
+    @MainActor static func load() -> Payload? {
         guard let p = pending else { return read() }
         pending = nil
         p.done.wait()

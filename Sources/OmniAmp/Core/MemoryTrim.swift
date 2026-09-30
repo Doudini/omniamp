@@ -4,10 +4,10 @@ import Foundation
 /// Hands freed malloc pages back to the system after bursts of temporary work (launch, tag loading,
 /// switching looks). Without it, memory freed after a peak still counts towards the app's footprint.
 enum MemoryTrim {
-    private static var pending: DispatchWorkItem?
+    @MainActor private static var pending: DispatchWorkItem?
 
     /// Trim once things have settled (debounced; call from the main thread).
-    static func soon(after delay: TimeInterval = 2) {
+    @MainActor static func soon(after delay: TimeInterval = 2) {
         pending?.cancel()
         let work = DispatchWorkItem { malloc_zone_pressure_relief(nil, 0) }
         pending = work

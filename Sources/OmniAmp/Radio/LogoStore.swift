@@ -3,6 +3,7 @@ import CryptoKit
 
 /// Station logos: downloaded once, kept on disk (Caches/OmniAmp/logos) and in a small memory cache,
 /// decoded straight to display size.
+@MainActor
 final class LogoStore {
     static let shared = LogoStore()
 
@@ -14,10 +15,10 @@ final class LogoStore {
     private var waiting: [String: [(CGImage?) -> Void]] = [:]
     /// When a logo last failed: not asked again for a while (a dead link), but retried later (offline, a server hiccup).
     private var failed: [String: Date] = [:]
-    private static let retryAfter: TimeInterval = 300
+    nonisolated private static let retryAfter: TimeInterval = 300
     private let capacity = 200
 
-    private static var dir: URL = {
+    nonisolated private static let dir: URL = {
         let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("OmniAmp/logos", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         DispatchQueue.global(qos: .background).async { trimDisk(d) }
@@ -25,7 +26,7 @@ final class LogoStore {
     }()
 
     /// The logo and cover files are kept up to 200 MB; the least recently used go first.
-    private static func trimDisk(_ d: URL, limit: Int = 200 * 1024 * 1024) {
+    nonisolated private static func trimDisk(_ d: URL, limit: Int = 200 * 1024 * 1024) {
         let keys: [URLResourceKey] = [.fileSizeKey, .contentAccessDateKey]
         guard let files = try? FileManager.default.contentsOfDirectory(at: d, includingPropertiesForKeys: keys) else { return }
         let info = files.map { f -> (URL, Int, Date) in
@@ -40,13 +41,13 @@ final class LogoStore {
         }
     }
 
-    private static func file(for url: String) -> URL {
+    nonisolated private static func file(for url: String) -> URL {
         dir.appendingPathComponent(Insecure.SHA1.hash(data: Data(url.utf8)).map { String(format: "%02x", $0) }.joined())
     }
 
     /// Apple's artwork addresses name their size (…/600x600bb.jpg): ask for 120 px for list rows, a tenth of
     /// the download. Other addresses are left alone (they're decoded small anyway).
-    static func thumbnail(_ url: String?) -> String? {
+    nonisolated static func thumbnail(_ url: String?) -> String? {
         guard let url, url.contains("mzstatic.com") else { return url }
         return url.replacingOccurrences(of: "/\\d+x\\d+(bb|cc)\\.(jpg|png|webp)$", with: "/120x120bb.$2", options: .regularExpression)
     }
@@ -58,7 +59,7 @@ final class LogoStore {
     func cached(_ url: String?, size: Size = .regular) -> CGImage? { url.flatMap { memory[Self.key($0, size)] } }
 
     /// Calls back on the main queue with the logo (nil if there is none or it can't be loaded).
-    func load(_ url: String?, size: Size = .regular, completion: @escaping (CGImage?) -> Void) {
+    func load(_ url: String?, size: Size = .regular, completion: @escaping @MainActor (CGImage?) -> Void) {
         guard let url, !url.isEmpty, let remote = URL(string: url), ["http", "https"].contains(remote.scheme?.lowercased() ?? ""),
               failed[url].map({ Date().timeIntervalSince($0) > Self.retryAfter }) ?? true else { completion(nil); return }
         let key = Self.key(url, size)
@@ -84,7 +85,7 @@ final class LogoStore {
         if !queued.isEmpty { running += 1; queued.removeLast()() }
     }
 
-    private static let maxFileBytes = 20 * 1024 * 1024
+    nonisolated private static let maxFileBytes = 20 * 1024 * 1024
 
     private func fetch(_ url: String, remote: URL, key: String, maxPixels: Int) {
         Task.detached(priority: .utility) {
@@ -118,7 +119,7 @@ final class LogoStore {
     }
 
     /// PNG/JPEG/ICO/GIF via ImageIO at display size; anything else NSImage understands (e.g. SVG) as a fallback.
-    private static func decode(_ file: URL, maxPixels: Int) -> CGImage? {
+    nonisolated private static func decode(_ file: URL, maxPixels: Int) -> CGImage? {
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         if let img = ArtworkStore.image(contentsOf: file, maxPixels: maxPixels) { return img }
         guard let ns = NSImage(contentsOf: file) else { return nil }

@@ -11,7 +11,7 @@ struct WorldMap {
         let bounds: NSRect
     }
 
-    static let shared = WorldMap()
+    @MainActor static let shared = WorldMap()   // read by the map view
     let countries: [Country]
     /// All countries' extent, in map units.
     let extent: NSRect

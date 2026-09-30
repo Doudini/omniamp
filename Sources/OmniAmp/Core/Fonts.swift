@@ -3,9 +3,9 @@ import CoreText
 
 /// Registers the bundled Nerd Fonts (Hack) and hands out fonts with system fallbacks.
 enum Fonts {
-    private static var registered = false
+    @MainActor private static var registered = false
 
-    static func registerBundled() {
+    @MainActor static func registerBundled() {
         guard !registered else { return }
         registered = true
         guard let dir = fontsDirectory() else { NSLog("OmniAmp: fonts folder not found, using system fonts"); return }
