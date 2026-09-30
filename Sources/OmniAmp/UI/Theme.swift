@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 /// A color scheme for the modern look, modelled on monochrome monitor phosphors.
 struct ThemePalette {
@@ -221,27 +222,45 @@ enum Theme {
         return (parts.first, parts.count > 1 ? parts[1] : nil)
     }()
 
-    static private(set) var palette: ThemePalette = {
-        let id = override.color ?? UserDefaults.standard.string(forKey: Pref.modernTheme) ?? "green"
-        return ThemePalette.all.first { $0.id == id } ?? ThemePalette.all[0]
-    }()
+    /// The choices in use: read while drawing (anywhere), changed from the menus. One lock keeps them consistent.
+    private struct Choice: Sendable {
+        var palette: ThemePalette
+        var finish: Finish
+        var chart: ChartPalette
+        var colorBlindCharts: Bool
+    }
 
-    static private(set) var finish: Finish = {
-        Finish(rawValue: override.finish ?? UserDefaults.standard.string(forKey: Pref.modernFinish) ?? "") ?? .tinted
-    }()
+    private static let choice = OSAllocatedUnfairLock(initialState: Choice(
+        palette: {
+            let id = override.color ?? UserDefaults.standard.string(forKey: Pref.modernTheme) ?? "green"
+            return ThemePalette.all.first { $0.id == id } ?? ThemePalette.all[0]
+        }(),
+        finish: Finish(rawValue: override.finish ?? UserDefaults.standard.string(forKey: Pref.modernFinish) ?? "") ?? .tinted,
+        chart: {
+            let parts = ProcessInfo.processInfo.environment["OMNIAMP_CHARTS"]?.split(separator: ":").map(String.init)
+            let id = parts?.first ?? UserDefaults.standard.string(forKey: Pref.chartPalette) ?? ChartPalette.all[0].id
+            return ChartPalette.all.first { $0.id == id } ?? ChartPalette.all[0]
+        }(),
+        colorBlindCharts: {
+            if let v = ProcessInfo.processInfo.environment["OMNIAMP_CHARTS"] { return v.hasSuffix(":cb") }
+            return UserDefaults.standard.bool(forKey: Pref.colorBlindCharts)
+        }()))
+
+    static var palette: ThemePalette { choice.withLock { $0.palette } }
+    static var finish: Finish { choice.withLock { $0.finish } }
 
     /// The current window, panel and text colors: the finish, for the tinted one in the palette's color.
     static var surfaces: Surfaces { finish.surfaces(for: palette) }
 
     static func select(_ id: String) {
         guard let p = ThemePalette.all.first(where: { $0.id == id }) else { return }
-        palette = p
+        choice.withLock { $0.palette = p }
         UserDefaults.standard.set(id, forKey: Pref.modernTheme)
         NotificationCenter.default.post(name: changed, object: nil)
     }
 
     static func selectFinish(_ f: Finish) {
-        finish = f
+        choice.withLock { $0.finish = f }
         UserDefaults.standard.set(f.rawValue, forKey: Pref.modernFinish)
         NotificationCenter.default.post(name: changed, object: nil)
     }
@@ -276,26 +295,18 @@ enum Theme {
 
     /// The chart colors in use: the picked palette, its categories swapped for the color-blind safe ones when
     /// that's switched on.
-    static private(set) var chart: ChartPalette = {
-        let parts = ProcessInfo.processInfo.environment["OMNIAMP_CHARTS"]?.split(separator: ":").map(String.init)
-        let id = parts?.first ?? UserDefaults.standard.string(forKey: Pref.chartPalette) ?? ChartPalette.all[0].id
-        return ChartPalette.all.first { $0.id == id } ?? ChartPalette.all[0]
-    }()
-
-    static private(set) var colorBlindCharts: Bool = {
-        if let v = ProcessInfo.processInfo.environment["OMNIAMP_CHARTS"] { return v.hasSuffix(":cb") }
-        return UserDefaults.standard.bool(forKey: Pref.colorBlindCharts)
-    }()
+    static var chart: ChartPalette { choice.withLock { $0.chart } }
+    static var colorBlindCharts: Bool { choice.withLock { $0.colorBlindCharts } }
 
     static func selectChart(_ id: String) {
         guard let p = ChartPalette.all.first(where: { $0.id == id }) else { return }
-        chart = p
+        choice.withLock { $0.chart = p }
         UserDefaults.standard.set(id, forKey: Pref.chartPalette)
         NotificationCenter.default.post(name: changed, object: nil)
     }
 
     static func setColorBlindCharts(_ on: Bool) {
-        colorBlindCharts = on
+        choice.withLock { $0.colorBlindCharts = on }
         UserDefaults.standard.set(on, forKey: Pref.colorBlindCharts)
         NotificationCenter.default.post(name: changed, object: nil)
     }

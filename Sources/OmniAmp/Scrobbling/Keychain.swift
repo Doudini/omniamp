@@ -4,27 +4,33 @@ import Security
 /// Tiny generic-password wrapper (service "OmniAmp"). Values are read from the Keychain once and then kept in
 /// memory: every read can make macOS ask for permission, and scrobbling needs the login several times per track.
 enum Keychain {
-    private static var cache: [String: String?] = [:]
-    private static let lock = NSLock()
-    /// After a denied or failed read: don't ask again before this (no prompt storm), but not never either.
-    private static var retryAfter: [String: Date] = [:]
+    /// What's known, behind one lock. It's held across a Keychain read too: two threads missing the cache at once
+    /// would otherwise both make macOS ask for permission.
+    private final class Memory: @unchecked Sendable {   // the dictionaries only change under the lock
+        let lock = NSLock()
+        var cache: [String: String?] = [:]
+        /// After a denied or failed read: don't ask again before this (no prompt storm), but not never either.
+        var retryAfter: [String: Date] = [:]
+    }
+    private static let memory = Memory()
     /// OMNIAMP_KEYCHAIN_SERVICE lets tests use their own entries, so they never touch a real login.
     private static var service: String { ProcessInfo.processInfo.environment["OMNIAMP_KEYCHAIN_SERVICE"] ?? "OmniAmp" }
 
     static func get(_ account: String) -> String? {
         let key = service + "|" + account
-        lock.lock(); defer { lock.unlock() }
-        if let hit = cache[key] { return hit }
-        if let t = retryAfter[key], Date() < t { return nil }
+        let m = memory
+        m.lock.lock(); defer { m.lock.unlock() }
+        if let hit = m.cache[key] { return hit }
+        if let t = m.retryAfter[key], Date() < t { return nil }
         let (v, status) = read(account)
         // Remember a value, or a definite "not there". Any other outcome (the permission prompt was denied or
         // couldn't be shown) is tried again in 10 minutes: remembering it would log you out until relaunch,
         // asking on every read would prompt for every song.
         if status == errSecSuccess || status == errSecItemNotFound {
-            cache[key] = .some(v)
-            retryAfter.removeValue(forKey: key)
+            m.cache[key] = .some(v)
+            m.retryAfter.removeValue(forKey: key)
         } else {
-            retryAfter[key] = Date().addingTimeInterval(600)
+            m.retryAfter[key] = Date().addingTimeInterval(600)
         }
         return v
     }
@@ -59,10 +65,11 @@ enum Keychain {
         }
         let ok = status == errSecSuccess
         if !ok { NSLog("OmniAmp: couldn't save %@ in the Keychain (%d)", account, status) }
-        lock.lock()
-        if ok { cache[key] = .some(value) } else { cache.removeValue(forKey: key) }   // read it again next time
-        retryAfter.removeValue(forKey: key)
-        lock.unlock()
+        let m = memory
+        m.lock.lock()
+        if ok { m.cache[key] = .some(value) } else { m.cache.removeValue(forKey: key) }   // read it again next time
+        m.retryAfter.removeValue(forKey: key)
+        m.lock.unlock()
         return ok
     }
 }
