@@ -111,13 +111,23 @@ struct LibraryFilter: Equatable {
 ///
 /// `files` holds every track with its tags and what the classifier made of it; `albums` and `artists` are
 /// rolled up from it for the albums and artists a write touched, so browsing never aggregates 100,000 rows.
-/// `fts` is a full-text index over titles, artists, albums and venues.
+/// `search` is a full-text index over titles, artists, albums, venues, album artists, genres, dates and folders
+/// (LibrarySearch builds its queries).
 final class CollectionDB {
     static let schemaVersion = 1
+    /// Bump when the search index's columns change: it's built again from the files table (nothing read).
+    static let searchVersion = 1
     /// Bump when the classifier or the tags read change: every file is read and sorted again on the next scan.
     static let contentVersion = 4
     let db: SQLiteDB
-    private(set) var hasFTS = true
+    /// Whether the search index is there. Looked up again until it is: a connection opened while another one was
+    /// building it (the first launch after an update) finds it once that's done, instead of searching without it.
+    var hasFTS: Bool {
+        if searchReady { return true }
+        searchReady = (try? db.scalar("SELECT count(*) FROM sqlite_master WHERE name = 'search'")) == 1
+        return searchReady
+    }
+    private var searchReady = false
     /// Every folder has to be listed and read again (after a contentVersion bump, a one-time re-read of some
     /// files, or one of those interrupted by quitting). Known per database file, whichever connection found out.
     var needsFullScan: Bool {
@@ -143,10 +153,7 @@ final class CollectionDB {
     init(url: URL = CollectionDB.defaultURL, readOnly: Bool = false) throws {
         db = try SQLiteDB(path: url.path, readOnly: readOnly)
         path = url.path
-        if readOnly {
-            hasFTS = (try? db.scalar("SELECT count(*) FROM sqlite_master WHERE name = 'fts'")) == 1
-            return
-        }
+        if readOnly { return }
         try db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;")
         try migrate()
         guard Self.firstOpen(url.path) else { return }
@@ -168,19 +175,7 @@ final class CollectionDB {
         try addColumn("albums", "unplayable_format", "TEXT")
         try db.exec("CREATE INDEX IF NOT EXISTS albums_folder ON albums(folder)")   // releases sharing a folder
         try db.exec("CREATE INDEX IF NOT EXISTS files_folder ON files(folder)")     // a folder's tracks (compilations)
-        // The search index follows only the columns it holds: marking files for a re-read (mtime) or regrouping
-        // them no longer rewrites their search entries.
-        var trigger = ""
-        try db.query("SELECT sql FROM sqlite_master WHERE name = 'files_au'") { trigger = $0.text(0) }
-        if hasFTS, !trigger.isEmpty, !trigger.contains("UPDATE OF") {
-            try db.exec("""
-                DROP TRIGGER files_au;
-                CREATE TRIGGER files_au AFTER UPDATE OF title, artist, album, venue ON files BEGIN
-                    INSERT INTO fts(fts, rowid, title, artist, album, venue) VALUES ('delete', old.id, old.title, old.artist, old.album, old.venue);
-                    INSERT INTO fts(rowid, title, artist, album, venue) VALUES (new.id, new.title, new.artist, new.album, new.venue);
-                END;
-                """)
-        }
+        try ensureSearchIndex()
         try ensureListeningTables()
         // Song keys follow Keys.title: recomputed from the stored titles when its rules change (no files read).
         if (try db.scalar("SELECT value FROM meta WHERE key = 'songKeys'") ?? 1) < songKeyVersion {
@@ -246,10 +241,7 @@ final class CollectionDB {
 
     private func migrate() throws {
         let version = try db.scalar("PRAGMA user_version") ?? 0
-        guard version < Self.schemaVersion else {
-            hasFTS = (try? db.scalar("SELECT count(*) FROM sqlite_master WHERE name = 'fts'")) == 1
-            return
-        }
+        guard version < Self.schemaVersion else { return }
         try db.transaction {
             try db.exec("""
             CREATE TABLE IF NOT EXISTS files(
@@ -277,26 +269,6 @@ final class CollectionDB {
             CREATE INDEX IF NOT EXISTS genres_genre ON genres(genre);
             CREATE INDEX IF NOT EXISTS genres_file ON genres(file_id);
             """)
-            do {
-                try db.exec("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(title, artist, album, venue, content='files', content_rowid='id',
-                    tokenize='unicode61 remove_diacritics 2');
-                CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
-                    INSERT INTO fts(rowid, title, artist, album, venue) VALUES (new.id, new.title, new.artist, new.album, new.venue);
-                END;
-                CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
-                    INSERT INTO fts(fts, rowid, title, artist, album, venue) VALUES ('delete', old.id, old.title, old.artist, old.album, old.venue);
-                END;
-                CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE OF title, artist, album, venue ON files BEGIN
-                    INSERT INTO fts(fts, rowid, title, artist, album, venue) VALUES ('delete', old.id, old.title, old.artist, old.album, old.venue);
-                    INSERT INTO fts(rowid, title, artist, album, venue) VALUES (new.id, new.title, new.artist, new.album, new.venue);
-                END;
-                """)
-            } catch {
-                // An SQLite without FTS5: search falls back to LIKE.
-                hasFTS = false
-                NSLog("OmniAmp: library search without FTS5 (%@)", "\(error)")
-            }
             try db.exec("PRAGMA user_version = \(Self.schemaVersion)")
         }
     }
@@ -466,7 +438,8 @@ final class CollectionDB {
                                    show_date, venue, unplayable, unplayable_format)
                 SELECT album_key, min(artist_key), min(album_artist), min(album), min(year), min(kind), min(folder), count(*),
                        coalesce(sum(duration), 0),
-                       (SELECT path FROM files f2 WHERE f2.album_key = ?1 ORDER BY disc_no, track_no, path LIMIT 1),
+                       (SELECT path FROM files f2 WHERE f2.album_key = ?1
+                        ORDER BY coalesce(disc_no, 1), track_no IS NULL, track_no, path LIMIT 1),   -- as TrackOrder: no disc is 1, no number last
                        min(lossless), max(CASE WHEN mtime > 0 THEN mtime ELSE added END), min(show_date), min(venue), sum(playable = 0),
                        (SELECT upper(replace(path, rtrim(path, replace(path, '.', '')), '')) FROM files f3
                         WHERE f3.album_key = ?1 AND f3.playable = 0 LIMIT 1)
@@ -636,21 +609,66 @@ final class CollectionDB {
         return out
     }
 
-    /// File ids matching the words typed: every word must match (as a prefix) somewhere.
+    /// File ids matching what was typed (LibrarySearch.query: every word somewhere, dates in any spelling).
     private func matchSQL(_ query: String) -> (String, [SQLValue?]) {
-        let words = query.split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { !$0.isEmpty }
-        if hasFTS {
-            // Each word quoted (no FTS syntax from the user), matched as a prefix.
-            let q = words.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }.joined(separator: " ")
-            return ("SELECT rowid FROM fts WHERE fts MATCH ?", [q.isEmpty ? "\"\"" : q])
-        }
-        // Plain "?" placeholders (4 per word), so the clause can go after other parameters.
+        if hasFTS { return ("SELECT rowid FROM search WHERE search MATCH ?", [LibrarySearch.query(query)]) }
+        // Plain "?" placeholders (6 per word), so the clause can go after other parameters.
         var sql = "SELECT id FROM files WHERE 1", args: [SQLValue?] = []
-        for w in words {
-            sql += " AND (title LIKE ? OR artist LIKE ? OR album LIKE ? OR venue LIKE ?)"
-            args += Array(repeating: "%" + w + "%", count: 4)
+        for w in query.split(whereSeparator: { $0.isWhitespace || $0 == "\"" }).map(String.init) {
+            // The folder under the library folder, as the index has it ("volumes" doesn't match everything).
+            sql += " AND (title LIKE ? OR artist LIKE ? OR album LIKE ? OR venue LIKE ? OR album_artist LIKE ? OR substr(folder, length(root) + 2) LIKE ?)"
+            args += Array(repeating: "%" + w + "%", count: 6)
         }
         return (sql, args)
+    }
+
+    // MARK: Search index
+
+    /// What the index holds for a file (`row`: "new" in a trigger, nothing for the files table itself). The folder
+    /// is the part under the library folder: a bootleg's folder name is often all it says ("gd1977-05-08 Cornell").
+    private static func searchValues(_ row: String) -> String {
+        let r = row.isEmpty ? "" : row + "."
+        return """
+            \(r)title, \(r)artist, \(r)album, \(r)venue, \(r)album_artist, \(r)genre,
+            trim(coalesce(\(r)show_date, '') || ' ' || coalesce(\(r)date, \(r)year, '')), substr(\(r)folder, length(\(r)root) + 2)
+            """
+    }
+    private static let searchColumns = "title, artist, album, venue, album_artist, genre, date, folder"
+
+    /// The search index, (re)built from the files table when it's missing or its columns changed. It keeps its own
+    /// copy of what it indexes (its columns aren't the files table's), and `search_terms` lists its words (for
+    /// "did you mean"). Without FTS5, search falls back to LIKE.
+    private func ensureSearchIndex() throws {
+        let built = try db.scalar("SELECT value FROM meta WHERE key = 'search'") ?? 0
+        let there = (try db.scalar("SELECT count(*) FROM sqlite_master WHERE name = 'search'") ?? 0) == 1
+        if built >= Self.searchVersion, there { return }
+        do {
+            try db.transaction {
+                try db.exec("""
+                    DROP TRIGGER IF EXISTS files_ai; DROP TRIGGER IF EXISTS files_ad; DROP TRIGGER IF EXISTS files_au;
+                    DROP TABLE IF EXISTS fts; DROP TABLE IF EXISTS search_terms; DROP TABLE IF EXISTS search;
+                    CREATE VIRTUAL TABLE search USING fts5(\(Self.searchColumns), tokenize='unicode61 remove_diacritics 2');
+                    CREATE VIRTUAL TABLE search_terms USING fts5vocab(search, row);
+                    CREATE TRIGGER files_ai AFTER INSERT ON files BEGIN
+                        INSERT INTO search(rowid, \(Self.searchColumns)) VALUES (new.id, \(Self.searchValues("new")));
+                    END;
+                    CREATE TRIGGER files_ad AFTER DELETE ON files BEGIN
+                        DELETE FROM search WHERE rowid = old.id;
+                    END;
+                    CREATE TRIGGER files_au AFTER UPDATE OF title, artist, album, venue, album_artist, genre, show_date, date, year, folder, root
+                    ON files BEGIN
+                        DELETE FROM search WHERE rowid = old.id;
+                        INSERT INTO search(rowid, \(Self.searchColumns)) VALUES (new.id, \(Self.searchValues("new")));
+                    END;
+                    INSERT INTO search(rowid, \(Self.searchColumns)) SELECT id, \(Self.searchValues("")) FROM files;
+                    """)
+                try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES ('search', ?)", [Self.searchVersion])
+            }
+        } catch where "\(error)".contains("fts5") {
+            // An SQLite without FTS5 ("no such module"): search falls back to LIKE. Anything else (the database busy)
+            // fails this setup, which runs again on the next connection.
+            NSLog("OmniAmp: library search without FTS5 (%@)", "\(error)")
+        }
     }
 
     /// Years with how many albums each (nil year: "Unknown"), newest first.
@@ -710,18 +728,17 @@ final class CollectionDB {
                             format: format(path, bitDepth: s.optInt(15), rate: s.optInt(16), kbps: s.optInt(17)), playable: s.int(18) == 1)
     }
 
-    /// An album's tracks in order (TrackOrder). With a search, only the matching ones.
+    /// An album's tracks in order (TrackOrder). With a search, only the matching ones, in the album's order (sorted
+    /// on their own, the gaps between them would read differently).
     func tracks(album: String, matching query: String? = nil) throws -> [LibraryTrack] {
         var out: [LibraryTrack] = []
-        var sql = "SELECT \(Self.trackColumns) FROM files f WHERE f.album_key = ?"
-        var args: [SQLValue?] = [album]
-        if let q = query, !q.trimmingCharacters(in: .whitespaces).isEmpty {
-            let (m, margs) = matchSQL(q)
-            sql += " AND f.id IN (\(m))"
-            args += margs
-        }
-        try db.query(sql, args) { out.append(Self.track($0)) }
-        return TrackOrder.sorted(out)
+        try db.query("SELECT \(Self.trackColumns) FROM files f WHERE f.album_key = ?", [album]) { out.append(Self.track($0)) }
+        let sorted = TrackOrder.sorted(out)
+        guard let q = query, !q.trimmingCharacters(in: .whitespaces).isEmpty else { return sorted }
+        let (m, margs) = matchSQL(q)
+        var hits = Set<Int64>()
+        try db.query("SELECT id FROM files WHERE album_key = ? AND id IN (\(m))", [album] + margs) { hits.insert($0.int64(0)) }
+        return sorted.filter { hits.contains($0.id) }
     }
 
     /// Every recording of one song by one artist (versions folded by title key), oldest first.

@@ -50,7 +50,7 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
 - **Artist pages:** every release on a timeline next to your own listening, your top songs, and the albums you don't have yet. Including live recordings and bootlegs.
 - **Albums:** all your covers in a grid, A–Z or grouped by artist, year, decade, kind or when they were added, in three sizes. Click one to see its tracks under it, double-click to play. Shows without a cover get a ticket stub with their date and venue.
 - **Shows and bootlegs:** live recordings are recognized and sorted by date and venue, apart from the official albums. Missing shows can be downloaded from the [Live Music Archive](https://archive.org/details/etree).
-- **Browse** by artist, show, year or genre, see what's new, and search artists, albums, songs and venues.
+- **Browse** by artist, show, year or genre, see what's new, and search artists, albums, songs, venues, genres and folder names. Dates work in any spelling (1977-05-08, 8.5.77, 5/8/1977), "quotes" match exact words, and a typo gets a "Search for …" with the spelling your library uses.
 - **Stats:** your collection at a glance, from the newest addition to what's lossless.
 - **Listening:** connect [Last.fm](https://www.last.fm) to see your whole history: your most played artist, plays per year, your top artists through the years, and where your music comes from.
 - **Needs Attention:** finds files with missing tags, duplicates and artists spelled several ways, and helps you fix them.

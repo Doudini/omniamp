@@ -83,7 +83,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let status = NSTextField(labelWithString: "")
     /// Shown while Live Music Archive downloads are paused (after a quit): carries on with all of them.
     private lazy var resumeButton = Pill("Resume", glyph: "⤓", target: self, action: #selector(resumeDownloads))
-    private let empty = NSTextField(wrappingLabelWithString: "")
+    private let empty = EmptyNotice()
+    /// A search that found nothing, spelled like the library ("nirvna" → nirvana), for the query it was worked out for.
+    private var suggestion: (query: String, spelled: String?)?
     private var scopeButtons: [Pill] = []
     private var losslessButton: Pill!
     private let observers = Observers()
@@ -117,6 +119,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             section = st.section; filter = st.filter; query = st.query
         }
         if let q = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_SEARCH"] { query = q }   // test hook
+        // Test hook: OMNIAMP_LIBRARY_TYPING=1 puts the cursor in the search field (how it looks while typing).
+        if ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_TYPING"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.focusSearch() }
+        }
         build()
         search.stringValue = query
         let nc = NotificationCenter.default
@@ -189,7 +195,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         window?.backgroundColor = Dash.page
         let title = Dash.label("Music Library", Dash.font(12, .semibold), Dash.text2)
 
-        search.placeholderString = "Search artists, albums, songs, venues…"
+        search.placeholderString = "Search artists, albums, songs, venues, dates, folders…"
+        search.toolTip = "Every word counts (as the start of a word). \"Quotes\" for exact words; dates in any spelling: 1977-05-08, 8.5.77, 5/8/1977"
         search.font = Dash.font(13)
         search.target = self
         search.action = #selector(searchChanged)
@@ -244,10 +251,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         timeline.onSelect = { [weak self] a in self?.selectAlbum(a.key) }
         Dash.styleCard(timeline)
 
-        empty.font = Dash.font(13)
-        empty.textColor = Dash.text2
-        empty.alignment = .center
-        empty.isHidden = true
+        empty.onSuggestion = { [weak self] q in self?.search(for: q) }
 
         status.font = Dash.font(11)
         status.textColor = Dash.text2
@@ -304,8 +308,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         gridPage.onArtist = { [weak self] a in self?.push(.artist(a)) }
         gridPage.onMenu = { [weak self] in self?.gridMenu() }
         gridPage.onKey = { [weak self] e in self?.gridKey(e) ?? false }
-        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage, artistPage,
-                  attentionPage, gridPage] as [NSView] {
+        gridPage.onSuggestion = { [weak self] q in self?.search(for: q) }
+        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage,
+                  songPage, artistPage, attentionPage, gridPage] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -613,6 +618,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         if showingAlbums {
             for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
             gridPage.reload(db: db, filter: filter, query: query, keep: keepAlbum, emptyText: gridEmptyText)
+            gridPage.suggest(gridPage.isEmpty ? spelledLikeLibrary() : nil)
             return
         }
         if showingListening {
@@ -763,18 +769,37 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         return library.progress.running ? "Reading your music…" : nil
     }
 
+    /// A search that found nothing, spelled like the library (worked out once per search).
+    private func spelledLikeLibrary() -> String? {
+        guard searching, !library.progress.running else { return nil }
+        if let s = suggestion, s.query == query { return s.spelled }
+        let spelled = (try? db?.suggestion(for: query)) ?? nil
+        suggestion = (query, spelled)
+        return spelled
+    }
+
+    private func search(for q: String) {
+        search.stringValue = q
+        searchChanged()
+    }
+
     private func showEmpty() {
-        if showingPage || !pages.isEmpty { empty.isHidden = true; return }
-        if let err = library.openError {
-            empty.stringValue = "The library database couldn't be opened:\n\(err)"
+        var suggestion: String?
+        let text: String
+        if showingPage || !pages.isEmpty {
+            text = ""
+        } else if let err = library.openError {
+            text = "The library database couldn't be opened:\n\(err)"
         } else if library.roots.isEmpty, entries.isEmpty {
-            empty.stringValue = "Point OmniAmp at your music.\n\nFOLDERS → Add Folder… (a NAS share is fine). The library keeps itself up to date and sorts out albums, live recordings, shows and unreleased tracks from the tags and folder names."
+            text = "Point OmniAmp at your music.\n\nFOLDERS → Add Folder… (a NAS share is fine). The library keeps itself up to date and sorts out albums, live recordings, shows and unreleased tracks from the tags and folder names."
         } else if entries.isEmpty {
-            empty.stringValue = library.progress.running ? "Reading your music…" : (searching ? "Nothing matches “\(query)”." : "Nothing here with these filters.")
+            text = library.progress.running ? "Reading your music…" : (searching ? "Nothing matches “\(query)”." : "Nothing here with these filters.")
+            suggestion = spelledLikeLibrary()
         } else {
-            empty.stringValue = ""
+            text = ""
         }
-        empty.isHidden = empty.stringValue.isEmpty
+        empty.text = text
+        empty.suggestion = suggestion
     }
 
     @objc private func resumeDownloads() { LiveArchiveDownloads.shared.resumeAll() }
@@ -791,6 +816,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self else { return }
             self.refreshPending = false
+            self.suggestion = nil   // the library's words may have changed
             let entry = self.selectedEntry?.id, album = self.selectedAlbum?.key
             let topRow = self.middle.rows(in: self.middle.visibleRect).location
             self.loadEntries(keep: entry, keepAlbum: album)

@@ -195,6 +195,49 @@ final class LibraryArt {
     }
 }
 
+// MARK: Empty lists
+
+/// A message where a list would be ("Nothing matches “nirvna”."), with a "Search for “nirvana”" button under it when
+/// a search that found nothing has a better spelling. Hidden while there's nothing to say.
+final class EmptyNotice: NSView {
+    var onSuggestion: ((String) -> Void)?
+    var text = "" { didSet { update() } }
+    var suggestion: String? { didSet { update() } }
+    private let label = NSTextField(wrappingLabelWithString: "")
+    private lazy var button = Pill("", glyph: Fonts.Icon.search, target: self, action: #selector(useSuggestion))
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        label.font = Dash.font(13)
+        label.textColor = Dash.text2
+        label.alignment = .center
+        let stack = NSStackView(views: [label, button])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        update()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func update() {
+        label.stringValue = text
+        button.title = suggestion.map { "Search for “\($0)”" } ?? ""
+        button.isHidden = suggestion == nil
+        isHidden = text.isEmpty
+    }
+
+    @objc private func useSuggestion() {
+        if let s = suggestion { onSuggestion?(s) }
+    }
+}
+
 // MARK: Cells
 
 /// A text cell for the library lists: one label, centred vertically, reused by identifier.

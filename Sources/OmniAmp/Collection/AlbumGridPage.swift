@@ -14,11 +14,13 @@ final class AlbumGridPage: NSView, NSCollectionViewDataSource, NSCollectionViewD
     /// Right-click on a cover (selected first): the window's menu for the selected album.
     var onMenu: (() -> NSMenu?)?
     var onKey: ((NSEvent) -> Bool)?
+    /// "Search for …" under a search that found nothing: the search spelled like the library.
+    var onSuggestion: ((String) -> Void)?
 
     let collection = GridCollectionView()
     private let scroll = NSScrollView()
     private let flow = NSCollectionViewFlowLayout()
-    private let empty = NSTextField(wrappingLabelWithString: "")
+    private let empty = EmptyNotice()
     private var groupPills: [Pill] = []
     private var sizePills: [Pill] = []
 
@@ -81,11 +83,7 @@ final class AlbumGridPage: NSView, NSCollectionViewDataSource, NSCollectionViewD
         scroll.scrollerStyle = .overlay
         scroll.automaticallyAdjustsContentInsets = false
 
-        empty.font = Dash.font(13)
-        empty.textColor = Dash.text2
-        empty.alignment = .center
-        empty.isHidden = true
-
+        empty.onSuggestion = { [weak self] s in self?.onSuggestion?(s) }
         for v in [bar, scroll, empty] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
@@ -136,9 +134,14 @@ final class AlbumGridPage: NSView, NSCollectionViewDataSource, NSCollectionViewD
             scroll.contentView.scroll(to: .zero)
             scroll.reflectScrolledClipView(scroll.contentView)
         }
-        empty.stringValue = sections.isEmpty ? (emptyText ?? (q.isEmpty ? "No albums with these filters." : "Nothing matches “\(q)”.")) : ""
-        empty.isHidden = empty.stringValue.isEmpty
+        empty.text = sections.isEmpty ? (emptyText ?? (q.isEmpty ? "No albums with these filters." : "Nothing matches “\(q)”.")) : ""
+        empty.suggestion = nil
     }
+
+    var isEmpty: Bool { sections.isEmpty }
+
+    /// Offers a better spelling of the search under "Nothing matches" (nil: none).
+    func suggest(_ spelled: String?) { empty.suggestion = spelled }
 
     private func position(of key: String) -> AlbumGrid.Position? {
         for (s, sec) in sections.enumerated() {
@@ -450,21 +453,27 @@ final class AlbumTileView: NSView, NSDraggingSource {
         self.withArtist = withArtist
         noCover = false
         needsDisplay = true
-        if case let .some(img) = LibraryArt.shared.cached(a, large: true) {
+        switch LibraryArt.shared.cached(a, large: true) {
+        case .some(let img?):
             set(img)
             token = -1
-            return
-        }
-        // The small cover while the large one is read (it's often in memory from the lists).
-        if case let .some(small?) = LibraryArt.shared.cached(a) { image = NSImage(cgImage: small, size: .zero) } else { image = nil }
-        token = LibraryArt.shared.load(a, large: true) { [weak self] img in
-            guard let self, self.album?.key == a.key else { return }
-            if img != nil { self.set(img); return }
-            // None (or the share is away): the small cover when there's one, kept from earlier.
-            self.token = LibraryArt.shared.load(a) { [weak self] small in
+        case .some(nil):
+            smallCover(a)   // no large one (or the share was away when it was read)
+        case nil:
+            // The small cover while the large one is read (it's often in memory from the lists).
+            if case let .some(small?) = LibraryArt.shared.cached(a) { image = NSImage(cgImage: small, size: .zero) } else { image = nil }
+            token = LibraryArt.shared.load(a, large: true) { [weak self] img in
                 guard let self, self.album?.key == a.key else { return }
-                self.set(small)
+                if let img { self.set(img) } else { self.smallCover(a) }
             }
+        }
+    }
+
+    /// The small cover when there's one (kept from earlier, when the share was there), else the printed sleeve.
+    private func smallCover(_ a: LibraryAlbum) {
+        token = LibraryArt.shared.load(a) { [weak self] small in
+            guard let self, self.album?.key == a.key else { return }
+            self.set(small)
         }
     }
 
