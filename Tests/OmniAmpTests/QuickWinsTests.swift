@@ -67,6 +67,12 @@ final class QuickWinsTests: XCTestCase {
         XCTAssertEqual(c.replayGainFactor(for: track(gain: -6.02, peak: nil)), 0.5, accuracy: 0.001)
         XCTAssertEqual(c.replayGainFactor(for: track(gain: -6.02, peak: nil, album: 0)), 1, accuracy: 0.001)
         XCTAssertEqual(c.replayGainFactor(for: track(gain: nil, peak: nil)), 1)
+        // Nonsense in the tags: never NaN or huge.
+        c.replayGainMode = .track
+        XCTAssertEqual(c.replayGainFactor(for: track(gain: .nan, peak: nil)), 1)
+        XCTAssertEqual(c.replayGainFactor(for: track(gain: .infinity, peak: nil)), 1)
+        XCTAssertEqual(c.replayGainFactor(for: track(gain: 300, peak: nil)), powf(10, 24 / 20), accuracy: 0.001)
+        XCTAssertEqual(c.replayGainFactor(for: track(gain: -6.02, peak: .nan)), 0.5, accuracy: 0.001)
     }
 
     // MARK: Duplicates

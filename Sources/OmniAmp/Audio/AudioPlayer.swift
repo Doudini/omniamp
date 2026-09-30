@@ -63,6 +63,7 @@ final class AudioPlayer {
     private(set) var bitPerfect = false
     private(set) var exclusive = false
     private var originalRates: [AudioDeviceID: Double] = [:]
+    private var lastRateRematch = Date.distantPast
     private var eqSettings = Equalizer.Settings()
     private var graphRate: Double = 0
     /// After we switch the device rate, the engine reports a configuration change a moment later and stops.
@@ -773,7 +774,11 @@ final class AudioPlayer {
             return
         }
         NSLog("OmniAmp: audio configuration changed (device %.0f Hz), restarting", deviceRate)
-        restart(at: currentTime, wasState: state, matchRate: false)
+        // Bit-perfect: back to the track's rate (the DAC reset itself after sleep, say), but not again and again
+        // if another app keeps setting its own.
+        let rematch = bitPerfect && Date().timeIntervalSince(lastRateRematch) > 10
+        if rematch { lastRateRematch = Date() }
+        restart(at: currentTime, wasState: state, matchRate: rematch)
         onOutputChange?()
     }
 
@@ -861,6 +866,14 @@ final class AudioPlayer {
 
     /// The file is open: set the device up for it and start it.
     private func start(_ file: AVAudioFile, url: URL, from start: Double, range: (start: Double, end: Double?)?) -> Bool {
+        let item = Item(id: nextItemID, file: file, url: url, range: range, offset: start)
+        // No audio in it (a header-only or cut-off download, a CUE range past the end): nothing would ever finish,
+        // so it would show "playing" forever. Unplayable instead, like a file that doesn't open.
+        guard item.trackEnd > item.trackStart else {
+            NSLog("OmniAmp: no audio in %@", url.path)
+            state = .stopped
+            return false
+        }
         var settle = false
         if bitPerfect, AudioDevices.bestRate(for: file.fileFormat.sampleRate, supported: AudioDevices.availableRates(deviceID)) != graphRate {
             engine.stop()
@@ -872,7 +885,7 @@ final class AudioPlayer {
             onOutputChange?()
         }
         connect(format: file.processingFormat)
-        current = Item(id: nextItemID, file: file, url: url, range: range, offset: start)
+        current = item
         nextItemID += 1
         // The start offset, already while a rate switch settles: pausing then must not lose the resume point.
         clockBase = current.map { Double($0.startFrame - $0.trackStart) / $0.sampleRate } ?? 0

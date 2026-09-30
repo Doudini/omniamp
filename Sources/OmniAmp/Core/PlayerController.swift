@@ -617,7 +617,9 @@ final class PlayerController {
     /// Near the end of a track, schedule the next one behind it on the audio engine.
     private func maybePreloadNext() {
         guard player.state == .playing, !preloadAttempted, !player.hasQueuedNext, !stopAfterCurrent, !player.isPlayingEpisode,
-              player.duration > 0, player.remaining < 8 else { return }
+              player.duration > 0 else { return }
+        // Early: the timer was set while the clock stood still (a rate switch settling). Set it again.
+        guard player.remaining < 8 else { schedulePreloadCheck(); return }
         preloadAttempted = true
         guard let t = nextTarget(), t != currentIndex, !store.tracks[t].isRemote else { return }
         let track = store.tracks[t]
@@ -935,10 +937,11 @@ final class PlayerController {
         let mode = replayGainMode
         guard mode != .off else { return 1 }
         let db = mode == .album ? (t.rgAlbumGain ?? t.rgTrackGain) : (t.rgTrackGain ?? t.rgAlbumGain)
-        guard let gain = db else { return 1 }
-        var linear = powf(10, gain / 20)
+        // Tags can say anything ("nan", "inf", +300 dB): a NaN gain would silence the output.
+        guard let gain = db, gain.isFinite else { return 1 }
+        var linear = powf(10, min(max(gain, -24), 24) / 20)
         let peak = mode == .album ? (t.rgAlbumPeak ?? t.rgTrackPeak) : (t.rgTrackPeak ?? t.rgAlbumPeak)
-        if let pk = peak, pk > 0 { linear = min(linear, 1 / pk) }   // prevent clipping
+        if let pk = peak, pk > 0, pk.isFinite { linear = min(linear, 1 / pk) }   // prevent clipping
         return linear
     }
 
