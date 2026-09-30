@@ -1,6 +1,18 @@
 # OmniAmp
 
-OmniAmp is a music player for macOS inspired by Winamp. It opens huge folders instantly, has real Winamp skins, and comes with a music library made for collectors, bootlegs and live shows included.
+OmniAmp is a music player for macOS inspired by Winamp, made for collectors of bootlegs and live recordings. Its music library tells official albums apart from live shows, bootlegs and demos, and sorts shows by date and venue. A taper's folders don't end up as a pile of "Unknown Album"s.
+
+**Highlights**
+- **Made for bootlegs:** official albums, live albums, shows and bootlegs, and demos are kept apart. Browse by show (date and venue) instead of by artist.
+- **See what you're missing:** each artist page lists the official albums you don't have yet and the bootlegs known to exist on [MusicBrainz](https://musicbrainz.org).
+- **Download live shows:** for artists who allow taping (Sharon Van Etten, for example), get missing shows from the [Live Music Archive](https://archive.org/details/etree).
+- **Fix your tags:** finds unknown artists, missing years and genres, artists spelled several ways and duplicate releases. **Find Missing Info** looks a release up and writes the tags and cover art into the files.
+- **A real database:** the library is kept in SQLite and follows your folders live, on your Mac or a NAS, including changes made while OmniAmp was closed.
+- **Stats and listening history:** your collection at a glance, and your whole Last.fm history with a world map of where your music comes from.
+- **Huge folders:** the player opens folders with thousands of files instantly.
+- **Scrobbling** to Last.fm and ListenBrainz.
+- **Internet radio and podcasts** built in.
+- **Winamp skins:** real Winamp 2.x `.wsz` skins, next to a modern look.
 
 It's written in Swift with AppKit and AVAudioEngine and has no third-party dependencies.
 
@@ -11,36 +23,26 @@ It's written in Swift with AppKit and AVAudioEngine and has no third-party depen
 </p>
 <p align="center"><sub>The modern look (left) and the classic look with the original Winamp 2.91 skin (right).</sub></p>
 
-## The modern look
+## The player
 
-A resizable native window with an LCD-style display, album art and the Hack Nerd Font. **View → Theme** has three choices. The color comes in five themes inspired by old monochrome monitors:
-- Green (default)
-- Amber
-- Blue
-- Cyan/Teal
-- Monochrome
+A small window with a playlist and controls, like Winamp. That's all it takes to play albums, podcasts and radio.
 
-The finish sets the windows around the display, and it applies to the Music Library, Radio, Podcasts and Settings windows too:
-- **Tinted** (default): dark greys that lean towards the color.
-- **Hardware**: neutral grey.
-- **Studio**: slate blue-green.
+For browsing your whole collection, the Music Library opens in its own window (**LIBRARY** or ⌘4). Anything you play there plays in the player. An album already in the playlist plays from there instead of being added twice.
 
-The chart colors set the Music Library's graphs. There are four soft pixel-art palettes from [Lospec](https://lospec.com): Vinik24 (default), Apollo, Lost Century and Sweetie 16. There's also Phosphor, which draws the data in the theme's own color. **Color-Blind Safe Colors** swaps the artist and recording-kind colors for a set that stays distinct with color blindness. The library screenshots below use Green and Blue, Tinted, with Apollo charts.
-
-The **INFO** drawer shows full tags, the file format, the album and cover art. The **EQ** drawer has the 10-band equalizer with presets.
+**View → Theme** sets the look:
+- **Color:** Green, Amber, Blue, Cyan/Teal or Monochrome.
+- **Finish:** Tinted, Hardware or Studio.
+- **Chart colors:** soft pixel-art palettes from [Lospec](https://lospec.com) for the library's graphs, with color-blind safe colors as an option.
 
 <p align="center"><img src="docs/themes.png" alt="Four themes: Green and Amber with the Tinted finish, Blue with Studio and Monochrome with Hardware, with the INFO and EQ drawers"></p>
 
 ## The classic look
 
-Real Winamp 2.x skins: pixel-exact main, equalizer and playlist windows at 1×–4× size.
-- **Built-in skin:** OmniAmp ships with the original Winamp 2.91 base skin.
-- **Your own skins:** drag any `.wsz` onto the window, or use View → Skins → Load Skin….
-- **Where to find more:** thousands of skins are at the [Winamp Skin Museum](https://skins.webamp.org).
+Real Winamp 2.x skins, pixel-exact at 1×–4×. OmniAmp ships with the original Winamp 2.91 skin. Drag any `.wsz` onto the window to use your own; the [Winamp Skin Museum](https://skins.webamp.org) has thousands.
 
 ## Music Library
 
-Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4). OmniAmp turns them into a collection you can browse, even when it's big and loosely organized.
+Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4). OmniAmp turns them into a collection you can browse, even when it's big and loosely organized. The screenshots use Green and Blue, Tinted, with Apollo charts.
 
 <p align="center"><img src="docs/library-artist.png" alt="An artist page: photo and bio, every release on a timeline above your own plays, your top songs" width="820"></p>
 
