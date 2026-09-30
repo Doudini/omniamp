@@ -230,8 +230,14 @@ final class ModernPanelView: NSView {
     private let stateLabel = NSTextField(labelWithString: "")
     /// What is playing: local music, radio, podcast or a web file (blinks while a stream buffers).
     private let sourceLabel = NSTextField(labelWithString: "")
-    /// "REM" while the counter shows remaining time; "LIVE" for radio, which has no length.
+    /// Legends printed in the display, like on a stereo's LCD: lit when on, faint (like an unlit segment) when off.
+    /// "REM" while the counter shows remaining time ("LIVE" for radio, which has no length), then EQ, random, repeat.
     private let remainTag = NSTextField(labelWithString: "REM")
+    private let eqTag = NSTextField(labelWithString: "EQ")
+    private let rngTag = NSTextField(labelWithString: "RNG")
+    private let rptTag = NSTextField(labelWithString: "RPT")
+    private var legends: [NSTextField] { [remainTag, eqTag, rngTag, rptTag] }
+    private let legendStack = NSStackView()
     private var showRemaining = UserDefaults.standard.bool(forKey: Pref.modernRemaining) {
         didSet { UserDefaults.standard.set(showRemaining, forKey: Pref.modernRemaining) }
     }
@@ -278,28 +284,33 @@ final class ModernPanelView: NSView {
     }
 
     private func build() {
-        for v in [leftBox, rightBox, stateLabel, sourceLabel, remainTag, time, spectrum, marquee, infoLabel, volIcon] as [NSView] {
+        for v in [leftBox, rightBox, stateLabel, sourceLabel, legendStack, time, spectrum, marquee, infoLabel, volIcon] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         addSubview(leftBox)
         addSubview(rightBox)
-        [stateLabel, sourceLabel, remainTag, time, spectrum].forEach(leftBox.addSubview)
+        legends.forEach(legendStack.addArrangedSubview)
+        legendStack.orientation = .vertical
+        legendStack.alignment = .trailing
+        legendStack.spacing = 0
+        [stateLabel, sourceLabel, time, spectrum, legendStack].forEach(leftBox.addSubview)
         sourceLabel.font = Theme.icon(10)
         sourceLabel.textColor = Theme.phosphor.withAlphaComponent(0.55)
         sourceLabel.alignment = .center
-        remainTag.font = Fonts.hack(6.5, bold: true)
-        remainTag.textColor = Theme.phosphor
-        remainTag.isHidden = !showRemaining
+        for l in legends {
+            l.font = Fonts.hack(6.5, bold: true)
+            l.textColor = Self.unlit
+            l.alignment = .right
+        }
         time.onClick = { [weak self] in
             guard let self, self.controller?.currentTrack?.isStream != true else { return }   // live radio has no length
             self.showRemaining.toggle()
-            self.remainTag.isHidden = !self.showRemaining
             self.refresh(tick: 0)
         }
         time.toolTip = "Click: elapsed / remaining time"
         seek.setAccessibilityLabel("Position")
         // Icon-font glyphs would be read out as odd characters; the time and buttons already say the state.
-        [stateLabel, sourceLabel, volIcon, remainTag].forEach { $0.setAccessibilityElement(false) }
+        ([stateLabel, sourceLabel, volIcon] + legends).forEach { $0.setAccessibilityElement(false) }
         volume.setAccessibilityLabel("Volume")
         [art, marquee, infoLabel, volIcon, volume, badge].forEach(rightBox.addSubview)
         art.onHover = { [weak self] inside in self?.hover(inside) }
@@ -378,8 +389,8 @@ final class ModernPanelView: NSView {
             stateLabel.topAnchor.constraint(equalTo: leftBox.topAnchor, constant: 8),
             sourceLabel.centerXAnchor.constraint(equalTo: stateLabel.centerXAnchor),
             sourceLabel.topAnchor.constraint(equalTo: stateLabel.bottomAnchor, constant: 3),
-            remainTag.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -7),
-            remainTag.topAnchor.constraint(equalTo: leftBox.topAnchor, constant: 6),
+            legendStack.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -7),
+            legendStack.topAnchor.constraint(equalTo: leftBox.topAnchor, constant: 6),
             time.trailingAnchor.constraint(equalTo: leftBox.trailingAnchor, constant: -6),
             time.leadingAnchor.constraint(equalTo: leftBox.leadingAnchor, constant: 6),
             time.topAnchor.constraint(equalTo: leftBox.topAnchor, constant: 4),
@@ -450,6 +461,29 @@ final class ModernPanelView: NSView {
 
     // MARK: Display
 
+    /// An unlit legend: the faint print of a segment that's off (a touch stronger than the digits' ghost: it's small).
+    private static var unlit: NSColor { Theme.phosphor.withAlphaComponent(0.16) }
+
+    /// A legend lit or not, with what it means; only touched when that changes (this runs 20× a second).
+    private func light(_ legend: NSTextField, _ on: Bool, _ tip: String) {
+        let color = on ? Theme.phosphor : Self.unlit
+        if legend.textColor != color { legend.textColor = color }
+        if legend.toolTip != tip { legend.toolTip = tip }
+    }
+
+    /// The display's legends. Also called on option and mix changes: the clock that drives refresh(tick:) stops
+    /// while nothing plays, and shuffle or the EQ can be switched then too.
+    func refreshLegends() {
+        guard let c = controller else { return }
+        let live = c.currentTrack?.isStream == true
+        remainTag.setIfChanged(live ? "LIVE" : "REM")
+        light(remainTag, live || showRemaining, live ? "Live radio" : (showRemaining ? "Showing the time left" : "Showing the time played"))
+        light(eqTag, c.eqActive, c.eqActive ? "Equalizer on"
+              : (c.eqSettings.enabled && c.player.bitPerfect ? "Equalizer off in bit-perfect mode" : "Equalizer off"))
+        light(rngTag, c.shuffle, c.shuffle ? "Random order (shuffle) on" : "Random order (shuffle) off")
+        light(rptTag, c.repeatAll, c.repeatAll ? "Repeat on" : "Repeat off")
+    }
+
     func refresh(tick: Int) {
         guard let c = controller else { return }
         let p = c.player
@@ -460,8 +494,7 @@ final class ModernPanelView: NSView {
         let remaining = showRemaining && !live && d > 0 && st != .stopped
         let t = Sane.int(st == .stopped ? 0 : max(0, remaining ? d - p.currentTime : p.currentTime))
         // Called 20× a second: only touch what changed (a text field redraws on every stringValue set).
-        remainTag.setIfChanged(live ? "LIVE" : "REM")
-        if remainTag.isHidden != !(live || showRemaining) { remainTag.isHidden = !(live || showRemaining) }
+        refreshLegends()
         updateSource(track, buffering: st == .playing && p.isBuffering && track?.isRemote == true)
         time.text = String(format: "%02d:%02d", min(t / 60, 99), t % 60)
         time.dimmed = st == .paused && Int(animationTime * 2) % 2 == 0 // the colon blinks while paused
@@ -594,6 +627,7 @@ final class ModernPanelView: NSView {
         let tip = c.player.bitPerfect ? (adjustable ? "Device volume (bit-perfect mode)" : "Fixed at 100% in bit-perfect mode") : nil
         if volume.toolTip != tip { volume.toolTip = tip }
         refreshVolume()   // after the above: muted dims the slider further
+        refreshLegends()
         updateInfoLines()
     }
 
@@ -601,6 +635,7 @@ final class ModernPanelView: NSView {
     /// bit-perfect mode): a crossed-out speaker and a dimmed slider, which still shows the level it comes back to.
     func refreshVolume() {
         guard let c = controller else { return }
+        refreshLegends()   // the EQ switch comes this way (a mix change)
         let muted = c.player.isMuted
         let icon = muted ? Fonts.Icon.volumeOff : Fonts.Icon.volume
         if volIcon.stringValue != icon {
