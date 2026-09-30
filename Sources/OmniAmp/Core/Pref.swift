@@ -38,6 +38,9 @@ enum Pref {
     static let watchedFolders = "watchedFolders"
     /// The music library's folders (the Library window), separate from the playlist's watched folders.
     static let libraryFolders = "libraryFolders"
+    /// The Albums grid: how it's grouped (AlbumGrouping) and its cover size (0–2).
+    static let libraryGridGroup = "libraryGridGroup"
+    static let libraryGridSize = "libraryGridSize"
     /// The library may look things up online in the background (artist countries from MusicBrainz).
     static let libraryOnlineLookups = "libraryOnlineLookups"
     /// Where Live Music Archive downloads go (a folder per artist inside).

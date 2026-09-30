@@ -5,16 +5,20 @@ import UniformTypeIdentifiers
 
 // MARK: Album art
 
-/// Small album covers for the library lists. Each is read once from the share (a cover file next to the
-/// tracks, else the art embedded in the first track), shrunk, and kept on the Mac: in memory for what was
-/// on screen lately, on disk for good. Rows scrolled away before their cover arrived cancel their read.
+/// Album covers for the library: small ones for the lists, large ones for the album grid. Each is read once from
+/// the share (a cover file next to the tracks, else the art embedded in the first track), shrunk, and kept on the
+/// Mac: in memory for what was on screen lately, on disk for good. Rows scrolled away before their cover arrived
+/// cancel their read.
 @MainActor
 final class LibraryArt {
     static let shared = LibraryArt()
     nonisolated static let pixels = 96
+    /// The grid's covers: its largest tiles on a Retina screen. Kept as JPEG (a PNG this size is ~10× larger).
+    nonisolated static let largePixels = 440
 
     private final class Box { let image: CGImage?; init(_ i: CGImage?) { image = i } }
     private let memory = NSCache<NSString, Box>()
+    private let largeMemory = NSCache<NSString, Box>()
     private var waiting: [String: [Int: (CGImage?) -> Void]] = [:]
     private var operations: [String: Operation] = [:]
     private var nextToken = 0
@@ -33,6 +37,7 @@ final class LibraryArt {
 
     private init() {
         memory.countLimit = 600
+        largeMemory.countLimit = 240   // ~190 MB at most, a few screens of the largest tiles
         DispatchQueue.global(qos: .background).async { Self.prune() }
     }
 
@@ -51,7 +56,7 @@ final class LibraryArt {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return }
         let now = Date(), crowded = names.count > 20_000
-        for name in names where name.hasSuffix(".png") {
+        for name in names where name.hasSuffix(".png") || name.hasSuffix(".jpg") {
             let url = directory.appendingPathComponent(name)
             guard let a = try? fm.attributesOfItem(atPath: url.path), let modified = a[.modificationDate] as? Date else { continue }
             let empty = (a[.size] as? Int ?? 0) == 0, age = now.timeIntervalSince(modified)
@@ -64,14 +69,21 @@ final class LibraryArt {
     /// The keys handed out per folder, so a new cover there reaches every release in it.
     private var keysByFolder: [String: Set<String>] = [:]
 
-    func cached(_ album: LibraryAlbum) -> CGImage?? { memory.object(forKey: Self.key(album) as NSString).map { $0.image } }
+    /// The key a size is kept under: a large cover is a separate request from the small one.
+    private static func key(_ a: LibraryAlbum, large: Bool) -> String { key(a) + (large ? "\u{2}L" : "") }
+    private func memory(_ key: String) -> NSCache<NSString, Box> { key.hasSuffix("\u{2}L") ? largeMemory : memory }
+
+    func cached(_ album: LibraryAlbum, large: Bool = false) -> CGImage?? {
+        let key = Self.key(album, large: large)
+        return memory(key).object(forKey: key as NSString).map { $0.image }
+    }
 
     /// Calls back on the main queue (right away when in memory). Returns a token for `cancel`.
     @discardableResult
-    func load(_ album: LibraryAlbum, completion: @escaping (CGImage?) -> Void) -> Int {
-        let key = Self.key(album), folder = album.folder
+    func load(_ album: LibraryAlbum, large: Bool = false, completion: @escaping (CGImage?) -> Void) -> Int {
+        let key = Self.key(album, large: large), folder = album.folder
         keysByFolder[folder, default: []].insert(key)
-        if let box = memory.object(forKey: key as NSString) { completion(box.image); return -1 }
+        if let box = memory(key).object(forKey: key as NSString) { completion(box.image); return -1 }
         nextToken += 1
         let token = nextToken
         if waiting[key] != nil { waiting[key]![token] = completion; return token }
@@ -80,7 +92,9 @@ final class LibraryArt {
         let firstPath = album.firstPath, own = album.sharedFolder ? album.firstPath : nil, oldKey = album.key
         let started = Self.epoch(folder)
         let op = BlockOperation {
-            let img = autoreleasepool { Self.thumbnail(folder: folder, release: own, earlier: oldKey, firstPath: firstPath, epoch: started) }
+            let img = autoreleasepool {
+                Self.thumbnail(folder: folder, release: own, earlier: oldKey, firstPath: firstPath, epoch: started, large: large)
+            }
             DispatchQueue.main.async { MainActor.assumeIsolated { self.finish(key, img, stale: Self.epoch(folder) != started) } }
         }
         operations[key] = op
@@ -88,8 +102,8 @@ final class LibraryArt {
         return token
     }
 
-    func cancel(_ album: LibraryAlbum, token: Int) {
-        let key = Self.key(album)
+    func cancel(_ album: LibraryAlbum, token: Int, large: Bool = false) {
+        let key = Self.key(album, large: large)
         guard token >= 0, waiting[key]?.removeValue(forKey: token) != nil else { return }
         if waiting[key]?.isEmpty == true {
             waiting[key] = nil
@@ -105,8 +119,8 @@ final class LibraryArt {
         Self.epochLock.lock()
         Self.epochs[folder, default: 0] += 1
         Self.epochLock.unlock()
-        for key in keysByFolder[folder, default: []].union([folder]) { memory.removeObject(forKey: key as NSString) }
-        // The folder's thumbnail and every release's in it ("<folder>-<release>.png").
+        for key in keysByFolder[folder, default: []].union([folder]) { memory(key).removeObject(forKey: key as NSString) }
+        // The folder's thumbnails and every release's in it ("<folder>-<release>.png", "-L.jpg" for the large ones).
         let prefix = Self.hash(folder)
         for name in (try? FileManager.default.contentsOfDirectory(atPath: Self.directory.path)) ?? [] where name.hasPrefix(prefix) {
             try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent(name))
@@ -118,8 +132,8 @@ final class LibraryArt {
         SHA256.hash(data: Data(s.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
     }
 
-    nonisolated private static func cacheFile(_ folder: String, release: String?) -> URL {
-        directory.appendingPathComponent(hash(folder) + (release.map { "-" + hash($0) } ?? "") + ".png")
+    nonisolated private static func cacheFile(_ folder: String, release: String?, large: Bool = false) -> URL {
+        directory.appendingPathComponent(hash(folder) + (release.map { "-" + hash($0) } ?? "") + (large ? "-L.jpg" : ".png"))
     }
 
     /// A cover picked for one release whose folder holds others too (Find Missing Info): kept here, not as
@@ -132,7 +146,7 @@ final class LibraryArt {
 
     private func finish(_ key: String, _ img: CGImage?, stale: Bool = false) {
         // Read before a new cover was saved: not kept (whoever shows it asks again after the change).
-        if !stale { memory.setObject(Box(img), forKey: key as NSString) }
+        if !stale { memory(key).setObject(Box(img), forKey: key as NSString) }
         operations[key] = nil
         let cbs = waiting.removeValue(forKey: key) ?? [:]
         cbs.values.forEach { $0(img) }
@@ -142,12 +156,17 @@ final class LibraryArt {
     /// `release`: set when the folder holds other releases too. Then its chosen cover, else the art in its own
     /// files; never the folder's cover.jpg, which can't tell whose it is (it was often saved for a neighbour).
     /// `earlier`: the name a chosen cover was kept under before (the release key).
-    nonisolated private static func thumbnail(folder: String, release: String?, earlier: String, firstPath: String, epoch started: Int) -> CGImage? {
-        let file = cacheFile(folder, release: release)
+    /// `large`: the grid's size; the small one is saved on the way when it isn't yet (it's the same read).
+    nonisolated private static func thumbnail(folder: String, release: String?, earlier: String, firstPath: String, epoch started: Int,
+                                              large: Bool = false) -> CGImage? {
+        let file = cacheFile(folder, release: release, large: large), small = cacheFile(folder, release: release)
+        let size = large ? largePixels : pixels
         if let attrs = try? FileManager.default.attributesOfItem(atPath: file.path) {
             if (attrs[.size] as? Int ?? 0) == 0 { return nil }
-            return ArtworkStore.image(contentsOf: file, maxPixels: pixels)
+            return ArtworkStore.image(contentsOf: file, maxPixels: size)
         }
+        // Known to have no cover (the small one's marker): no need to read the share again.
+        if large, let attrs = try? FileManager.default.attributesOfItem(atPath: small.path), (attrs[.size] as? Int ?? 0) == 0 { return nil }
         let data: Data?
         if let release {
             data = (try? Data(contentsOf: chosenFile(release: release))) ?? (try? Data(contentsOf: chosenFile(release: earlier)))
@@ -155,16 +174,24 @@ final class LibraryArt {
         } else {
             data = DetailsReader.folderArt(for: firstPath)?.0 ?? DetailsReader.read(path: firstPath).artwork
         }
-        guard let data, let img = ArtworkStore.image(data, maxPixels: pixels) else {
+        guard let data, let img = ArtworkStore.image(data, maxPixels: size) else {
             // No cover (or the share is away): remember only when the folder is really there.
             if ExactPath.exists(folder), epoch(folder) == started { FileManager.default.createFile(atPath: file.path, contents: nil) }
             return nil
         }
-        if epoch(folder) == started, let dest = CGImageDestinationCreateWithURL(file as CFURL, UTType.png.identifier as CFString, 1, nil) {
-            CGImageDestinationAddImage(dest, img, nil)
-            CGImageDestinationFinalize(dest)
+        guard epoch(folder) == started else { return img }
+        save(img, to: file, jpeg: large)
+        if large, !FileManager.default.fileExists(atPath: small.path), let s = ArtworkStore.image(data, maxPixels: pixels) {
+            save(s, to: small, jpeg: false)
         }
         return img
+    }
+
+    nonisolated private static func save(_ img: CGImage, to file: URL, jpeg: Bool) {
+        guard let dest = CGImageDestinationCreateWithURL(file as CFURL, (jpeg ? UTType.jpeg : UTType.png).identifier as CFString, 1, nil)
+        else { return }
+        CGImageDestinationAddImage(dest, img, jpeg ? [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary : nil)
+        CGImageDestinationFinalize(dest)
     }
 }
 

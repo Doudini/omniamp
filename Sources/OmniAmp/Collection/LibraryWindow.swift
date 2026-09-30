@@ -2,18 +2,20 @@ import AppKit
 
 /// The music library browser in the modern look. Four panes: a sidebar (Artists, Shows, Years, Genres,
 /// Recently Added), a list for the section (artists A–Z, years, genres…), that entry's releases (with a
-/// timeline for an artist) grouped by kind, and the selected release's tracks.
+/// timeline for an artist) grouped by kind, and the selected release's tracks. Albums shows the covers in a
+/// grid instead (AlbumGridPage).
 ///
 /// ALL / OFFICIAL / UNOFFICIAL and LOSSLESS filter every pane; typing searches titles, artists, albums and
 /// venues. Return or double-click plays (adds to the playlist and starts), ⌥Return adds without playing.
 final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate, PageBack,
                                      NSMenuDelegate, NSSearchFieldDelegate {
     enum Section: Int, CaseIterable {
-        case artists, shows, years, genres, added, stats, listening, attention
+        case artists, albums, shows, years, genres, added, stats, listening, attention
 
         var title: String {
             switch self {
             case .artists: "Artists"
+            case .albums: "Albums"
             case .shows: "Shows"
             case .years: "Years"
             case .genres: "Genres"
@@ -26,6 +28,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         var glyph: String {
             switch self {
             case .artists: "\u{F0849}"   // nf-md-account_music
+            case .albums: "\u{F0025}"    // nf-md-album
             case .shows: "\u{F0403}"     // nf-md-microphone_variant
             case .years: "\u{F00ED}"     // nf-md-calendar_blank
             case .genres: "\u{F0770}"    // nf-md-tag_multiple
@@ -90,6 +93,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let songPage = SongPage()
     private let artistPage = ArtistPage()
     private let attentionPage = AttentionPage()
+    private let gridPage = AlbumGridPage()
     /// Pages over the lists, the one shown last: Back goes down the stack, then to the lists.
     private enum Page { case song(artist: String, title: String), artist(String) }
     private var pages: [Page] = []
@@ -136,6 +140,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             section = s
             entry = hook.split(separator: ":", maxSplits: 1).dropFirst().first.map { e in s == .artists || s == .shows ? Keys.artist(String(e)) : String(e) }
             if s == .attention { attentionHookGroup = entry }
+            // "albums:year" groups the grid by year; "albums:Homogenic" opens that album.
+            if s == .albums, let e = entry { DispatchQueue.main.async { [weak self] in self?.gridPage.applyHook(e) } }
         }
         reloadAll(keepEntry: entry, keepAlbum: Self.lastState?.album)
         // Test hook: OMNIAMP_LIBRARY_SONG="Artist|Title" opens that song's page.
@@ -293,8 +299,13 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         artistPage.onBrowse = { [weak self] a in self?.openRelease(artist: a, album: nil) }
         artistPage.onPlay = { [weak self] list in self?.play(list) }
         artistPage.onShows = { [weak self] a in self?.dropPages(); self?.open(.shows, a) }
-        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage, artistPage, attentionPage]
-            as [NSView] {
+        gridPage.onPlay = { [weak self] list, start in self?.play(list, from: start) }
+        gridPage.onAdd = { [weak self] list in self?.enqueue(list) }
+        gridPage.onArtist = { [weak self] a in self?.push(.artist(a)) }
+        gridPage.onMenu = { [weak self] in self?.gridMenu() }
+        gridPage.onKey = { [weak self] e in self?.gridKey(e) ?? false }
+        for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage, songPage, artistPage,
+                  attentionPage, gridPage] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -361,6 +372,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             listeningPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
             listeningPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
             listeningPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            gridPage.topAnchor.constraint(equalTo: side.topAnchor),
+            gridPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
+            gridPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap - 12),
+            gridPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: 0),
 
             bottom.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             bottom.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
@@ -404,7 +419,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Everything again, keeping the selections where they still exist.
     private func reloadAll(keepEntry: String? = nil, keepAlbum: String? = nil) {
         sidebar.reloadData()
-        sidebar.selectRowIndexes([searching ? Section.artists.rawValue : section.rawValue], byExtendingSelection: false)
+        sidebar.selectRowIndexes([searching ? searchSection.rawValue : section.rawValue], byExtendingSelection: false)
         loadEntries(keep: keepEntry ?? selectedEntry?.id, keepAlbum: keepAlbum ?? selectedAlbum?.key)
         updateStatus()
     }
@@ -413,7 +428,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var showingStats: Bool { section == .stats && !searching }
     private var showingListening: Bool { section == .listening && !searching }
     private var showingAttention: Bool { section == .attention && !searching }
-    private var showingPage: Bool { showingStats || showingListening || showingAttention }
+    /// The album grid: searches show in it too.
+    private var showingAlbums: Bool { section == .albums }
+    private var showingPage: Bool { showingStats || showingListening || showingAttention || showingAlbums }
+    /// Where a search shows its results (highlighted in the sidebar): the grid when it's open, else the artists.
+    private var searchSection: Section { section == .albums ? .albums : .artists }
 
     private func showStatsPage() {
         for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty] as [NSView] { v.isHidden = true }
@@ -444,8 +463,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func showTopPage() {
         guard let p = pages.last else { return }
-        for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, statsPage, listeningPage, songPage, artistPage, attentionPage]
-            as [NSView] {
+        for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, statsPage, listeningPage, songPage, artistPage, attentionPage,
+                  gridPage] as [NSView] {
             v.isHidden = true
         }
         switch p {
@@ -482,7 +501,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func closePages() {
         dropPages()
         reloadAll()
-        window?.makeFirstResponder(middle)   // the list the page was opened from (keys keep working)
+        focusList()   // the list the page was opened from (keys keep working)
     }
 
     /// Out of the pages: the lists again. The artist page's lookups stop, and the next page opened loads fresh.
@@ -578,6 +597,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         statsPage.isHidden = !showingStats
         listeningPage.isHidden = !showingListening
         attentionPage.isHidden = !showingAttention
+        gridPage.isHidden = !showingAlbums
         for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingPage }
         if !showingAttention { attentionOpen = false }
         if showingAttention {
@@ -590,6 +610,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             return
         }
         if showingStats { showStatsPage(); return }
+        if showingAlbums {
+            for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
+            gridPage.reload(db: db, filter: filter, query: query, keep: keepAlbum, emptyText: gridEmptyText)
+            return
+        }
         if showingListening {
             for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
             listeningPage.appear()
@@ -609,7 +634,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 entries = try db.genres(filter).map { Entry(id: $0.id, title: $0.title, count: $0.count) }
             case .added:
                 entries = try db.addedMonths(filter).map { Entry(id: $0.id, title: $0.title, count: $0.count) }
-            case .stats, .listening, .attention:
+            case .albums, .stats, .listening, .attention:
                 entries = []
             }
         } catch {
@@ -664,7 +689,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
                 case .added:
                     list = try db.albums(addedIn: e.id, filter)
                     grouping = { _ in "" }
-                case .stats, .listening, .attention:
+                case .albums, .stats, .listening, .attention:
                     break
                 }
             } catch {
@@ -703,7 +728,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     private var selectedAlbums: [LibraryAlbum] {
-        albumTable.selectedRowIndexes.compactMap { r in
+        if showingAlbums, pages.isEmpty { return gridPage.selectedAlbum.map { [$0] } ?? [] }
+        return albumTable.selectedRowIndexes.compactMap { r in
             guard r < items.count, case .album(let a) = items[r] else { return nil }
             return a
         }
@@ -728,6 +754,13 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard let row = items.firstIndex(where: { if case .album(let a) = $0 { a.key == key } else { false } }) else { return }
         albumTable.selectRowIndexes([row], byExtendingSelection: false)
         albumTable.scrollRowToVisible(row)
+    }
+
+    /// The grid's empty text when there's no library to show yet (else it says what the filters or search hid).
+    private var gridEmptyText: String? {
+        if let err = library.openError { return "The library database couldn't be opened:\n\(err)" }
+        if library.roots.isEmpty { return "Point OmniAmp at your music.\n\nFOLDERS → Add Folder… (a NAS share is fine)." }
+        return library.progress.running ? "Reading your music…" : nil
     }
 
     private func showEmpty() {
@@ -833,9 +866,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         switch sel {
         case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.moveDown(_:)), #selector(NSResponder.insertTab(_:)):
             searchChanged()
-            window?.makeFirstResponder(middle)
+            focusList()
         case #selector(NSResponder.cancelOperation(_:)):
-            if !search.stringValue.isEmpty { search.stringValue = ""; searchChanged() } else { window?.makeFirstResponder(middle) }
+            if !search.stringValue.isEmpty { search.stringValue = ""; searchChanged() } else { focusList() }
         default:
             return false
         }
@@ -848,7 +881,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     func focusList() {
-        window?.makeFirstResponder(middle)
+        if showingAlbums, pages.isEmpty { gridPage.focus() } else { window?.makeFirstResponder(middle) }
     }
 
     /// The letter of the first artist in view.
@@ -964,18 +997,21 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         return ok
     }
 
-    /// Plays: already at the end of the playlist in this order → play from there; else add them and play the first.
-    private func play(_ all: [LibraryTrack]) {
+    /// Plays: already at the end of the playlist in this order → play from there; else add them and play the first
+    /// (`from`: the one at that index instead, the ones before it added too).
+    private func play(_ all: [LibraryTrack], from start: Int = 0) {
         guard let list = playable(all), let first = list.first else { return }
+        let startKey = all.indices.contains(start) ? all[start].key : first.key
+        let offset = list.firstIndex { $0.key == startKey } ?? 0
         let keys = list.map(\.key)
         let current = controller.tracks.map(\.key)
         if let i = current.firstIndex(of: first.key), i + keys.count <= current.count, Array(current[i..<(i + keys.count)]) == keys {
-            controller.play(index: i)
+            controller.play(index: i + offset)
             return
         }
         let at = controller.tracks.count
         controller.insertScanned(list.map(\.track), at: at)
-        controller.play(index: at)
+        controller.play(index: at + offset)
         if list.count == all.count { status.stringValue = "Playing \(list.count == 1 ? "“\(first.title)”" : "\(list.count) tracks")." }
     }
 
@@ -1036,6 +1072,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// clears the search or closes.
     private func tableKey(_ e: NSEvent, in t: KeyTableView) -> Bool {
         let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
+        // From the sidebar into the album grid (the lists are hidden).
+        if t === sidebar, showingAlbums, pages.isEmpty, mods.isEmpty, [124, 48, 36, 76].contains(e.keyCode) {
+            gridPage.focus()
+            return true
+        }
         let order: [NSTableView] = [sidebar, middle, albumTable, trackTable]
         let idx = order.firstIndex { $0 === t } ?? 0
         func focus(_ i: Int) {
@@ -1060,6 +1101,51 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         case 124 where mods.isEmpty: focus(idx + 1); return true
         case 123 where mods.isEmpty: focus(idx - 1); return true
         case 48: focus(mods == .shift ? idx - 1 : idx + 1); return true
+        default:
+            guard mods.isEmpty || mods == .shift, let c = ListLook.typedText(e) else { return false }
+            window?.makeFirstResponder(search)
+            search.currentEditor()?.insertText(c)
+            return true
+        }
+    }
+
+    // MARK: Album grid
+
+    /// Right-click on a cover (it's selected): what the album lists offer, plus its artist and its place in them.
+    private func gridMenu() -> NSMenu? {
+        guard gridPage.selectedAlbum != nil else { return nil }
+        let menu = NSMenu()
+        func add(_ title: String, _ action: Selector) { menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self }
+        add("Play", #selector(playSelection))
+        add("Add to Playlist", #selector(addSelection))
+        add("Replace Playlist and Play", #selector(replaceAndPlay))
+        menu.addItem(.separator())
+        add("Artist Page", #selector(gridArtistPage))
+        add("Show in Artists", #selector(gridShowInArtists))
+        add("Find Missing Info…", #selector(findInfo))
+        add("Show in Finder", #selector(showInFinder))
+        return menu
+    }
+
+    @objc private func gridArtistPage() {
+        if let a = gridPage.selectedAlbum { push(.artist(a.artistKey)) }
+    }
+
+    @objc private func gridShowInArtists() {
+        if let a = gridPage.selectedAlbum { openRelease(artist: a.artistKey, album: a.key) }
+    }
+
+    /// Keys the grid leaves to the window: Space pauses, Esc clears the search or closes, ⇧Tab or ← off the first
+    /// cover goes to the sidebar, typing searches.
+    private func gridKey(_ e: NSEvent) -> Bool {
+        let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
+        switch e.keyCode {
+        case 49 where mods.isEmpty: controller.togglePlayPause(); return true
+        case 53 where mods.isEmpty:
+            if searching { search.stringValue = ""; searchChanged() } else { window?.performClose(nil) }
+            return true
+        case 123 where mods.isEmpty: window?.makeFirstResponder(sidebar); return true
+        case 48 where mods == .shift: window?.makeFirstResponder(sidebar); return true
         default:
             guard mods.isEmpty || mods == .shift, let c = ListLook.typedText(e) else { return false }
             window?.makeFirstResponder(search)
@@ -1130,8 +1216,15 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         case sidebar:
             sidebar.reloadData(forRowIndexes: IndexSet(0..<Section.allCases.count), columnIndexes: [0])   // the selected one's look
             guard let s = Section(rawValue: sidebar.selectedRow) else { return }
-            // Searching highlights Artists itself (not a choice); a click on it ends the search in sidebarClicked.
-            if searching, s != .artists {
+            // Searching highlights Artists (or Albums) itself (not a choice); a click on it ends the search in sidebarClicked.
+            // Artists and Albums both show search results: going from one to the other keeps the search.
+            if searching, s != searchSection, s == .artists || s == .albums {
+                dropPages()
+                section = s
+                reloadAll(keepEntry: nil)
+                return
+            }
+            if searching, s != searchSection {
                 // A section chosen while searching: the search ends, the section opens.
                 NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(searchChanged), object: nil)
                 search.stringValue = ""
