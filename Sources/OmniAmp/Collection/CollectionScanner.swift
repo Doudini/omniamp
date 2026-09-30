@@ -136,7 +136,8 @@ final class CollectionScanner: @unchecked Sendable {
         writes.async {
             self.flush()   // rows still waiting for that folder would come back after the delete
             do {
-                let keys = Array(try self.db.known(under: folder).keys)
+                // A vanished path may have been a folder (what's under it) or a file (itself and its CUE tracks).
+                let keys = Array(try self.db.known(under: folder).keys) + (try self.db.keys(ofFile: folder))
                 try self.db.remove(keys: keys)
                 self.bump { $0.removed += keys.count }
                 self.changed()

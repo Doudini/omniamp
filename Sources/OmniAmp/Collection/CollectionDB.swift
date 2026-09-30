@@ -306,6 +306,14 @@ final class CollectionDB {
         return out
     }
 
+    /// A file's own keys: the file, and its CUE tracks ("file#start").
+    func keys(ofFile path: String) throws -> [String] {
+        var out: [String] = []
+        // "file#…" sorts between "file#" and "file$" ("$" follows "#").
+        try db.query("SELECT key FROM files WHERE key = ? OR (key >= ? AND key < ?)", [path, path + "#", path + "$"]) { out.append($0.text(0)) }
+        return out
+    }
+
     /// Insert or update files, then roll up the albums and artists they touched. One transaction.
     func upsert(_ files: [LibraryFile], now: Double = Date().timeIntervalSince1970) throws {
         guard !files.isEmpty else { return }

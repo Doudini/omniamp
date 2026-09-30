@@ -132,6 +132,35 @@ final class CollectionDBTests: XCTestCase {
         XCTAssertEqual(try db().summary().tracks, 1)
     }
 
+    /// A file deleted while OmniAmp runs: its folder event names the file itself, which no longer exists.
+    func testVanishedFileIsRemoved() throws {
+        try file("Artist/Album/01.flac")
+        let gone = try file("Artist/Album/02.flac")
+        let writer = try db()
+        let scanner = CollectionScanner(db: writer)
+        scan(scanner)
+        XCTAssertEqual(try db().summary().tracks, 2)
+        try FileManager.default.removeItem(at: gone)
+        scan(scanner, [gone.path])
+        XCTAssertEqual(try db().summary().tracks, 1)
+    }
+
+    /// A linked folder whose target went offline is unknown, not empty: its files stay.
+    func testDanglingLinkedFolderKeepsItsFiles() throws {
+        try file("Artist/Album/01.flac")
+        let other = tmp.appendingPathComponent("Other")
+        try FileManager.default.createDirectory(at: other.appendingPathComponent("Album"), withIntermediateDirectories: true)
+        try Data(repeating: 0, count: 10).write(to: other.appendingPathComponent("Album/01.flac"))
+        try FileManager.default.createSymbolicLink(at: music.appendingPathComponent("Linked"), withDestinationURL: other)
+        let writer = try db()
+        let scanner = CollectionScanner(db: writer)
+        scan(scanner)
+        XCTAssertEqual(try db().known(under: music.path).count, 2)
+        try FileManager.default.removeItem(at: other)
+        scan(scanner)
+        XCTAssertEqual(try db().known(under: music.path).count, 2)
+    }
+
     func testForgetRoot() throws {
         try file("Artist/Album/01.flac")
         let writer = try db()

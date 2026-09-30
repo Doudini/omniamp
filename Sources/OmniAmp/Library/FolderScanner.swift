@@ -51,7 +51,8 @@ enum FolderScanner {
         var visited = Set<String>()
 
         /// One folder: its audio files (with CUE sheets applied), sorted, then its subfolders in name order.
-        func walk(_ dir: URL, real: String, linked: Bool = false) {
+        /// `underLink`: the folder is a link or inside one.
+        func walk(_ dir: URL, real: String, linked: Bool = false, underLink: Bool = false) {
             guard visited.insert(real).inserted else { return }
             // The listing doesn't follow a linked folder: list its target, keep the paths under the link.
             let listFrom = linked ? URL(exactPath: real, isDirectory: true) : dir
@@ -60,13 +61,22 @@ enum FolderScanner {
                 unreadable?(dir.path)
                 return
             }
-            let items = linked ? listed.map { dir.appendingPathComponent($0.lastPathComponent) } : listed
             var files: [Track] = [], cues: [URL] = [], subdirs: [(url: URL, linked: Bool)] = []
-            for url in items {
-                let v = values(url)
+            for item in listed {
+                // In and below a linked folder, the listing gives the link target's paths, which would put those files
+                // outside their library folder: keep the path under the link. appendingExact, not appendingPathComponent,
+                // which would decompose accented names (NFC on the NAS) and lose them. The attributes come from the
+                // listed URL, which has them already (no round trip per file).
+                let url = underLink ? dir.appendingExact(item.lastPathComponent, isDirectory: item.hasDirectoryPath) : item
+                let v = values(item)
+                // Still a link: its target can't be reached (its volume offline). Unknown, like a folder that can't be listed.
+                if v?.isSymbolicLink == true {
+                    unreadable?(url.path)
+                    continue
+                }
                 if v?.isDirectory == true {
-                    if (try? url.resourceValues(forKeys: [.isPackageKey]))?.isPackage != true {
-                        subdirs.append((url, (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true))
+                    if (try? item.resourceValues(forKeys: [.isPackageKey]))?.isPackage != true {
+                        subdirs.append((url, (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true))
                     }
                     continue
                 }
@@ -97,7 +107,7 @@ enum FolderScanner {
             if !files.isEmpty { emit(files) }
             for d in subdirs.sorted(by: { $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending }) {
                 walk(d.url, real: d.linked ? ExactPath.resolved(d.url.path) : real + "/" + d.url.lastPathComponent,
-                     linked: d.linked)
+                     linked: d.linked, underLink: underLink || d.linked)
             }
         }
 
@@ -121,7 +131,7 @@ enum FolderScanner {
             if rv?.isDirectory == true {
                 flushLoose()
                 let isLink = (try? root.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
-                walk(root, real: ExactPath.resolved(root.path), linked: isLink)
+                walk(root, real: ExactPath.resolved(root.path), linked: isLink, underLink: isLink)
             } else if root.pathExtension.lowercased() == "cue" {
                 if let sheet = CueSheet.load(root) { loose += sheet.tracks(cueURL: root).tracks }
             } else if PlaylistFile.isPlaylist(root) {
