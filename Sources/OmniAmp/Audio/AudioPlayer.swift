@@ -128,8 +128,12 @@ final class AudioPlayer {
     /// In bit-perfect mode the volume only works if the device has a hardware volume control.
     var volumeAdjustable: Bool { !bitPerfect || AudioDevices.hasHardwareVolume(deviceID) }
 
-    /// The device's volume changed (bit-perfect mode, where the slider is the device's volume): from the volume
-    /// keys, Control Center, another app. Main thread.
+    /// The device is muted, in bit-perfect mode (where the slider is the device's volume). Outside it the app's volume
+    /// is its own, and the system's mute isn't shown.
+    var isMuted: Bool { bitPerfect && AudioDevices.isMuted(deviceID) }
+
+    /// The device's volume or mute changed (bit-perfect mode, where the slider is the device's volume): from the
+    /// volume and mute keys, Control Center, another app. Main thread.
     var onVolumeChange: (() -> Void)?
     private var stopVolumeWatch: (() -> Void)?
 

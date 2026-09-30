@@ -49,6 +49,7 @@ enum Fonts {
         static let shuffle = "\u{F074}"
         static let repeatAll = "\u{F01E}"
         static let volume = "\u{F028}"
+        static let volumeOff = "\u{F0581}"   // muted: a speaker with an X
         static let music = "\u{F001}"
         static let plus = "\u{F067}"
         static let trash = "\u{F1F8}"

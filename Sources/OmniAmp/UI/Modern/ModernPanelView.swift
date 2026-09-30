@@ -411,6 +411,10 @@ final class ModernPanelView: NSView {
             badge.topAnchor.constraint(equalTo: infoLabel.bottomAnchor, constant: 1),
 
             volIcon.leadingAnchor.constraint(equalTo: art.trailingAnchor, constant: 8),
+            // Room for either speaker (playing or muted), so the slider doesn't shift when the icon changes.
+            volIcon.widthAnchor.constraint(equalToConstant: ceil([(Fonts.Icon.volume, 11.0), (Fonts.Icon.volumeOff, 12.5)].map {
+                NSAttributedString(string: $0.0, attributes: [.font: Theme.icon($0.1)]).size().width
+            }.max() ?? 12) + 4),   // a label's 2 pt inset on each side
             volIcon.centerYAnchor.constraint(equalTo: rightBox.bottomAnchor, constant: -17),
             volume.leadingAnchor.constraint(equalTo: volIcon.trailingAnchor, constant: 4),
             volume.centerYAnchor.constraint(equalTo: volIcon.centerYAnchor),
@@ -584,18 +588,29 @@ final class ModernPanelView: NSView {
         guard let c = controller else { return }
         shuffleButton.isOn = c.shuffle
         repeatButton.isOn = c.repeatAll
-        refreshVolume()
         let adjustable = c.player.volumeAdjustable
         volume.alphaValue = adjustable ? 1 : 0.35
         volume.isEnabled = adjustable
         let tip = c.player.bitPerfect ? (adjustable ? "Device volume (bit-perfect mode)" : "Fixed at 100% in bit-perfect mode") : nil
         if volume.toolTip != tip { volume.toolTip = tip }
+        refreshVolume()   // after the above: muted dims the slider further
         updateInfoLines()
     }
 
-    /// Just the volume knob: what a volume drag or key changes, many times a second.
+    /// Just the volume knob: what a volume drag or key changes, many times a second. Muted (the Mac's mute, in
+    /// bit-perfect mode): a crossed-out speaker and a dimmed slider, which still shows the level it comes back to.
     func refreshVolume() {
-        guard let c = controller, !volume.isDragging else { return }
+        guard let c = controller else { return }
+        let muted = c.player.isMuted
+        let icon = muted ? Fonts.Icon.volumeOff : Fonts.Icon.volume
+        if volIcon.stringValue != icon {
+            volIcon.stringValue = icon
+            // The crossed-out speaker (another icon set in the font) draws smaller at the same size.
+            volIcon.font = Theme.icon(muted ? 12.5 : 11)
+        }
+        if c.player.volumeAdjustable { volume.alphaValue = muted ? 0.45 : 1 }
+        volIcon.toolTip = muted ? "Muted (the Mac's sound is off)" : nil
+        guard !volume.isDragging else { return }
         volume.value = Double(c.player.volume)
     }
 

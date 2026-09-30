@@ -181,6 +181,20 @@ enum AudioDevices {
         return get(id, address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, e), Float32(0))
     }
 
+    /// Elements carrying a mute switch: the main element, else channel 1.
+    private static func muteElements(_ id: AudioDeviceID) -> [AudioObjectPropertyElement] {
+        [kAudioObjectPropertyElementMain, 1].filter { e in
+            var a = address(kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput, e)
+            return AudioObjectHasProperty(id, &a)
+        }.prefix(1).map { $0 }
+    }
+
+    /// The device's mute switch (the mute key, Control Center). false if it has none.
+    static func isMuted(_ id: AudioDeviceID) -> Bool {
+        guard let e = muteElements(id).first else { return false }
+        return (get(id, address(kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput, e), UInt32(0)) ?? 0) != 0
+    }
+
     static func setHardwareVolume(_ id: AudioDeviceID, _ v: Float) {
         for e in volumeElements(id) {
             var a = address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, e)
@@ -189,19 +203,20 @@ enum AudioDevices {
         }
     }
 
-    /// Calls `block` on the main thread whenever the device's volume changes: the volume keys, Control Center,
-    /// Sound settings, another app, or our own slider in bit-perfect mode. Returns what stops listening.
+    /// Calls `block` on the main thread whenever the device's volume or mute switch changes: the volume and mute keys,
+    /// Control Center, Sound settings, another app, or our own slider in bit-perfect mode. Returns what stops listening.
     /// (Made outside main-actor code: Core Audio's listener is a plain block, delivered here on the main queue.)
     static func observeVolume(_ id: AudioDeviceID, _ block: @escaping @Sendable @MainActor () -> Void) -> @MainActor () -> Void {
         let listener: AudioObjectPropertyListenerBlock = { _, _ in MainActor.assumeIsolated { block() } }
-        let elements = volumeElements(id)
-        for e in elements {
-            var a = address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, e)
+        let watched = volumeElements(id).map { (kAudioDevicePropertyVolumeScalar, $0) }
+            + muteElements(id).map { (kAudioDevicePropertyMute, $0) }
+        for (selector, e) in watched {
+            var a = address(selector, kAudioObjectPropertyScopeOutput, e)
             AudioObjectAddPropertyListenerBlock(id, &a, DispatchQueue.main, listener)
         }
         return {
-            for e in elements {
-                var a = address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, e)
+            for (selector, e) in watched {
+                var a = address(selector, kAudioObjectPropertyScopeOutput, e)
                 AudioObjectRemovePropertyListenerBlock(id, &a, DispatchQueue.main, listener)
             }
         }

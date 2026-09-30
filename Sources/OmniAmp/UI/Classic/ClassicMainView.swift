@@ -364,9 +364,13 @@ final class ClassicMainView: SkinCanvasView {
         // Volume + balance.
         let vol = Double(c.player.volume)
         let vi = Int((vol * 27).rounded())
+        // Muted (the Mac's mute, in bit-perfect mode): skins have no picture for it, so the bar is drawn faded.
+        let muted = c.player.isMuted
+        if muted { ctx.saveGState(); ctx.setAlpha(0.35) }
         s.draw("volume", CGRect(x: 0, y: vi * 15, width: 68, height: 13), at: CGPoint(x: 107, y: 57), in: ctx)
         let vx = 107 + (vol * (68 - 14)).rounded()
         s.draw("volume", CGRect(x: volumeDrag ? 0 : 15, y: 422, width: 14, height: 11), at: CGPoint(x: vx, y: 58), in: ctx)
+        if muted { ctx.restoreGState() }
         let bal = s.has("balance") ? "balance" : "volume"
         s.draw(bal, CGRect(x: 9, y: 0, width: 38, height: 13), at: CGPoint(x: 177, y: 57), in: ctx)
         s.draw(bal, CGRect(x: 15, y: 422, width: 14, height: 11), at: CGPoint(x: 177 + 12, y: 58), in: ctx)
