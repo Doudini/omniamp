@@ -9,7 +9,8 @@ import Foundation
 /// - Tracks with no number fill the gaps in the numbering when there are exactly as many of them as gaps ("02"–"20"
 ///   and one file without a number: it's the opener), else they come after the numbered ones, in Finder order.
 /// - When two tracks claim the same place (disc and number), this album's tags aren't trusted: the numbers in the
-///   file names are used when every file has its own, else Finder order.
+///   file names are used when every file has its own. Else each folder (a disc folder) and each CUE image plays
+///   whole, in Finder order, by its tags' numbers inside (a copied or bonus track doesn't turn the album A–Z).
 /// A CUE sheet's tracks keep their order inside their file.
 enum TrackOrder {
     static func sorted(_ tracks: [LibraryTrack]) -> [LibraryTrack] {
@@ -19,8 +20,20 @@ enum TrackOrder {
             let filled = gapFill(tracks)
             return tracks.sorted { before($0, $0.number ?? filled[$0.id], $1, $1.number ?? filled[$1.id]) }
         }
-        let fromNames = fileNumbers(tracks) ?? [:]
-        return tracks.sorted { before($0, fromNames[$0.path], $1, fromNames[$1.path]) }
+        if let fromNames = fileNumbers(tracks) {
+            return tracks.sorted { before($0, fromNames[$0.path], $1, fromNames[$1.path]) }
+        }
+        return tracks.sorted { a, b in
+            if disc(a) != disc(b) { return disc(a) < disc(b) }
+            let ga = group(a), gb = group(b)
+            if ga != gb { return ga.localizedStandardCompare(gb) == .orderedAscending }
+            return before(a, a.number, b, b.number)
+        }
+    }
+
+    /// What plays as one piece when the numbers clash: a CUE image, else the folder the file is in.
+    private static func group(_ t: LibraryTrack) -> String {
+        t.cueStart != nil ? t.path : (t.path as NSString).deletingLastPathComponent
     }
 
     /// Numbers for the tracks without one, when they exactly fill their disc's gaps (in Finder order). CUE tracks

@@ -55,10 +55,13 @@ final class TrackOrderTests: XCTestCase {
                        ["07 - easier.mp3", "08 - common bird.mp3", "09 - love & misery.mp3"])
     }
 
-    /// Clashing tags and names without numbers of their own: Finder order ("2" before "10").
-    func testClashingTagsWithoutNumberedNamesUseFinderOrder() {
-        XCTAssertEqual(order([t("say.mp3", 1), t("metal heart.mp3", 1), t("free.mp3", 4)]), ["free.mp3", "metal heart.mp3", "say.mp3"])
+    /// Clashing tags and names without numbers of their own: the tags still order the folder, a tie in Finder order
+    /// ("2" before "10"). A copy tagged 12 next to a good 1–12 doesn't make the album play A–Z.
+    func testClashingTagsWithoutNumberedNamesKeepTheTags() {
+        XCTAssertEqual(order([t("say.mp3", 1), t("metal heart.mp3", 1), t("free.mp3", 4)]), ["metal heart.mp3", "say.mp3", "free.mp3"])
         XCTAssertEqual(order([t("part 10.mp3", 1), t("part 2.mp3", 1)]), ["part 2.mp3", "part 10.mp3"])
+        XCTAssertEqual(order([t("Zebra.flac", 1), t("Apple.flac", 2), t("Mango.flac", 3), t("Mango (copy).flac", 3)]),
+                       ["Zebra.flac", "Apple.flac", "Mango (copy).flac", "Mango.flac"])
     }
 
     /// Two disc folders with no disc tags: each disc's 1, 2, 3 used to be interleaved.
