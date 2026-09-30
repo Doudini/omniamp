@@ -11,17 +11,17 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
     private var thumbs: [URL: CGImage] = [:]
     private var searchTask: Task<Void, Never>?
 
-    private let queryArtist = NSTextField()
-    private let queryAlbum = NSTextField()
+    private let queryArtist = DashField()
+    private let queryAlbum = DashField()
     private let table = KeyTableView()
     private let scroll = NSScrollView()
     private let cover = ArtView()
-    private let artist = NSTextField(), albumField = NSTextField(), year = NSTextField(), genre = NSTextField()
-    private let writeTags = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let saveCover = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let artist = DashField(), albumField = DashField(), year = DashField(), genre = DashField()
+    private let writeTags = DashCheck(checkboxWithTitle: "", target: nil, action: nil)
+    private let saveCover = DashCheck(checkboxWithTitle: "", target: nil, action: nil)
     private let status = NSTextField(labelWithString: "")
-    private var applyButton: NSButton!
-    private var cancelButton: NSButton?
+    private var applyButton: Pill!
+    private var cancelButton: Pill?
     /// Writing: a second Apply (double-click on a match) or Cancel must wait for it.
     private var busy = false
     private var coverData: Data?
@@ -132,10 +132,11 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         status.textColor = Dash.text2
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        let cancel = Pill("Cancel", target: self, action: #selector(cancel))
         cancelButton = cancel
         cancel.keyEquivalent = "\u{1b}"
-        applyButton = NSButton(title: "Apply", target: self, action: #selector(apply))
+        applyButton = Pill("Apply", target: self, action: #selector(apply))
+        applyButton.prominent = true
         applyButton.keyEquivalent = "\r"
         let bottom = NSStackView(views: [status, NSView(), cancel, applyButton])
 

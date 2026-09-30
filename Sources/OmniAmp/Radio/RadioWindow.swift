@@ -7,9 +7,9 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
     private let controller: PlayerController
     private var popularButton: Pill!
     private var favoritesButton: Pill!
-    private let search = NSSearchField()
-    private let genre = NSPopUpButton()
-    private let country = NSPopUpButton()
+    private let search = DashSearchField()
+    private let genre = DashPopUp()
+    private let country = DashPopUp()
     private let table = KeyTableView()
     private let scroll = NSScrollView()
     private let status = NSTextField(labelWithString: "")

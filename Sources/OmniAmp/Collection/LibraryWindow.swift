@@ -76,7 +76,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// The gap under the release shelf (none when it's hidden).
     private var timelineGap: NSLayoutConstraint!
     private var lettersWidth: NSLayoutConstraint!
-    private let search = NSSearchField()
+    private let search = DashSearchField()
     private let status = NSTextField(labelWithString: "")
     /// Shown while Live Music Archive downloads are paused (after a quit): carries on with all of them.
     private lazy var resumeButton = Pill("Resume", glyph: "⤓", target: self, action: #selector(resumeDownloads))

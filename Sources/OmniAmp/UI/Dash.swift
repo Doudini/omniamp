@@ -200,6 +200,16 @@ final class Pill: NSControl {
     }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 
+    /// A key that presses it, like an NSButton's: ↩ for a sheet's main action, Esc for Cancel.
+    var keyEquivalent = ""
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard !keyEquivalent.isEmpty, isEnabled, !isHiddenOrHasHiddenAncestor,
+              event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+              event.charactersIgnoringModifiers == keyEquivalent else { return super.performKeyEquivalent(with: event) }
+        sendAction(action, to: target)
+        return true
+    }
+
     // VoiceOver: it draws itself, so it says what it is (a button, its title, whether it's the chosen filter)
     // and can be pressed from there.
     override func isAccessibilityElement() -> Bool { true }

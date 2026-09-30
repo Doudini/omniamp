@@ -3,19 +3,19 @@ import AppKit
 /// Settings (⌘,): scrobbling to Last.fm and ListenBrainz, and where podcast downloads go.
 final class SettingsWindowController: NSWindowController {
     private let lfmStatus = NSTextField(labelWithString: "")
-    private var lfmButton: NSButton!
+    private var lfmButton: Pill!
     private let lbStatus = NSTextField(labelWithString: "")
-    private let lbToken = NSSecureTextField()
-    private var lbButton: NSButton!
+    private let lbToken = DashSecureField()
+    private var lbButton: Pill!
     private let queueLabel = NSTextField(wrappingLabelWithString: "")
     // Own Last.fm API key (instead of the one built into the app).
-    private var ownKeyBox: NSButton!
-    private let ownKey = NSTextField()
-    private let ownSecret = NSSecureTextField()
+    private var ownKeyBox: DashCheck!
+    private let ownKey = DashField()
+    private let ownSecret = DashSecureField()
     private var ownKeyRows: NSStackView!
     private var stack: NSStackView!
     private let folderLabel = NSTextField(labelWithString: "")
-    private var folderButtons: [NSButton] = []
+    private var folderButtons: [Pill] = []
     private var authTask: Task<Void, Never>?
 
     override func cancelOperation(_ sender: Any?) { window?.close() }   // Esc
@@ -36,33 +36,29 @@ final class SettingsWindowController: NSWindowController {
     required init?(coder: NSCoder) { fatalError() }
 
     private func header(_ s: String) -> NSTextField {
-        let l = NSTextField(labelWithString: s)
-        l.font = .boldSystemFont(ofSize: 13)
-        return l
+        Dash.label(s, Dash.font(13, .semibold), Dash.text)
     }
 
     private func note(_ s: String) -> NSTextField {
         let l = NSTextField(wrappingLabelWithString: s)
-        l.font = .systemFont(ofSize: 11)
-        l.textColor = .secondaryLabelColor
+        l.font = Dash.font(11)
+        l.textColor = Dash.text2
         return l
     }
 
     private func build() {
-        lfmButton = NSButton(title: "Connect…", target: self, action: #selector(lastfmTapped))
-        lbButton = NSButton(title: "Connect", target: self, action: #selector(listenbrainzTapped))
+        lfmButton = Pill("Connect…", target: self, action: #selector(lastfmTapped))
+        lbButton = Pill("Connect", target: self, action: #selector(listenbrainzTapped))
         lbToken.placeholderString = "Paste your ListenBrainz user token"
-        let getToken = NSButton(title: "Get token…", target: self, action: #selector(openLBSettings))
-        getToken.bezelStyle = .inline
-        let sendNow = NSButton(title: "Send Now", target: self, action: #selector(sendNow))
+        let getToken = Pill("Get token…", target: self, action: #selector(openLBSettings))
+        let sendNow = Pill("Send Now", target: self, action: #selector(sendNow))
 
         let lfmRow = NSStackView(views: [lfmStatus, NSView(), lfmButton])
-        ownKeyBox = NSButton(checkboxWithTitle: "Use my own Last.fm API key", target: self, action: #selector(ownKeyToggled))
+        ownKeyBox = DashCheck(checkboxWithTitle: "Use my own Last.fm API key", target: self, action: #selector(ownKeyToggled))
         ownKey.placeholderString = "API key"
         ownSecret.placeholderString = "Shared secret"
-        let saveKey = NSButton(title: "Save", target: self, action: #selector(saveOwnKey))
-        let getKey = NSButton(title: "Get a key…", target: self, action: #selector(openLastfmAPI))
-        getKey.bezelStyle = .inline
+        let saveKey = Pill("Save", target: self, action: #selector(saveOwnKey))
+        let getKey = Pill("Get a key…", target: self, action: #selector(openLastfmAPI))
         let keyRow = NSStackView(views: [ownKey, ownSecret, saveKey])
         keyRow.distribution = .fillEqually
         ownKeyRows = NSStackView(views: [keyRow, NSStackView(views: [note("Free at last.fm/api/account/create (any app name). Switching keys signs you out of Last.fm; connect again after saving."), getKey])])
@@ -76,10 +72,11 @@ final class SettingsWindowController: NSWindowController {
         for r in [lfmRow, lbRow, tokenRow, queueRow] { r.orientation = .horizontal; r.distribution = .fill }
         lbToken.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
+        for l in [lfmStatus, lbStatus, folderLabel, queueLabel] { l.font = Dash.font(13); l.textColor = Dash.text }
         folderLabel.lineBreakMode = .byTruncatingMiddle
         folderLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let reveal = NSButton(title: "Show in Finder", target: self, action: #selector(revealDownloads))
-        let change = NSButton(title: "Change…", target: self, action: #selector(changeDownloads))
+        let reveal = Pill("Show in Finder", target: self, action: #selector(revealDownloads))
+        let change = Pill("Change…", target: self, action: #selector(changeDownloads))
         folderButtons = [reveal, change]
         let folderRow = NSStackView(views: [folderLabel, NSView(), reveal, change])
         folderRow.orientation = .horizontal

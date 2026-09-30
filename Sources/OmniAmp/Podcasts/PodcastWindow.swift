@@ -10,8 +10,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var topButton: Pill!
     private var subscribedButton: Pill!
     private var subscribeButton: Pill!
-    private let search = NSSearchField()
-    private let country = NSPopUpButton()
+    private let search = DashSearchField()
+    private let country = DashPopUp()
     private let showsTable = KeyTableView()
     private let showsScroll = NSScrollView()
     private let episodesTable = KeyTableView()
@@ -28,7 +28,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// The open show's episodes, and the ones shown after the title filter and UNPLAYED.
     private var allEpisodes: [PodcastEpisode] = []
     private var episodes: [PodcastEpisode] = []
-    private let episodeFilter = NSSearchField()
+    private let episodeFilter = DashSearchField()
     private var unplayedButton: Pill!
     private static let unplayedKey = "podcastUnplayedOnly"
     private var unplayedOnly: Bool { UserDefaults.standard.bool(forKey: Self.unplayedKey) }
@@ -190,6 +190,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             let here = Locale.current.region?.identifier ?? "US"
             country.selectItem(at: Self.countries.firstIndex { $0.1 == here } ?? 0)
         }
+        country.highlightsChoice = false   // which directory, not a filter: never lit
         country.target = self
         country.action = #selector(countryChanged)
         country.font = Dash.font(12)

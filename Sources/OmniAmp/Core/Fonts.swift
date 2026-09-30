@@ -58,6 +58,7 @@ enum Fonts {
         static let starEmpty = "\u{F006}"
         static let podcast = "\u{F0994}"
         static let check = "\u{F00C}"
+        static let chevronDown = "\u{F078}"
         static let rss = "\u{F09E}"
         static let globe = "\u{F0AC}"
         static let info = "\u{F05A}"

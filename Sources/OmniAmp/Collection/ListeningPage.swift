@@ -85,7 +85,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
     private var period: Period = .all
     private let topChart = BarListChart()
     private var periodPills: [(Pill, Period)] = []
-    private let yearMenu = NSPopUpButton()
+    private let yearMenu = DashPopUp()
     private let periodNote = NSTextField(labelWithString: "")
     private var showOwned = false
     /// The most played artist's photo, kept across rebuilds.
@@ -95,7 +95,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
     private let countryArtists = BarListChart()
     private var countryPanelTitle = NSTextField(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
-    private let userField = NSTextField()
+    private let userField = DashField()
     private var generation = 0
 
     override init() {
@@ -252,7 +252,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         userField.widthAnchor.constraint(equalToConstant: 150).isActive = true
         let sync = Pill("Sync", glyph: Fonts.Icon.repeatAll, target: self, action: #selector(syncClicked))
         sync.toolTip = "Fetch new plays from last.fm"
-        let lookups = NSButton(checkboxWithTitle: "Look up artist countries", target: self, action: #selector(lookupsToggled(_:)))
+        let lookups = DashCheck(checkboxWithTitle: "Look up artist countries", target: self, action: #selector(lookupsToggled(_:)))
         lookups.state = MainActor.assumeIsolated { history.lookupsEnabled } ? .on : .off
         lookups.font = Dash.font(12)
         lookups.toolTip = "MusicBrainz, one request a second in the background, remembered for good. Needed for the map."
