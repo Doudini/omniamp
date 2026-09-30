@@ -229,6 +229,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         middle.menu = artistMenu
 
         letters.onLetter = { [weak self] l in self?.jump(to: l) }
+        // Scrolling the list (by hand: not a jump or a selection brought into view) lights the letter it's at.
+        observers.append(NotificationCenter.default.addObserver(forName: NSScrollView.didLiveScrollNotification, object: scrolls[1],
+                                                                queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followScroll() }
+        })
         letters.translatesAutoresizingMaskIntoConstraints = false
         timeline.translatesAutoresizingMaskIntoConstraints = false
         timeline.onSelect = { [weak self] a in self?.selectAlbum(a.key) }
@@ -845,6 +850,15 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func focusList() {
         window?.makeFirstResponder(middle)
+    }
+
+    /// The letter of the first artist in view.
+    private func followScroll() {
+        guard !letters.isHidden, !entries.isEmpty else { return }
+        let top = middle.visibleRect.minY + scrolls[1].contentInsets.top + 1
+        let row = middle.row(at: NSPoint(x: middle.visibleRect.midX, y: top))
+        guard row >= 0, row < entries.count else { return }
+        letters.current = entries[row].letter ?? "#"
     }
 
     /// First artist at or after the letter.
