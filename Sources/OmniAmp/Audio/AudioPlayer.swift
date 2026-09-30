@@ -70,7 +70,7 @@ final class AudioPlayer {
 
     // Output state.
     private var outputUID: String?                         // nil = follow the system default
-    private(set) var bitPerfect = false
+    private(set) var bitPerfect = false { didSet { if bitPerfect != oldValue { watchDeviceVolume() } } }
     private(set) var exclusive = false
     private var originalRates: [AudioDeviceID: Double] = [:]
     private var lastRateRematch = Date.distantPast
@@ -127,6 +127,20 @@ final class AudioPlayer {
 
     /// In bit-perfect mode the volume only works if the device has a hardware volume control.
     var volumeAdjustable: Bool { !bitPerfect || AudioDevices.hasHardwareVolume(deviceID) }
+
+    /// The device's volume changed (bit-perfect mode, where the slider is the device's volume): from the volume
+    /// keys, Control Center, another app. Main thread.
+    var onVolumeChange: (() -> Void)?
+    private var stopVolumeWatch: (() -> Void)?
+
+    /// In bit-perfect mode, follow the device's own volume so the slider moves with the volume keys. Outside it the
+    /// slider is the app's own volume, apart from the system's, as it should be.
+    private func watchDeviceVolume() {
+        stopVolumeWatch?()
+        stopVolumeWatch = nil
+        guard bitPerfect, AudioDevices.hasHardwareVolume(deviceID) else { return }
+        stopVolumeWatch = AudioDevices.observeVolume(deviceID) { [weak self] in self?.onVolumeChange?() }
+    }
 
     // MARK: Position
 
@@ -528,7 +542,7 @@ final class AudioPlayer {
 
     /// The device we play to. Kept ourselves: after a configuration change the engine's output unit can
     /// report no device, so it is re-pointed at this one before every restart.
-    private(set) var deviceID: AudioDeviceID = AudioDevices.defaultOutputID()
+    private(set) var deviceID: AudioDeviceID = AudioDevices.defaultOutputID() { didSet { if deviceID != oldValue { watchDeviceVolume() } } }
     var deviceName: String { AudioDevices.device(id: deviceID)?.name ?? "Output" }
     var deviceRate: Double { AudioDevices.nominalRate(deviceID) }
     var selectedOutputUID: String? { outputUID }

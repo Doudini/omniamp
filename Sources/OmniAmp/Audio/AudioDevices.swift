@@ -189,6 +189,24 @@ enum AudioDevices {
         }
     }
 
+    /// Calls `block` on the main thread whenever the device's volume changes: the volume keys, Control Center,
+    /// Sound settings, another app, or our own slider in bit-perfect mode. Returns what stops listening.
+    /// (Made outside main-actor code: Core Audio's listener is a plain block, delivered here on the main queue.)
+    static func observeVolume(_ id: AudioDeviceID, _ block: @escaping @Sendable @MainActor () -> Void) -> @MainActor () -> Void {
+        let listener: AudioObjectPropertyListenerBlock = { _, _ in MainActor.assumeIsolated { block() } }
+        let elements = volumeElements(id)
+        for e in elements {
+            var a = address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, e)
+            AudioObjectAddPropertyListenerBlock(id, &a, DispatchQueue.main, listener)
+        }
+        return {
+            for e in elements {
+                var a = address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, e)
+                AudioObjectRemovePropertyListenerBlock(id, &a, DispatchQueue.main, listener)
+            }
+        }
+    }
+
     // MARK: Change notifications
 
     /// Calls `block` on the main queue when devices are added/removed or the default output changes.

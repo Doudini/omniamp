@@ -70,6 +70,7 @@ final class PlayerController {
             self.updateNowPlaying()
         }
         player.onOutputChange = { [weak self] in self?.ui?.optionsDidChange() }
+        player.onVolumeChange = { [weak self] in self?.ui?.mixDidChange() }   // bit-perfect: the volume keys moved it
         NotificationCenter.default.addObserver(forName: PodcastLibrary.episodesMoved, object: nil, queue: .main) { [weak self] n in
             guard let moved = n.userInfo?["moved"] as? [String: String] else { return }
             MainActor.assumeIsolated { self?.episodesMoved(moved) }
