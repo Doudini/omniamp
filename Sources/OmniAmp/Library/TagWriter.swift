@@ -76,6 +76,12 @@ enum TagWriter {
         return true
     }
 
+    /// Writes over the tag in place and makes sure it reached the disk: on a network share, a failed write often
+    /// only shows up at the flush, and "written" must not be reported for a tag that isn't.
+    private static func writeInPlace(_ fd: Int32, _ bytes: [UInt8], at offset: Int64) -> Outcome {
+        writeAll(fd, bytes, at: offset) && fsync(fd) == 0 ? .written : .failed("couldn't write the tag")
+    }
+
     /// The old tag, kept before it's replaced: <backups>/<day>/<name>.<n>.tag plus a line in index.tsv.
     private static func backup(_ bytes: [UInt8], of path: String, in dir: URL?) {
         guard let dir, bytes.count <= 32 << 20 else { return }
@@ -212,7 +218,7 @@ enum TagWriter {
         if oldEnd > 0, let old = read(fd, 0, Int(oldEnd)) { backup(old, of: path, in: backupDir) }
         // Fits where the old tag was: rewrite just the tag.
         if oldEnd >= 10, body.count <= Int(oldEnd) - 10 {
-            return writeAll(fd, tag(padding: Int(oldEnd) - 10 - body.count), at: 0) ? .written : .failed("couldn't write the tag")
+            return writeInPlace(fd, tag(padding: Int(oldEnd) - 10 - body.count), at: 0)
         }
         return rewrite(fd, path: path, prefix: tag(padding: 2048), from: oldEnd)
     }
@@ -250,19 +256,19 @@ enum TagWriter {
         guard blocks.first?.type == 0 else { return .unsupported("FLAC without stream info") }
 
         // The comments: vendor, then KEY=value pairs. Ours replace theirs; the rest stay in order.
+        // Every comment must be read, or the rewritten block would lose the ones after a misread (as with ID3).
         var vendor: [UInt8] = Array("OmniAmp".utf8), comments: [String] = []
-        if let c = blocks.first(where: { $0.type == 4 })?.body, c.count >= 8 {
+        if let c = blocks.first(where: { $0.type == 4 })?.body {
             func le32(_ i: Int) -> Int { i + 4 <= c.count ? Int(c[i]) | Int(c[i + 1]) << 8 | Int(c[i + 2]) << 16 | Int(c[i + 3]) << 24 : -1 }
             let vl = le32(0)
-            if vl >= 0, 4 + vl + 4 <= c.count {
-                vendor = Array(c[4..<(4 + vl)])
-                var q = 4 + vl + 4
-                for _ in 0..<max(0, le32(4 + vl)) {
-                    let l = le32(q)
-                    guard l >= 0, q + 4 + l <= c.count else { break }
-                    comments.append(String(decoding: c[(q + 4)..<(q + 4 + l)], as: UTF8.self))
-                    q += 4 + l
-                }
+            guard vl >= 0, 4 + vl + 4 <= c.count else { return .unsupported("FLAC comments it can't read safely") }
+            vendor = Array(c[4..<(4 + vl)])
+            var q = 4 + vl + 4
+            for _ in 0..<le32(4 + vl) {
+                let l = le32(q)
+                guard l >= 0, q + 4 + l <= c.count else { return .unsupported("FLAC comments it can't read safely") }
+                comments.append(String(decoding: c[(q + 4)..<(q + 4 + l)], as: UTF8.self))
+                q += 4 + l
             }
         }
         func key(_ s: String) -> String { String(s.prefix { $0 != "=" }).uppercased() }
@@ -288,10 +294,15 @@ enum TagWriter {
             out.append(b.type == 4 ? (4, comment) : (b.type, b.body))
             if b.type == 0, !blocks.contains(where: { $0.type == 4 }) { out.append((4, comment)) }
         }
-        guard out.allSatisfy({ $0.1.count < 1 << 24 }) else { return .failed("tag too large") }
-        func header(padding: Int?) -> [UInt8] {
+        let maxBlock = (1 << 24) - 1
+        guard out.allSatisfy({ $0.1.count <= maxBlock }) else { return .failed("tag too large") }
+        /// `room`: bytes for padding, block headers included (0 or at least 4). A block holds at most 16 MB, so
+        /// more room (big pictures removed earlier) becomes several padding blocks.
+        func header(room: Int) -> [UInt8] {
             var bytes: [UInt8] = Array("fLaC".utf8)
-            let all = out + (padding.map { [(UInt8(1), [UInt8](repeating: 0, count: $0))] } ?? [])
+            let n = room > 0 ? (room + maxBlock + 4 - 1) / (maxBlock + 4) : 0
+            let pads = (0..<n).map { i in (UInt8(1), [UInt8](repeating: 0, count: (room - 4 * n) / n + (i < (room - 4 * n) % n ? 1 : 0))) }
+            let all = out + pads
             for (i, (type, body)) in all.enumerated() {
                 bytes.append(type | (i == all.count - 1 ? 0x80 : 0))
                 bytes += [UInt8(body.count >> 16 & 0xFF), UInt8(body.count >> 8 & 0xFF), UInt8(body.count & 0xFF)] + body
@@ -299,12 +310,11 @@ enum TagWriter {
             return bytes
         }
         if let old = read(fd, 0, Int(audio)) { backup(old, of: path, in: backupDir) }
-        let exact = header(padding: nil).count
+        let exact = header(room: 0).count
         let room = Int(audio - base) - exact
-        // Same size exactly, or room left for a padding block (its 4-byte header included): in place.
-        if room == 0 { return writeAll(fd, header(padding: nil), at: base) ? .written : .failed("couldn't write the tag") }
-        if room >= 4 { return writeAll(fd, header(padding: room - 4), at: base) ? .written : .failed("couldn't write the tag") }
+        // Same size exactly, or room left for padding (a 4-byte block header included): in place.
+        if room == 0 || room >= 4 { return writeInPlace(fd, header(room: room), at: base) }
         guard let lead = base > 0 ? read(fd, 0, Int(base)) : [] else { return .failed("couldn't read the file") }
-        return rewrite(fd, path: path, prefix: lead + header(padding: 4096), from: audio)
+        return rewrite(fd, path: path, prefix: lead + header(room: 4100), from: audio)
     }
 }

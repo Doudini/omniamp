@@ -194,6 +194,44 @@ final class TagWriterTests: XCTestCase {
         XCTAssertEqual(decoded.length, 44100)
     }
 
+    /// The test FLAC with its metadata replaced: STREAMINFO, then `blocks` (type, body), then the audio.
+    private func flac(blocks: [(UInt8, [UInt8])]) throws -> (url: URL, audio: [UInt8]) {
+        let plain = try flac()
+        let d = [UInt8](try Data(contentsOf: plain)), audio = try flacAudio(plain)
+        let info = Array(d[8..<(8 + 34)])
+        var bytes = Array("fLaC".utf8)
+        for (i, (type, body)) in ([(UInt8(0), info)] + blocks).enumerated() {
+            bytes.append(type | (i == blocks.count ? 0x80 : 0))
+            bytes += [UInt8(body.count >> 16 & 0xFF), UInt8(body.count >> 8 & 0xFF), UInt8(body.count & 0xFF)] + body
+        }
+        let url = tmp.appendingPathComponent("b\(UUID().uuidString.prefix(4)).flac")
+        try Data(bytes + audio).write(to: url)
+        return (url, audio)
+    }
+
+    /// Two big padding blocks (pictures removed earlier) merge into more room than one block can hold (16 MB).
+    func testFLACWithHugePaddingStaysValid() throws {
+        let pad = [UInt8](repeating: 0, count: 9 << 20)
+        let (url, audio) = try flac(blocks: [(1, pad), (1, pad)])
+        let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int
+        XCTAssertEqual(TagWriter.write(tags, to: url.path, backupDir: nil), .written)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int, size, "in place")
+        XCTAssertTrue(try flacAudio(url) == audio, "the metadata blocks still end where the audio starts")
+        XCTAssertEqual(read(url).album, "Flightsafety")
+        XCTAssertEqual(try AVAudioFile(forReading: url).length, 44100)
+    }
+
+    /// A comment block that says 3 comments but holds 1: refused, instead of rewriting it with only ours.
+    func testFLACDamagedCommentsAreNotRewritten() throws {
+        func le(_ n: Int) -> [UInt8] { [UInt8(n & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 24 & 0xFF)] }
+        let title = Array("TITLE=Plea".utf8)
+        let comments = le(3) + Array("abc".utf8) + le(3) + le(title.count) + title
+        let (url, _) = try flac(blocks: [(4, comments), (1, [UInt8](repeating: 0, count: 1024))])
+        let before = try Data(contentsOf: url)
+        guard case .unsupported = TagWriter.write(tags, to: url.path, backupDir: nil) else { return XCTFail("should refuse") }
+        XCTAssertEqual(try Data(contentsOf: url), before, "file untouched")
+    }
+
     /// Like some rippers' files: an ID3v2.3 tag (unsynchronisation flag set) in front of the FLAC.
     func testFLACBehindID3Tag() throws {
         let plain = try flac()

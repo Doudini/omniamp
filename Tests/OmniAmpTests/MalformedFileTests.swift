@@ -39,6 +39,13 @@ final class MalformedFileTests: XCTestCase {
         _ = read("b.m4a", ftyp + atom("moov", atom("free", [0, 0]) + inner))
     }
 
+    func testASFHugeObjectSize() {
+        // Header object (size 4 KB, 1 child), then a child whose 64-bit size is near Int64.max.
+        let size = le32(4096) + le32(0), one = le32(1) + [1, 2]
+        let child = [UInt8](repeating: 0x11, count: 16) + [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]
+        _ = read("h.wma", ContainerTags.asfHeader + size + one + child + [UInt8](repeating: 0, count: 64))
+    }
+
     func testMP4EmptyMdhdAndShortFreeformName() {
         let freeform = atom("----", atom("mean", []) + [0, 0, 0, 10] + Array("name".utf8) + [0, 0])
         let moov = atom("moov", atom("trak", atom("mdia", atom("mdhd", []))) + atom("udta", atom("ilst", freeform)))

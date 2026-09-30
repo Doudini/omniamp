@@ -318,7 +318,8 @@ enum ContainerTags {
             let oh = r.bytes(p, 24)
             guard oh.count == 24 else { break }
             let guid = Array(oh[0..<16]), size = le64(oh, 16)
-            guard size >= 24, p + size <= Int64(headerSize) else { break }
+            // Subtract, don't add: a crafted size near Int64.max would overflow (a trap).
+            guard size >= 24, size <= Int64(headerSize) - p else { break }
             // Pictures can make an object large; the tag objects themselves are small.
             let body = guid == asfExtendedContent || guid == asfContent || guid == asfFileProperties || guid == asfStreamProperties
                 ? r.bytes(p + 24, Int(min(size - 24, 1 << 20))) : []
@@ -367,7 +368,7 @@ enum ContainerTags {
                     case "WM/OriginalReleaseYear": info.originalDate = info.originalDate ?? v
                     case "WM/Genre": info.genre = info.genre ?? v
                     case "WM/TrackNumber", "WM/Track":
-                        info.trackNumber = info.trackNumber ?? TagInfo.leadingInt(v).map { name == "WM/Track" ? $0 + 1 : $0 }
+                        info.trackNumber = info.trackNumber ?? TagInfo.leadingInt(v).map { name == "WM/Track" ? $0 &+ 1 : $0 }
                     case "WM/PartOfSet": info.discNumber = info.discNumber ?? TagInfo.leadingInt(v)
                     default: info.setNamed(key: name.replacingOccurrences(of: "/", with: ""), value: v)   // MusicBrainz/…, replaygain_…
                     }
