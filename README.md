@@ -17,7 +17,7 @@ It's written in Swift with AppKit and AVAudioEngine and has no third-party depen
 - **See what you're missing:** each artist page lists the official albums you don't have yet and the bootlegs known to exist on [MusicBrainz](https://musicbrainz.org).
 - **Download live shows:** for artists who allow taping (Sharon Van Etten, for example), get missing shows from the [Live Music Archive](https://archive.org/details/etree).
 - **Fix your tags:** finds unknown artists, missing years and genres, artists spelled several ways and duplicate releases. **Find Missing Info** looks a release up and writes the tags and cover art into the files.
-- **A real database:** the library is kept in SQLite and follows your folders live, on your Mac or a NAS, including changes made while OmniAmp was closed.
+- **Watched folders:** files added to a folder in your music library show up in the library by themselves. No need to sync or refresh.
 - **Stats and listening history:** your collection at a glance, and your whole Last.fm history with a world map of where your music comes from.
 - **Huge folders:** the player opens folders with thousands of files instantly.
 - **Scrobbling** to Last.fm and ListenBrainz.
@@ -120,7 +120,7 @@ Press **PODCASTS** (or ⌘3) to browse the top shows in your country, or search 
 **Playlist**
 - **Large folders:** drop in a whole music library; the playlist is kept between launches.
 - **Editing:** drag to reorder, a play queue (Q), sorting, and removal of duplicates and missing files.
-- **Watched folders:** the playlist follows your music folders live. New files appear next to their folder-mates, deleted files disappear and edited files are re-tagged. Your folder structure is never touched.
+- **Live playlist folders:** the playlist follows your music folders live. New files appear next to their folder-mates, deleted files disappear and edited files are re-tagged. Your folder structure is never touched.
 - **ADD menu:** Add Files…, Add Folder… and Add URL…, in both looks.
 - **Playlist files:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists.
 - **Jump to file (J):** type to search. Enter plays the result and clears the search; ⇧Enter keeps the results.
