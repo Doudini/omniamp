@@ -25,7 +25,7 @@ The finish sets the windows around the display, and it applies to the Music Libr
 - **Hardware**: neutral grey.
 - **Studio**: slate blue-green.
 
-The chart colors set the Music Library's graphs. There are four soft pixel-art palettes from [Lospec](https://lospec.com): Vinik24 (default), Apollo, Lost Century and Sweetie 16. There's also Phosphor, which draws the data in the theme's own color. **Color-Blind Safe Colors** swaps the artist and recording-kind colors for a set that stays distinct with color blindness.
+The chart colors set the Music Library's graphs. There are four soft pixel-art palettes from [Lospec](https://lospec.com): Vinik24 (default), Apollo, Lost Century and Sweetie 16. There's also Phosphor, which draws the data in the theme's own color. **Color-Blind Safe Colors** swaps the artist and recording-kind colors for a set that stays distinct with color blindness. The library screenshots below use Green and Blue, Tinted, with Apollo charts.
 
 The **INFO** drawer shows full tags, the file format, the album and cover art. The **EQ** drawer has the 10-band equalizer with presets.
 
@@ -53,11 +53,12 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
 
 <p align="center">
   <img src="docs/library-browse.png" alt="Browsing an artist: releases as a cover shelf by year, albums and tracks" width="49%">
-  <img src="docs/library-shows.png" alt="Shows: an artist's live recordings by date and venue" width="49%">
+  <img src="docs/library-shows.png" alt="Shows: an artist's live recordings by date and venue (Blue theme)" width="49%">
 </p>
+<p align="center"><img src="docs/library-stats.png" alt="Collection stats: the newest release and key figures, release years, kinds of recordings (Blue theme)" width="700"></p>
 <p align="center">
-  <img src="docs/library-stats.png" alt="Collection stats: the newest release and key figures, release years, kinds of recordings" width="49%">
-  <img src="docs/library-listening.png" alt="Listening history from Last.fm: your most played artist and key figures, plays per year, how much of what you play you own" width="49%">
+  <img src="docs/library-listening.png" alt="Listening history from Last.fm: your most played artist and key figures, plays per year, how much of what you play you own, your top artists through the years" width="49%">
+  <img src="docs/library-map.png" alt="Where the music you play comes from: a world map of your artists' countries, top countries and their artists" width="49%">
 </p>
 
 ## Internet radio
