@@ -82,7 +82,7 @@ enum Updater {
     // MARK: Install
 
     /// Download, verify and stage the new app; returns the staged OmniAmp.app.
-    static func download(_ r: Release, progress: @escaping (Double) -> Void) async throws -> URL {
+    static func download(_ r: Release, progress: @escaping @Sendable @MainActor (Double) -> Void) async throws -> URL {
         guard r.dmg.pathExtension.lowercased() == "dmg" else { throw UpdateError.noDMG }
         guard let want = r.sha256 else { throw UpdateError.noChecksum }   // never install what can't be verified
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("OmniAmp-update-\(UUID().uuidString)")
@@ -113,8 +113,8 @@ enum Updater {
 
     /// Download progress (0…1) on the main thread.
     private final class DownloadProgress: NSObject, URLSessionDownloadDelegate {
-        let report: (Double) -> Void
-        init(_ report: @escaping (Double) -> Void) { self.report = report }
+        let report: @Sendable @MainActor (Double) -> Void
+        init(_ report: @escaping @Sendable @MainActor (Double) -> Void) { self.report = report }
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64,
                         totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
             guard totalBytesExpectedToWrite > 0 else { return }
@@ -179,7 +179,7 @@ enum Updater {
     }
 
     /// Replace the running app with `newApp` once it has quit, then open the new one.
-    static func installAndRelaunch(_ newApp: URL) throws {
+    @MainActor static func installAndRelaunch(_ newApp: URL) throws {
         let target = Bundle.main.bundleURL
         if target.path.contains("/AppTranslocation/") { throw UpdateError.translocated }
         let parent = target.deletingLastPathComponent().path
@@ -213,6 +213,7 @@ enum Updater {
 }
 
 /// The dialogs around it: checking, "up to date", "a new version", download progress, errors.
+@MainActor
 final class UpdateUI {
     static let shared = UpdateUI()
     private var busy = false
