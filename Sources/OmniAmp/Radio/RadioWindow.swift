@@ -16,7 +16,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
     private var stations: [RadioStation] = []
     private var loadTask: Task<Void, Never>?
     private var showingFavorites = false
-    private var themeObserver: NSObjectProtocol?
+    private let observers = Observers()
 
     private static let genres = ["All genres", "pop", "rock", "jazz", "classical", "electronic", "ambient", "chillout", "lounge",
                                  "dance", "house", "techno", "trance", "hiphop", "rnb", "soul", "funk", "blues", "reggae", "metal",
@@ -43,10 +43,12 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
         if !w.setFrameUsingName("OmniAmpRadio") { w.center() }
         w.setFrameAutosaveName("OmniAmpRadio")
         build()
-        themeObserver = NotificationCenter.default.addObserver(forName: Theme.changed, object: nil, queue: .main) { [weak self] _ in
-            self?.build()
-            self?.table.reloadData()
-        }
+        observers.add(NotificationCenter.default.addObserver(forName: Theme.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.build()
+                self?.table.reloadData()
+            }
+        })
         if let st = Self.lastState {
             // Reopened after being closed (the window is freed when closed): same view and filters.
             showingFavorites = st.favorites
@@ -68,8 +70,6 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
         loadTask?.cancel()
         onClose?()
     }
-
-    deinit { themeObserver.map(NotificationCenter.default.removeObserver) }
 
     // MARK: Layout
 

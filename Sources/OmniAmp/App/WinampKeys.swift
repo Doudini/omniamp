@@ -52,7 +52,8 @@ final class WinampKeys {
         }
     }
 
-    deinit { monitor.map(NSEvent.removeMonitor) }
+    // Lives as long as the app; released on the main thread, where monitors are removed.
+    deinit { MainActor.assumeIsolated { monitor.map(NSEvent.removeMonitor) } }
 
     /// The typed letter; on a non-Latin layout (Cyrillic, Greek…) the letter at that key's US position, so
     /// Z X C V B and the rest still work where Winamp users expect them.

@@ -185,8 +185,8 @@ final class ArtistPage: DashPage {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    private var downloadObserver: NSObjectProtocol?
-    deinit { downloadObserver.map(NotificationCenter.default.removeObserver) }
+    private let observers = Observers()
+    private var watchingDownloads = false
 
     /// Its lookups (photo, discography, more recordings): cancelled when another artist opens or the pages close,
     /// so nothing keeps asking MusicBrainz for a page that's gone.
@@ -203,10 +203,11 @@ final class ArtistPage: DashPage {
         lookups = []
         liveExpanded = ProcessInfo.processInfo.environment["OMNIAMP_LIVE_SHOW_ALL"] != nil   // test hook
         liveLoadingMore = false
-        if downloadObserver == nil {
-            downloadObserver = NotificationCenter.default.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
+        if !watchingDownloads {
+            watchingDownloads = true
+            observers.add(NotificationCenter.default.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { if self?.isHidden == false { self?.fillDiscography() } }
-            }
+            })
         }
         generation += 1
         let gen = generation

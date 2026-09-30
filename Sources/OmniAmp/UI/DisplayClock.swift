@@ -66,9 +66,12 @@ final class DisplayClock {
         }
     }
 
+    // Owned by the player's look, which goes away on the main thread.
     deinit {
-        observers.forEach(NotificationCenter.default.removeObserver)
-        timer?.invalidate()
+        MainActor.assumeIsolated {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            timer?.invalidate()
+        }
     }
 
     /// Windows whose visibility counts (weakly held).

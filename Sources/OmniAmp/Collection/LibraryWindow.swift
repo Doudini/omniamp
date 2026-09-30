@@ -83,7 +83,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let empty = NSTextField(wrappingLabelWithString: "")
     private var scopeButtons: [Pill] = []
     private var losslessButton: Pill!
-    private var observers: [NSObjectProtocol] = []
+    private let observers = Observers()
     private var refreshPending = false
     private let statsPage = StatsPage()
     private let listeningPage = ListeningPage()
@@ -116,16 +116,16 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         build()
         search.stringValue = query
         let nc = NotificationCenter.default
-        observers.append(nc.addObserver(forName: Theme.changed, object: nil, queue: .main) { [weak self] _ in
+        observers.add(nc.addObserver(forName: Theme.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.applyTheme() }
         })
-        observers.append(nc.addObserver(forName: MusicCollection.changed, object: nil, queue: .main) { [weak self] _ in
+        observers.add(nc.addObserver(forName: MusicCollection.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.libraryChanged() }
         })
-        observers.append(nc.addObserver(forName: MusicCollection.progressChanged, object: nil, queue: .main) { [weak self] _ in
+        observers.add(nc.addObserver(forName: MusicCollection.progressChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }
         })
-        observers.append(nc.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
+        observers.add(nc.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }
         })
         library.start()
@@ -176,7 +176,6 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         onClose?()
     }
 
-    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
     // MARK: Layout
 
@@ -230,7 +229,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
         letters.onLetter = { [weak self] l in self?.jump(to: l) }
         // Scrolling the list (by hand: not a jump or a selection brought into view) lights the letter it's at.
-        observers.append(NotificationCenter.default.addObserver(forName: NSScrollView.didLiveScrollNotification, object: scrolls[1],
+        observers.add(NotificationCenter.default.addObserver(forName: NSScrollView.didLiveScrollNotification, object: scrolls[1],
                                                                 queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.followScroll() }
         })

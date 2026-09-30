@@ -106,14 +106,14 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         // Only while on screen: appear() reloads when it's shown again (lookups change the figures every few seconds).
         // A new day ("On this day", "last 7 days") or time zone: the figures again, if on screen.
         for name in [ListeningHistory.changed, MusicCollection.changed, .NSCalendarDayChanged, .NSSystemTimeZoneDidChange] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            observers.add(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { if self?.isHidden == false { self?.figuresChanged() } }
             })
         }
         // Behind other windows or in the Dock, changes wait (lookups post every few seconds, for hours): the
         // figures come when the window is seen again.
         for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+            observers.add(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                 MainActor.assumeIsolated {
                     guard let self, note.object as? NSWindow === self.window, self.stale, !self.isHidden, self.onScreen else { return }
                     self.reload()
@@ -122,8 +122,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         }
     }
     required init?(coder: NSCoder) { fatalError() }
-    private var observers: [NSObjectProtocol] = []
-    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    private let observers = Observers()
 
     /// Shown: figures now, and an update from last.fm if it's been a while.
     @MainActor func appear() {

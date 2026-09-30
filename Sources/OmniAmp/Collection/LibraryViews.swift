@@ -485,8 +485,8 @@ final class LibraryTimeline: NSView, NSViewToolTipOwner {
     private var shelfYear: [[LibraryAlbum]] = []
     private var official: [LibraryAlbum] = []
     private var shelfKinds: [ReleaseKind] = []
-    private var coverObserver: NSObjectProtocol?
-    deinit { coverObserver.map(NotificationCenter.default.removeObserver) }
+    private let observers = Observers()
+    private var watchingCovers = false
     /// Dots: per kind, per year.
     private var dots: [(kind: ReleaseKind, year: Int, list: [LibraryAlbum])] = []
     private var dotKinds: [ReleaseKind] = []
@@ -532,8 +532,9 @@ final class LibraryTimeline: NSView, NSViewToolTipOwner {
             span = (lo - pad)...(hi + pad)
         }
         for a in official { loadCover(a) }
-        if coverObserver == nil {
-            coverObserver = NotificationCenter.default.addObserver(forName: LibraryArt.coverChanged, object: nil, queue: .main) { [weak self] n in
+        if !watchingCovers {
+            watchingCovers = true
+            observers.add(NotificationCenter.default.addObserver(forName: LibraryArt.coverChanged, object: nil, queue: .main) { [weak self] n in
                 MainActor.assumeIsolated {
                     guard let self, let folder = n.object as? String else { return }
                     for a in self.official where a.folder == folder {
@@ -541,7 +542,7 @@ final class LibraryTimeline: NSView, NSViewToolTipOwner {
                         self.loadCover(a)
                     }
                 }
-            }
+            })
         }
         invalidateIntrinsicContentSize()
         needsDisplay = true

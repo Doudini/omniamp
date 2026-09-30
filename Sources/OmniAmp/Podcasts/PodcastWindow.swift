@@ -36,7 +36,6 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// In the Continue listening / Downloads lists, each episode's own show (they mix shows).
     private var episodeShows: [String: PodcastShow] = [:]
     private let downloads = PodcastDownloads.shared
-    private var downloadsObserver: NSObjectProtocol?
     private var downloadButton: Pill!
     private var folderButton: Pill!
 
@@ -47,8 +46,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var loadTask: Task<Void, Never>?
     private var episodesTask: Task<Void, Never>?
     private var showingSubscriptions: Bool
-    private var themeObserver: NSObjectProtocol?
-    private var progressObserver: NSObjectProtocol?
+    private let observers = Observers()
     /// Episodes released after this are marked new (nil: the show isn't subscribed). Taken when the show
     /// opens, so the marks stay while you look, though opening it counts as having seen them.
     private var newSince: Double?
@@ -81,19 +79,25 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         if !w.setFrameUsingName("OmniAmpPodcasts") { w.center() }
         w.setFrameAutosaveName("OmniAmpPodcasts")
         build()
-        themeObserver = NotificationCenter.default.addObserver(forName: Theme.changed, object: nil, queue: .main) { [weak self] _ in
-            self?.build()
-            self?.showsTable.reloadData()
-            self?.episodesTable.reloadData()
-        }
-        progressObserver = NotificationCenter.default.addObserver(forName: PodcastLibrary.progressChanged, object: nil, queue: .main) { [weak self] _ in
-            self?.countedAsStarted = nil   // finished or reset: counts again past 30 s when replayed
-            self?.refreshMarks()
-            self?.refreshPinned(PodcastWindowController.continueShow)
-        }
-        downloadsObserver = NotificationCenter.default.addObserver(forName: PodcastDownloads.changed, object: nil, queue: .main) { [weak self] n in
-            self?.downloadChanged(n.object as? String)
-        }
+        // All three on the main queue.
+        observers.add(NotificationCenter.default.addObserver(forName: Theme.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.build()
+                self?.showsTable.reloadData()
+                self?.episodesTable.reloadData()
+            }
+        })
+        observers.add(NotificationCenter.default.addObserver(forName: PodcastLibrary.progressChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.countedAsStarted = nil   // finished or reset: counts again past 30 s when replayed
+                self?.refreshMarks()
+                self?.refreshPinned(PodcastWindowController.continueShow)
+            }
+        })
+        observers.add(NotificationCenter.default.addObserver(forName: PodcastDownloads.changed, object: nil, queue: .main) { [weak self] n in
+            let path = n.object as? String
+            MainActor.assumeIsolated { self?.downloadChanged(path) }
+        })
         if let st = Self.lastState {
             // Reopened after being closed (the window is freed when closed): same view, search and show.
             search.stringValue = st.query
@@ -109,11 +113,6 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Closed: the app drops this controller.
     var onClose: (() -> Void)?
 
-    deinit {
-        themeObserver.map(NotificationCenter.default.removeObserver)
-        progressObserver.map(NotificationCenter.default.removeObserver)
-        downloadsObserver.map(NotificationCenter.default.removeObserver)
-    }
 
     /// Opening the window again checks subscribed shows for new episodes.
     func windowDidBecomeKey(_ notification: Notification) {
@@ -132,7 +131,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     /// The playing episode that has been added to Continue listening (once it's past 30 s).
-    private var countedAsStarted: String?   // reset when an episode finishes or is marked (progressObserver)
+    private var countedAsStarted: String?   // reset when an episode finishes or is marked (the progress observer)
 
     /// While an episode plays, its pie keeps up, and past 30 s it joins Continue listening (every few seconds;
     /// nothing runs when the window is closed).
