@@ -213,6 +213,11 @@ final class ArtistPage: DashPage {
         let gen = generation
         info = nil
         photoImage = nil
+        // Another artist: the last one's page goes now, not when the new one has been read (it showed for a moment).
+        if dash.key != key {
+            stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            dash = ArtistDashboard(key: key)
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let db = try? CollectionDB()
             let d = (try? db?.artistDashboard(key)) ?? ArtistDashboard(key: key)

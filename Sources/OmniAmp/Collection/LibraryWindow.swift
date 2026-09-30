@@ -271,6 +271,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         statsPage.onGenre = { [weak self] g in self?.open(.genres, g) }
         statsPage.onYear = { [weak self] y in self?.open(.years, String(y)) }
         statsPage.onArtist = { [weak self] a in self?.push(.artist(a)) }
+        statsPage.onAlbum = { [weak self] a in self?.openRelease(artist: a.artistKey, album: a.key) }
         statsPage.onSearch = { [weak self] q in
             guard let self else { return }
             self.search.stringValue = q

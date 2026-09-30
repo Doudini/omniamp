@@ -902,6 +902,8 @@ final class StatsPage: DashPage {
     var onGenre: ((String) -> Void)?
     var onYear: ((Int) -> Void)?
     var onArtist: ((String) -> Void)?
+    /// A release, shown in the lists (the newest one).
+    var onAlbum: ((LibraryAlbum) -> Void)?
     var onSearch: ((String) -> Void)?
     /// A song: its artist key and title key.
     var onSong: ((String, String) -> Void)?
@@ -952,7 +954,7 @@ final class StatsPage: DashPage {
         if let n = s.newest {
             let when = RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: n.added), relativeTo: Date())
             display.feature = .init(kicker: "newest", title: n.title, lines: [n.artist, "added \(when)"],
-                                    tip: "\(n.artist) – \(n.title) · click for the artist", action: { [weak self] in self?.onArtist?(n.artistKey) },
+                                    tip: "\(n.artist) – \(n.title) · click to show it", action: { [weak self] in self?.onAlbum?(n) },
                                     placeholder: LibraryWindowController.Section.added.glyph)
             LibraryArt.shared.load(n) { [weak display] img in
                 if let img { display?.featureImage = img; return }
