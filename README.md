@@ -48,7 +48,7 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
 <p align="center"><img src="docs/library-artist.png" alt="An artist page: photo and bio, every release on a timeline above your own plays, your top songs" width="820"></p>
 
 - **Artist pages:** every release on a timeline next to your own listening, your top songs, and the albums you don't have yet. Including live recordings and bootlegs.
-- **Albums:** all your covers in a grid, A–Z or grouped by artist, year, decade, kind or when they were added, in three sizes. Click one to see its tracks under it, double-click to play. Shows without a cover get a ticket stub with their date and venue.
+- **Albums:** all your covers in a grid, A–Z or grouped by artist, year, decade, kind or when they were added, in three sizes. Click one to see its tracks under it, double-click to play. Shows without a cover get a printed concert ticket (artist, date, venue and city) in one of six styles picked by the era of the show, as a small ticket with the year in the lists.
 - **Shows and bootlegs:** live recordings are recognized and sorted by date and venue, apart from the official albums. Missing shows can be downloaded from the [Live Music Archive](https://archive.org/details/etree).
 - **Browse** by artist, show, year or genre, see what's new, and search artists, albums, songs, venues, genres and folder names. Dates work in any spelling (1977-05-08, 8.5.77, 5/8/1977), "quotes" match exact words, and a typo gets a "Search for …" with the spelling your library uses.
 - **Stats:** your collection at a glance, from the newest addition to what's lossless.

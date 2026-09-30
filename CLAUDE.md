@@ -64,6 +64,7 @@ Read in AppDelegate/AudioPlayer; grep `OMNIAMP_` for the full list. Most useful:
 - `OMNIAMP_MODE=classic|modern` · `OMNIAMP_THEME=color:finish` · `OMNIAMP_CHARTS=id[:cb]`
 - `OMNIAMP_PLAY=<row>` · `OMNIAMP_VOLUME=0` · `OMNIAMP_RECORD=<file.caf>` (post-EQ audio to disk; per-rate files in bit-perfect) · `OMNIAMP_DEBUG=1` (engine start log) · `OMNIAMP_SETTLE_TIMEOUT`
 - `OMNIAMP_LIBRARY=section[:entry]` (e.g. `shows:Grateful Dead`), `OMNIAMP_RADIO=favorites`, `OMNIAMP_PODCASTS`, `OMNIAMP_SETTINGS`, `OMNIAMP_ABOUT=1`, `OMNIAMP_BACKGROUND`
+- `OMNIAMP_TICKETS=<file.png>` (read in main.swift) draws every concert-ticket style for sample shows on a light and a dark page and quits; `OMNIAMP_TICKET_SIZE=118|158|208` picks the tile size
 - `OMNIAMP_LASTFM_KEY` / `OMNIAMP_LASTFM_SECRET`; builds read them from `secrets.env` (git-ignored; never print or commit it)
 
 ## Conventions

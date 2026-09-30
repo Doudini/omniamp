@@ -375,6 +375,8 @@ final class AlbumCell: NSTableCellView {
     private let stripe = NSView()
     private var album: LibraryAlbum?
     private var token = -1
+    private var ticketToken = -1
+    private static let ticketSide: CGFloat = 40
 
     init() {
         super.init(frame: .zero)
@@ -418,6 +420,8 @@ final class AlbumCell: NSTableCellView {
 
     func show(_ a: LibraryAlbum, withArtist: Bool) {
         if let old = album, LibraryArt.key(old) != LibraryArt.key(a) { LibraryArt.shared.cancel(old, token: token) }
+        if let old = album { Tickets.shared.cancel(old, token: ticketToken, side: Self.ticketSide, scale: scale) }
+        ticketToken = -1
         album = a
         stripe.layer?.backgroundColor = Theme.kind(a.kind).cgColor
         stripe.toolTip = a.kind.title
@@ -441,9 +445,21 @@ final class AlbumCell: NSTableCellView {
         badge.textColor = a.unplayable > 0 ? Theme.warning : Dash.text3
         badge.toolTip = a.unplayable > 0 ? "macOS has no decoder for \(fmt) files (or they're copy-protected). Convert them to FLAC to play them." : nil
         art.image = nil
-        if case let .some(img) = LibraryArt.shared.cached(a) { art.image = img; token = -1; return }
+        if case let .some(img) = LibraryArt.shared.cached(a) { art.image = img; token = -1; if img == nil { ticket(a) }; return }
         token = LibraryArt.shared.load(a) { [weak self] img in
             guard let self, self.album?.folder == a.folder else { return }
+            self.art.image = img
+            if img == nil { self.ticket(a) }
+        }
+    }
+
+    private var scale: CGFloat { window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2 }
+
+    /// A show without a cover gets its ticket, small (the style, the stub and the year).
+    private func ticket(_ a: LibraryAlbum) {
+        guard a.kind == .show else { return }
+        ticketToken = Tickets.shared.load(a, side: Self.ticketSide, scale: scale) { [weak self] img in
+            guard let self, let img, self.album?.key == a.key else { return }
             self.art.image = img
         }
     }

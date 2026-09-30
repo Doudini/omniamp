@@ -954,7 +954,12 @@ final class StatsPage: DashPage {
             display.feature = .init(kicker: "newest", title: n.title, lines: [n.artist, "added \(when)"],
                                     tip: "\(n.artist) – \(n.title) · click for the artist", action: { [weak self] in self?.onArtist?(n.artistKey) },
                                     placeholder: LibraryWindowController.Section.added.glyph)
-            LibraryArt.shared.load(n) { [weak display] img in display?.featureImage = img }
+            LibraryArt.shared.load(n) { [weak display] img in
+                if let img { display?.featureImage = img; return }
+                // A show without a cover: its ticket.
+                guard n.kind == .show else { return }
+                Tickets.shared.load(n, side: HiFiDisplay.featureSide, scale: NSScreen.main?.backingScaleFactor ?? 2) { [weak display] t in display?.featureImage = t }
+            }
         }
         let losslessShare = s.tracks > 0 ? Double(s.losslessTracks) / Double(s.tracks) : 0
         display.items = [
@@ -1093,6 +1098,8 @@ final class HiFiDisplay: StatsChart {
     var feature: Feature? { didSet { needsLayout = true; needsDisplay = true } }
     var featureImage: CGImage? { didSet { needsDisplay = true } }
     override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 108) }
+    /// The feature's picture, a square (the height it's laid out at, less the margins).
+    static let featureSide: CGFloat = 108 - 30
 
     /// The feature takes two figures' width.
     private var units: CGFloat { CGFloat(items.count + (feature == nil ? 0 : 2)) }

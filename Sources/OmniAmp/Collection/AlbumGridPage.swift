@@ -414,7 +414,8 @@ final class AlbumTileItem: NSCollectionViewItem {
 }
 
 /// A cover with its title and artist under it. The cover is the large one, the small one standing in while it's
-/// read; none at all: a printed sleeve or ticket stub (GridCovers).
+/// read; none at all: a concert ticket for a show (Tickets, the plain stub standing in while it's drawn), a printed
+/// sleeve for the rest (GridCovers).
 final class AlbumTileView: NSView, NSDraggingSource {
     static let labels: CGFloat = 40
 
@@ -423,6 +424,10 @@ final class AlbumTileView: NSView, NSDraggingSource {
     private var image: NSImage?
     private var noCover = false
     private var token = -1
+    /// `image` is a ticket (drawn at `ticketSide` × `ticketScale`), not a cover.
+    private var isTicket = false
+    private var ticketToken = -1
+    private var ticketSide: CGFloat = 0, ticketScale: CGFloat = 0
     var isSelected = false { didSet { if isSelected != oldValue { needsDisplay = true } } }
     var isOpen = false { didSet { if isOpen != oldValue { needsDisplay = true } } }
     private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
@@ -437,10 +442,12 @@ final class AlbumTileView: NSView, NSDraggingSource {
         if let a = album {
             LibraryArt.shared.cancel(a, token: token, large: true)
             LibraryArt.shared.cancel(a, token: token)
+            cancelTicket(a)
         }
         album = nil
         token = -1
         image = nil
+        isTicket = false
         hovering = false
     }
 
@@ -449,9 +456,11 @@ final class AlbumTileView: NSView, NSDraggingSource {
             LibraryArt.shared.cancel(old, token: token, large: true)
             LibraryArt.shared.cancel(old, token: token)
         }
+        if let old = album { cancelTicket(old) }
         album = a
         self.withArtist = withArtist
         noCover = false
+        isTicket = false
         needsDisplay = true
         switch LibraryArt.shared.cached(a, large: true) {
         case .some(let img?):
@@ -480,7 +489,43 @@ final class AlbumTileView: NSView, NSDraggingSource {
     private func set(_ img: CGImage?) {
         image = img.map { NSImage(cgImage: $0, size: .zero) }
         noCover = img == nil
+        isTicket = false
         needsDisplay = true
+        if noCover { ticket() }
+    }
+
+    /// A show without a cover gets its ticket: from memory right away, else drawn in the background while the plain
+    /// stub stands in. Asked again when the tile's size (rounded, see `Tickets.side`) or the screen's scale changes.
+    private func ticket() {
+        guard let a = album, noCover, a.kind == .show, bounds.width > 0 else { return }
+        let side = Tickets.side(for: bounds.width), scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        guard side != ticketSide || scale != ticketScale else { return }
+        cancelTicket(a)
+        ticketSide = side
+        ticketScale = scale
+        ticketToken = Tickets.shared.load(a, side: side, scale: scale) { [weak self] img in
+            guard let self, let img, self.album?.key == a.key, self.noCover, self.ticketSide == side, self.ticketScale == scale else { return }
+            self.image = NSImage(cgImage: img, size: .zero)
+            self.isTicket = true
+            self.needsDisplay = true
+        }
+    }
+
+    private func cancelTicket(_ a: LibraryAlbum) {
+        if ticketSide > 0 { Tickets.shared.cancel(a, token: ticketToken, side: ticketSide, scale: ticketScale) }
+        ticketToken = -1
+        ticketSide = 0
+        ticketScale = 0
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if noCover { ticket() }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        if noCover { ticket() }
     }
 
     private var cover: NSRect { NSRect(x: 0, y: 0, width: bounds.width, height: bounds.width) }
@@ -507,9 +552,12 @@ final class AlbumTileView: NSView, NSDraggingSource {
             r.fill()
         }
         NSGraphicsContext.restoreGraphicsState()
-        let edge = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
-        Dash.border.setStroke()
-        edge.stroke()
+        // A ticket has its own outline, notches and all.
+        if !isTicket {
+            let edge = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+            Dash.border.setStroke()
+            edge.stroke()
+        }
         if isSelected || isOpen {
             let ring = NSBezierPath(roundedRect: r.insetBy(dx: 1.5, dy: 1.5), xRadius: 5, yRadius: 5)
             ring.lineWidth = 3
@@ -585,8 +633,9 @@ final class AlbumTileView: NSView, NSDraggingSource {
     override func accessibilityPerformPress() -> Bool { onClick?(1); return true }
 }
 
-/// Covers for releases that have none: a ticket stub for a show (date, venue, artist), a printed sleeve for the
-/// rest (title and artist), in the theme's colors with the kind's color as the accent.
+/// Covers for releases that have none: a plain ticket stub for a show (date, venue, artist) while its real ticket
+/// is drawn (TicketArt), a printed sleeve for the rest (title and artist), in the theme's colors with the kind's
+/// color as the accent.
 enum GridCovers {
     @MainActor static func draw(_ a: LibraryAlbum, in r: NSRect) {
         let w = r.width, pad = max(8, w * 0.07), tint = Theme.kind(a.kind)
@@ -772,12 +821,23 @@ final class AlbumPanelView: NSView {
             LibraryArt.shared.load(a, large: true) { [weak self] img in
                 guard self?.album?.key == a.key else { return }
                 if let img { self?.art.image = img; return }
-                LibraryArt.shared.load(a) { [weak self] small in if self?.album?.key == a.key { self?.art.image = small } }
+                LibraryArt.shared.load(a) { [weak self] small in
+                    guard let self, self.album?.key == a.key else { return }
+                    if let small { self.art.image = small } else { self.ticket(a) }
+                }
             }
         }
         list.tracks = tracks
         needsLayout = true
         needsDisplay = true
+    }
+
+    /// No cover at all: a show gets its concert ticket.
+    private func ticket(_ a: LibraryAlbum) {
+        guard a.kind == .show else { return }
+        Tickets.shared.load(a, side: Self.cover, scale: window?.backingScaleFactor ?? 2) { [weak self] img in
+            if let img, self?.album?.key == a.key { self?.art.image = img }
+        }
     }
 
     private static func kindName(_ k: ReleaseKind) -> String {
