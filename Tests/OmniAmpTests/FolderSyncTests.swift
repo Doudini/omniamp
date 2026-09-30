@@ -3,6 +3,16 @@ import XCTest
 
 @MainActor
 final class FolderSyncTests: XCTestCase {
+    func testIsUnder() {
+        let dirs: Set<String> = ["/m/Artist", "/m/Other/Album"]
+        XCTAssertTrue(FolderSync.isUnder("/m/Artist/Album/01.flac", dirs, orSelf: false))
+        XCTAssertTrue(FolderSync.isUnder("/m/Artist/01.flac#12.5", dirs, orSelf: false))
+        XCTAssertFalse(FolderSync.isUnder("/m/Artist", dirs, orSelf: false), "not under itself")
+        XCTAssertTrue(FolderSync.isUnder("/m/Artist", dirs, orSelf: true))
+        XCTAssertFalse(FolderSync.isUnder("/m/Artists/01.flac", dirs, orSelf: true), "a longer name isn't inside")
+        XCTAssertFalse(FolderSync.isUnder("/m/Other/01.flac", dirs, orSelf: true))
+    }
+
     func testCanonicalMapsPrivateVarSpellings() {
         let roots = ["/var/folders/x/T/music"]
         XCTAssertEqual(FolderSync.canonical("/private/var/folders/x/T/music/A/1.flac", roots: roots), "/var/folders/x/T/music/A/1.flac")

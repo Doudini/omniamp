@@ -135,8 +135,22 @@ enum FolderScanner {
             } else if root.pathExtension.lowercased() == "cue" {
                 if let sheet = CueSheet.load(root) { loose += sheet.tracks(cueURL: root).tracks }
             } else if PlaylistFile.isPlaylist(root) {
-                // Keep the playlist's own order; skip entries whose files are gone.
-                for e in PlaylistFile.entries(root) {
+                // Keep the playlist's own order; skip entries whose files are gone. Each file is looked up (a round
+                // trip on a network share, ~3.5 ms on NFS), so a few at a time and in slices: a 10k-entry playlist
+                // starts showing at once instead of after the last lookup.
+                let entries = PlaylistFile.entries(root)
+                var looked: [URLResourceValues?] = []
+                for (n, e) in entries.enumerated() {
+                    if n % 256 == 0 {
+                        flushLoose()
+                        let slice = entries[n..<min(n + 256, entries.count)].map(\.url)
+                        looked = [URLResourceValues?](repeating: nil, count: slice.count)
+                        looked.withUnsafeMutableBufferPointer { out in
+                            DispatchQueue.concurrentPerform(iterations: slice.count) { i in
+                                if slice[i].isFileURL { out[i] = values(slice[i]) }
+                            }
+                        }
+                    }
                     let url = e.url
                     if !url.isFileURL, e.web {   // a web audio file, not a station
                         loose.append(.webFile(url.absoluteString, title: e.title ?? url.lastPathComponent))
@@ -151,7 +165,7 @@ enum FolderScanner {
                         continue
                     }
                     if !url.isFileURL { loose.append(.stream(url.absoluteString, name: e.title, logo: e.logo)); continue }
-                    let v = values(url)
+                    let v = looked[n % 256]
                     guard v?.isRegularFile == true, audioExtensions.contains(url.pathExtension.lowercased()) else { continue }
                     if let start = e.cueStart {
                         // A saved CUE track: take it from its sheet again (titles), else rebuild it from the range.

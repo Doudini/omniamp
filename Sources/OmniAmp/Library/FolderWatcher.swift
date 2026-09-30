@@ -167,14 +167,36 @@ final class FolderSync {
 
     /// Rewrite a path into its root's stored spelling. The file system hands out several spellings of
     /// the same folder (e.g. /var/… vs /private/var/… from the enumerator and FSEvents).
-    nonisolated static func canonical(_ path: String, roots: [String]) -> String {
-        for r in roots {
+    nonisolated static func canonical(_ path: String, roots: [String]) -> String { canonicalizer(roots: roots)(path) }
+
+    /// `canonical` for many paths: each root's spellings are worked out once (resolving one is a round trip on a
+    /// network share), not once per path.
+    nonisolated static func canonicalizer(roots: [String]) -> @Sendable (String) -> String {
+        let spellings = roots.map { r -> (root: String, forms: [String]) in
             var forms = [r, r.hasPrefix("/private/") ? String(r.dropFirst(8)) : "/private" + r]
             let resolved = ExactPath.resolved(r)
             if !forms.contains(resolved) { forms.append(resolved) }
-            for f in forms where path == f || path.hasPrefix(f + "/") { return r + path.dropFirst(f.count) }
+            return (r, forms)
         }
-        return path
+        return { path in
+            for (r, forms) in spellings {
+                for f in forms where path == f || path.hasPrefix(f + "/") { return r + path.dropFirst(f.count) }
+            }
+            return path
+        }
+    }
+
+    /// Whether `path` (or, with `orSelf`, the path itself) lies under one of `folders`: a set lookup per level,
+    /// instead of comparing every path with every folder.
+    nonisolated static func isUnder(_ path: String, _ folders: Set<String>, orSelf: Bool) -> Bool {
+        guard !folders.isEmpty else { return false }
+        if orSelf, folders.contains(path) { return true }
+        var p = Substring(path)
+        while let slash = p.lastIndex(of: "/"), slash > p.startIndex {
+            p = p[..<slash]
+            if folders.contains(String(p)) { return true }
+        }
+        return false
     }
 
     // MARK: Events
@@ -187,7 +209,8 @@ final class FolderSync {
         if rescan {
             pending.formUnion(roots)
         } else {
-            for p in paths.map({ Self.canonical($0, roots: roots) }) where root(of: p) != nil {
+            let canonical = Self.canonicalizer(roots: roots)
+            for p in paths.map(canonical) where root(of: p) != nil {
                 let name = (p as NSString).lastPathComponent
                 guard !name.hasPrefix(".") else { continue }  // .DS_Store, temp files
                 // A changed file is rescanned with its folder: a .cue there may split it into tracks.
@@ -220,20 +243,21 @@ final class FolderSync {
         let rootsSnapshot = roots
         scansRunning += 1
         DispatchQueue.global(qos: .utility).async {
+            let canonical = Self.canonicalizer(roots: rootsSnapshot)
             var dirs: [String] = [], gone: [String] = [], found: [Track] = [], unreadable: [String] = []
             for s in scopes {
                 if let isDir = ExactPath.kind(s) {
                     if isDir { dirs.append(s) }
                     found += FolderScanner.scan([URL(exactPath: s, isDirectory: isDir)], unreadable: &unreadable).map { t in
                         var t = t
-                        t.path = Self.canonical(t.path, roots: rootsSnapshot)
+                        t.path = canonical(t.path)
                         return t
                     }
                 } else if Self.deletionIsReal(s, roots: rootsSnapshot) {
                     gone.append(s)
                 }
             }
-            let unknown = unreadable.map { Self.canonical($0, roots: rootsSnapshot) }
+            let unknown = unreadable.map(canonical)
             DispatchQueue.main.async {
                 self.scansRunning -= 1
                 self.apply(dirs: dirs, gone: gone, found: found, unknown: unknown)
@@ -257,10 +281,10 @@ final class FolderSync {
             NSLog("OmniAmp: watched folder %@ lists no files: treating it as unavailable", d)
             unknown.append(d)
         }
-        func isUnknown(_ path: String) -> Bool { unknown.contains { path == $0 || path.hasPrefix($0 + "/") } }
+        let unknownSet = Set(unknown), dirSet = Set(dirs), goneSet = Set(gone)
         func covered(_ path: String) -> Bool {
-            guard !isUnknown(path) else { return false }
-            return dirs.contains { path.hasPrefix($0 + "/") } || gone.contains { path == $0 || path.hasPrefix($0 + "/") }
+            guard !Self.isUnder(path, unknownSet, orSelf: true) else { return false }
+            return Self.isUnder(path, dirSet, orSelf: false) || Self.isUnder(path, goneSet, orSelf: true)
         }
 
         // 1. Removed on disk.
@@ -315,9 +339,12 @@ final class FolderSync {
         }
     }
 
+    private static let saves = DispatchQueue(label: "omniamp.foldersync.save", qos: .utility)
+
     private func saveSeen() {
         let snapshot = seen.mapValues { Array($0) }
-        DispatchQueue.global(qos: .background).async {
+        // One after the other: two saves racing could leave the older state on disk.
+        Self.saves.async {
             let enc = PropertyListEncoder()
             enc.outputFormat = .binary
             if let d = try? enc.encode(snapshot) { try? d.write(to: Self.stateURL, options: .atomic) }

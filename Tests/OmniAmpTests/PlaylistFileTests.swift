@@ -14,6 +14,26 @@ final class PlaylistFileTests: XCTestCase {
 
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
 
+    /// Long playlists are looked up in slices, several files at once, and handed over slice by slice: the order
+    /// stays the playlist's, across slices too.
+    func testLongM3UKeepsOrderAcrossSlices() throws {
+        var lines = ["#EXTM3U"], expected: [String] = []
+        for i in 0..<700 {
+            let name = String(format: "%04d.mp3", 699 - i)   // reverse of name order
+            if i % 97 == 0 { lines.append("music/gone-\(i).mp3"); continue }
+            if i == 300 { lines.append("http://radio.example/stream"); expected.append("stream") }
+            FileManager.default.createFile(atPath: dir.appendingPathComponent("music/\(name)").path, contents: Data([0]))
+            lines.append("music/\(name)")
+            expected.append(name)
+        }
+        let m3u = dir.appendingPathComponent("long.m3u8")
+        try lines.joined(separator: "\n").write(to: m3u, atomically: true, encoding: .utf8)
+        var batches = 0, names: [String] = []
+        FolderScanner.scan([m3u], batch: { b in batches += 1; names += b.map { ($0.path as NSString).lastPathComponent } })
+        XCTAssertEqual(names, expected)
+        XCTAssertGreaterThan(batches, 1, "handed over in slices")
+    }
+
     func testM3URoundTripKeepsOrderAndDropsMissing() throws {
         let m3u = dir.appendingPathComponent("list.m3u8")
         let text = "#EXTM3U\n#EXTINF:12,Someone - C\nmusic/c.mp3\n\(dir.path)/music/a.mp3\nmusic/missing.mp3\nhttp://radio.example/stream\n"

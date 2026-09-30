@@ -216,10 +216,10 @@ final class PlayerController {
     // MARK: Adding / removing
 
     /// Add files/folders/playlists; `at` inserts at a track index (nil = append).
-    func add(_ urls: [URL], at position: Int? = nil) {
+    func add(_ urls: [URL], at position: Int? = nil, known: [Track] = []) {
         let t0 = Date()
         if position != nil { invalidatePreload() }
-        store.add(urls: urls, at: position, onBatch: { [weak self] start, n in
+        store.add(urls: urls, at: position, known: known, onBatch: { [weak self] start, n in
             guard let self else { return }
             // Each batch is n rows inserted at `start`: shift whatever is current *now* (it may have
             // changed since the scan began, e.g. autoplay from the first batch).
@@ -690,8 +690,11 @@ final class PlayerController {
 
     /// Replace the playlist with the contents of a .m3u/.pls file.
     func loadPlaylist(_ url: URL) {
+        // The tracks it replaces keep their tags for the new list: a playlist reloaded (or one sharing files with
+        // the old one) isn't read again file by file.
+        let old = store.tracks
         clear()
-        add([url])
+        add([url], known: old)
     }
 
     func savePlaylist(to url: URL) throws {

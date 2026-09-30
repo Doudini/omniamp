@@ -122,7 +122,7 @@ final class MusicCollection {
         guard let scanner, !scopes.isEmpty else { return }
         scansRunning += 1
         let rootsNow = roots
-        scanner.scan(scopes.map { FolderSync.canonical($0, roots: rootsNow) }, roots: rootsNow) { [weak self] in
+        scanner.scan(scopes.map(FolderSync.canonicalizer(roots: rootsNow)), roots: rootsNow) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.scansRunning -= 1
@@ -141,7 +141,7 @@ final class MusicCollection {
         if rescan {
             pending.formUnion(roots)
         } else {
-            for p in paths.map({ FolderSync.canonical($0, roots: roots) }) {
+            for p in paths.map(FolderSync.canonicalizer(roots: roots)) {
                 guard roots.contains(where: { p == $0 || p.hasPrefix($0 + "/") }) else { continue }
                 guard !(p as NSString).lastPathComponent.hasPrefix(".") else { continue }
                 // A file is rescanned with its folder (a .cue next to it may split it into tracks).

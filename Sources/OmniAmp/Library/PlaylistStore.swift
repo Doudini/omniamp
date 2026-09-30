@@ -54,9 +54,10 @@ final class PlaylistStore {
     /// Stage 1 on a background thread, handed over as it goes: rows are inserted (appended if `at` is nil)
     /// a batch at a time, at most every 150 ms, and each batch starts stage 2 right away.
     /// `onBatch` gets each batch's insertion index and size; `done` the total.
-    func add(urls: [URL], at position: Int? = nil, onBatch: ((Int, Int) -> Void)? = nil, done: ((Int) -> Void)? = nil) {
+    /// `known`: tracks whose tags can be reused besides the playlist's own (a playlist loaded over the old one).
+    func add(urls: [URL], at position: Int? = nil, known: [Track] = [], onBatch: ((Int, Int) -> Void)? = nil, done: ((Int) -> Void)? = nil) {
         let t0 = Date()
-        let cached = Dictionary(tracks.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        let cached = Dictionary((tracks + known).map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         scansInProgress += 1
         if loadAllStart == nil { loadAllStart = t0 }
         onScanProgress?()
