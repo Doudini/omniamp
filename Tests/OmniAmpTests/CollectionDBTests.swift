@@ -221,6 +221,25 @@ final class CollectionDBTests: XCTestCase {
         XCTAssertEqual(a.total, a.groups.reduce(0) { $0 + $1.total })
     }
 
+    /// Two files with the same track number: listed, and the album plays in file-name order ("08" tagged 9).
+    func testTrackNumbersUsedTwice() throws {
+        let d = try db()
+        func numbered(_ i: Int, _ file: String, disc: Int?, _ n: Int, album: String = "Duets") -> LibraryFile {
+            var r = row(i, artist: "Ane Brun", album: album, title: file)
+            r.path = "/m/Ane Brun/\(album)/\(file).mp3"
+            r.key = r.path
+            r.info.discNumber = disc
+            r.info.trackNumber = n
+            return r
+        }
+        try d.upsert([numbered(1, "07 - easier", disc: nil, 7), numbered(2, "08 - common bird", disc: 1, 9), numbered(3, "09 - love & misery", disc: nil, 9),
+                      numbered(4, "01 - a", disc: 1, 1, album: "Songs"), numbered(5, "02 - b", disc: 2, 1, album: "Songs")])
+        let group = try d.attention().groups.first { $0.id == "numbers" }
+        XCTAssertEqual(group?.entries.map(\.title), ["Ane Brun — Duets"])   // Songs: 1 on two discs is fine
+        let duets = try d.albums(artist: Keys.artist("Ane Brun"), LibraryFilter()).first { $0.title == "Duets" }!
+        XCTAssertEqual(try d.tracks(album: duets.key).map(\.title), ["07 - easier", "08 - common bird", "09 - love & misery"])
+    }
+
     func testReleasesSharingAFolder() throws {
         let d = try db()
         var a = row(1, artist: "Scout Niblett", album: "Calcination", title: "a"), b = row(2, artist: "Scout Niblett", album: "Emma", title: "b")

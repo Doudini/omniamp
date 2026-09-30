@@ -710,7 +710,7 @@ final class CollectionDB {
                             format: format(path, bitDepth: s.optInt(15), rate: s.optInt(16), kbps: s.optInt(17)), playable: s.int(18) == 1)
     }
 
-    /// An album's tracks in order. With a search, only the matching ones.
+    /// An album's tracks in order (TrackOrder). With a search, only the matching ones.
     func tracks(album: String, matching query: String? = nil) throws -> [LibraryTrack] {
         var out: [LibraryTrack] = []
         var sql = "SELECT \(Self.trackColumns) FROM files f WHERE f.album_key = ?"
@@ -720,9 +720,8 @@ final class CollectionDB {
             sql += " AND f.id IN (\(m))"
             args += margs
         }
-        sql += " ORDER BY f.disc_no, f.track_no, f.cue_start, f.path"
         try db.query(sql, args) { out.append(Self.track($0)) }
-        return out
+        return TrackOrder.sorted(out)
     }
 
     /// Every recording of one song by one artist (versions folded by title key), oldest first.

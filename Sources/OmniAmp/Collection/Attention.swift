@@ -112,6 +112,13 @@ extension CollectionDB {
                                     total: sharedTotal, entries: shared))
         }
 
+        // Two files tagged with the same disc and track number (a copy, or numbers from another release): the album
+        // plays in file-name order instead (TrackOrder), until the tags are fixed.
+        try albums("numbers", "Track numbers used twice", "played in file-name order · retag or remove copies",
+                   """
+                   EXISTS (SELECT 1 FROM files f WHERE f.album_key = a.key AND f.track_no IS NOT NULL AND f.cue_start IS NULL
+                           GROUP BY coalesce(f.disc_no, 1), f.track_no HAVING count(*) > 1)
+                   """, fix: { .open(artist: $0.artistKey, album: $0.key) }, detail: tracks)
         try albums("unplayable", "Formats OmniAmp can't play", "convert with scripts/convert-unplayable.sh",
                    "a.unplayable > 0", fix: { .open(artist: $0.artistKey, album: $0.key) },
                    detail: { "\($0.unplayable) \($0.unplayableFormat ?? "") track\($0.unplayable == 1 ? "" : "s")" })
