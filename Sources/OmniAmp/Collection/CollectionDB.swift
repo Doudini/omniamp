@@ -728,6 +728,43 @@ final class CollectionDB {
                             format: format(path, bitDepth: s.optInt(15), rate: s.optInt(16), kbps: s.optInt(17)), playable: s.int(18) == 1)
     }
 
+    /// Every track, for the Tracks list: read in one go, unsorted (the list sorts and filters them itself). Artists,
+    /// albums and genres repeat: each one's sort key is worked out once.
+    func trackRows() throws -> [TrackRow] {
+        var out: [TrackRow] = []
+        var discs: [String: Int] = [:]
+        var artists: [String: String] = [:], albums: [String: String] = [:], genres: [String: String] = [:]
+        func key(_ s: String, _ cache: inout [String: String], _ make: (String) -> String) -> String {
+            if let k = cache[s] { return k }
+            let k = make(s)
+            cache[s] = k
+            return k
+        }
+        try db.query("""
+            SELECT \(Self.trackColumns), f.genre, coalesce(f.year, a.year), f.added, f.artist_key, a.kind, a.lossless
+            FROM files f JOIN albums a ON a.key = f.album_key
+            """) { s in
+            let t = Self.track(s), genre = s.optText(19) ?? ""
+            if let d = t.disc { discs[t.albumKey] = max(discs[t.albumKey] ?? 1, d) }
+            let keys = (key(t.artist, &artists) { TrackRow.sortKey(Keys.sortName($0)) }, key(t.album, &albums, TrackRow.sortKey),
+                        key(genre, &genres, TrackRow.sortKey))
+            var r = TrackRow(track: t, genre: genre, year: s.optInt(20), added: s.optDouble(21) ?? 0, artistKey: s.text(22), keys: keys)
+            r.official = s.int(23) <= ReleaseKind.live.rawValue
+            r.lossless = s.int(24) == 1
+            out.append(r)
+        }
+        for i in out.indices where (discs[out[i].track.albumKey] ?? 1) > 1 { out[i].multiDisc = true }
+        return out
+    }
+
+    /// The files a search finds (the index's ids), for filtering a list already in memory.
+    func fileIDs(matching query: String) throws -> Set<Int64> {
+        let (m, args) = matchSQL(query)
+        var ids = Set<Int64>()
+        try db.query(m, args) { ids.insert($0.int64(0)) }
+        return ids
+    }
+
     /// An album's tracks in order (TrackOrder). With a search, only the matching ones, in the album's order (sorted
     /// on their own, the gaps between them would read differently).
     func tracks(album: String, matching query: String? = nil) throws -> [LibraryTrack] {

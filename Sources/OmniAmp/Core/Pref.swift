@@ -41,6 +41,8 @@ enum Pref {
     /// The Albums grid: how it's grouped (AlbumGrouping) and its cover size (0–2).
     static let libraryGridGroup = "libraryGridGroup"
     static let libraryGridSize = "libraryGridSize"
+    /// Tracks: the column it's sorted by and which way ("artist:asc").
+    static let libraryTracksSort = "libraryTracksSort"
     /// The library may look things up online in the background (artist countries from MusicBrainz).
     static let libraryOnlineLookups = "libraryOnlineLookups"
     /// Where Live Music Archive downloads go (a folder per artist inside).
