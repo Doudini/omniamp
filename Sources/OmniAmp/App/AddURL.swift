@@ -3,7 +3,8 @@ import AppKit
 /// The "Add URL…" prompt shared by the main window, the radio browser and the podcast browser.
 enum AddURL {
     /// Asks for a link in a small dark sheet. A web address on the clipboard is filled in already.
-    static func ask(title: String, message: String, button: String = "Add", in window: NSWindow?, _ done: @escaping (String) -> Void) {
+    @MainActor static func ask(title: String, message: String, button: String = "Add", in window: NSWindow?,
+                               _ done: @escaping @MainActor (String) -> Void) {
         let a = NSAlert()
         a.messageText = title
         a.informativeText = message
@@ -19,14 +20,14 @@ enum AddURL {
         a.accessoryView = field
         a.window.appearance = NSAppearance(named: .darkAqua)
         a.window.initialFirstResponder = field
-        let handle: (NSApplication.ModalResponse) -> Void = { r in
+        func handle(_ r: NSApplication.ModalResponse) {
             let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if r == .alertFirstButtonReturn, !text.isEmpty { done(text) }
         }
-        if let w = window { a.beginSheetModal(for: w, completionHandler: handle) } else { handle(a.runModal()) }
+        if let w = window { a.beginSheetModal(for: w) { handle($0) } } else { handle(a.runModal()) }
     }
 
-    static func show(_ error: Error, in window: NSWindow?) {
+    @MainActor static func show(_ error: Error, in window: NSWindow?) {
         let a = NSAlert()
         a.messageText = "Couldn't add that link"
         a.informativeText = error.localizedDescription

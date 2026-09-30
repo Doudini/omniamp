@@ -109,7 +109,7 @@ final class DashCheck: NSButton {
 private let fieldHeight: CGFloat = 26
 
 /// The fields' shared look: a rounded card with a border (accent while typing in it), the text inset and centered.
-private protocol DashFieldLook: NSTextFieldCell {}
+@MainActor private protocol DashFieldLook: NSTextFieldCell {}
 
 extension DashFieldLook {
     func textRect(_ bounds: NSRect) -> NSRect {
@@ -228,12 +228,12 @@ extension Dash {
     }
 
     /// Typing in it: the window's field editor works for this field.
-    static func isEditing(_ view: NSView) -> Bool {
+    @MainActor static func isEditing(_ view: NSView) -> Bool {
         (view.window?.firstResponder as? NSTextView)?.delegate === view
     }
 
     /// The system's bezel and focus ring off (the field draws its own), the theme's text colors on.
-    static func prepareField(_ f: NSTextField) {
+    @MainActor static func prepareField(_ f: NSTextField) {
         f.isBezeled = false
         f.isBordered = false
         f.drawsBackground = false

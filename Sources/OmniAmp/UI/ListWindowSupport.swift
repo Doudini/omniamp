@@ -1,6 +1,7 @@
 import AppKit
 
 /// What the Radio and Podcasts windows share: the look of their lists, their columns, typing to search.
+@MainActor
 enum ListLook {
     static func column(_ id: String, _ width: CGFloat, flexible: Bool = false) -> NSTableColumn {
         let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
