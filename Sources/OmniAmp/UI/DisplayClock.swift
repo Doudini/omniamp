@@ -45,6 +45,7 @@ var animationTime: Double { CACurrentMediaTime() }
 /// it off (scrolling title), 4 fps while paused (blinking time), and nothing at all when stopped, hidden,
 /// minimized or fully covered. Also turns the spectrum
 /// analyzer on/off, so background playback does no visual work.
+@MainActor
 final class DisplayClock {
     private let tick: () -> Void
     private let player: AudioPlayer
@@ -61,7 +62,7 @@ final class DisplayClock {
                                           NSWindow.didDeminiaturizeNotification, NSApplication.didHideNotification,
                                           NSApplication.didUnhideNotification, Analyzer.changed]
         for n in names {
-            observers.append(nc.addObserver(forName: n, object: nil, queue: .main) { [weak self] _ in self?.update() })
+            observers.append(nc.addObserver(forName: n, object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.update() } })
         }
     }
 
@@ -95,7 +96,7 @@ final class DisplayClock {
         timer?.invalidate()
         timer = nil
         guard wanted > 0 else { return }
-        let t = Timer(timeInterval: 1 / wanted, repeats: true) { [weak self] _ in self?.tick() }
+        let t = Timer(timeInterval: 1 / wanted, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.tick() } }
         t.tolerance = 0.2 / wanted   // let macOS coalesce wakeups
         RunLoop.main.add(t, forMode: .common)
         timer = t

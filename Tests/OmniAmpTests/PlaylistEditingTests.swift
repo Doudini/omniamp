@@ -143,6 +143,7 @@ final class UnplayableLoopTests: XCTestCase {
 }
 
 final class PausedSeekTests: XCTestCase {
+    @MainActor   // AudioPlayer is main-thread only (XCTest runs synchronous tests there anyway)
     func testSeekingWhilePausedStaysPaused() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-seek-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

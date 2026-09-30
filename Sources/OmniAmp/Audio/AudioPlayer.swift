@@ -1,4 +1,6 @@
 import Accelerate
+// AVFAudio's types (buffers, files) aren't marked Sendable yet; they're handed between threads by design here.
+@preconcurrency import AVFAudio
 import AVFoundation
 import CoreAudio
 import os
@@ -15,6 +17,7 @@ import os
 private let debugAudio = ProcessInfo.processInfo.environment["OMNIAMP_DEBUG"] != nil
 private func dlog(_ s: @autoclosure () -> String) { if debugAudio { NSLog("OmniAmp[audio]: %@", s()) } }
 
+@MainActor
 final class AudioPlayer {
     enum State { case stopped, playing, paused }
 
@@ -212,33 +215,32 @@ final class AudioPlayer {
 
     /// An AVPlayer with what every use of it needs: failure, playing/buffering and end-of-item reports
     /// (on the main thread), and one teardown.
+    @MainActor
     private final class SystemPlayback {
         let player: AVPlayer
         private var observers: [NSKeyValueObservation] = []
         private var endObserver: NSObjectProtocol?
 
-        init(item: AVPlayerItem, deviceUID: String?, onFailed: @escaping (Error?) -> Void,
-             onStatus: @escaping (AVPlayer.TimeControlStatus) -> Void, onEnd: (() -> Void)? = nil) {
+        init(item: AVPlayerItem, deviceUID: String?, onFailed: @escaping @Sendable @MainActor (Error?) -> Void,
+             onStatus: @escaping @Sendable @MainActor (AVPlayer.TimeControlStatus) -> Void, onEnd: (@Sendable @MainActor () -> Void)? = nil) {
             player = AVPlayer(playerItem: item)
             player.audioOutputDeviceUniqueID = deviceUID
             observers = [
-                item.observe(\.status, options: [.new]) { [weak self] it, _ in
-                    DispatchQueue.main.async {
-                        guard self != nil, it.status == .failed else { return }
-                        onFailed(it.error)
-                    }
+                // KVO reports on any thread: read the value there, act on it on the main thread.
+                item.observe(\.status, options: [.new]) { @Sendable [weak self] it, _ in
+                    guard it.status == .failed else { return }
+                    let error = it.error
+                    DispatchQueue.main.async { [self] in if self != nil { onFailed(error) } }
                 },
-                player.observe(\.timeControlStatus, options: [.new]) { [weak self] pl, _ in
-                    DispatchQueue.main.async {
-                        guard self != nil else { return }
-                        onStatus(pl.timeControlStatus)
-                    }
+                player.observe(\.timeControlStatus, options: [.new]) { @Sendable [weak self] pl, _ in
+                    let status = pl.timeControlStatus
+                    DispatchQueue.main.async { [self] in if self != nil { onStatus(status) } }
                 },
             ]
             if let onEnd {
                 endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
                                                                      object: item, queue: .main) { [weak self] _ in
-                    if self != nil { onEnd() }
+                    MainActor.assumeIsolated { if self != nil { onEnd() } }
                 }
             }
         }
@@ -286,6 +288,7 @@ final class AudioPlayer {
         }, onStatus: { [weak self] status in
             guard let self, self.system === playback else { return }
             let playing = status == .playing
+            dlog("system player: \(playing ? "playing" : "waiting")")
             if playing, self.clockStart == nil { self.clockStart = CACurrentMediaTime() }
             self.isBuffering = !playing && self.state == .playing
         })
@@ -382,11 +385,17 @@ final class AudioPlayer {
 
     /// Bumped whenever the stream is stopped or started anew: a reconnect scheduled before that is stale.
     private var reconnectToken = 0
+    /// Which connection `stream` is: callbacks from an earlier one (still queued for the main thread) are dropped.
+    private var streamConnection = 0
+
+    private func isCurrentStream(_ connection: Int) -> Bool { stream != nil && streamConnection == connection }
 
     private func openStream(_ url: URL) {
         stream?.stop()   // never two connections: an old one would keep downloading and decoding unseen
         let src = StreamSource(url: url)
         stream = src
+        streamConnection += 1
+        let connection = streamConnection
         endedByItself = false
         streamFormat = nil
         mainStreamInfo = StreamSource.Info()
@@ -396,9 +405,10 @@ final class AudioPlayer {
         // Per connection: completions of an earlier connection's buffers must not count against this one.
         let bufferedFrames = OSAllocatedUnfairLock(initialState: AVAudioFramePosition(0))
         isBuffering = true
-        src.onInfo = { [weak self, weak src] info in
-            DispatchQueue.main.async {
-                guard let self, let src, self.stream === src else { return }
+        // Callbacks arrive on the stream's own queue.
+        src.onInfo = { [weak self] info in
+            DispatchQueue.main.async { [self] in
+                guard let self, self.isCurrentStream(connection) else { return }
                 self.mainStreamInfo = info
                 if info.sampleRate > 0, let f = AVAudioFormat(standardFormatWithSampleRate: info.sampleRate, channels: AVAudioChannelCount(max(1, info.channels))) {
                     self.connect(format: f)
@@ -408,29 +418,30 @@ final class AudioPlayer {
                 self.onStreamChange?()
             }
         }
-        src.onTitle = { [weak self, weak src] t in
-            DispatchQueue.main.async {
-                guard let self, self.stream === src else { return }
+        src.onTitle = { [weak self] t in
+            DispatchQueue.main.async { [self] in
+                guard let self, self.isCurrentStream(connection) else { return }
                 self.streamTitle = t
                 self.onStreamChange?()
             }
         }
-        src.onBuffer = { [weak self, weak src] buf in
+        src.onBuffer = { [weak self] buf in
             // Scheduled on the main thread, after onInfo has connected the player in the station's format
             // (same queue, so in order), and only while this is still the current stream.
-            DispatchQueue.main.async {
-                guard let self, let src, self.stream === src, let f = self.streamFormat,
+            DispatchQueue.main.async { [self] in
+                guard let self, self.isCurrentStream(connection), let f = self.streamFormat,
                       f.channelCount == buf.format.channelCount, f.sampleRate == buf.format.sampleRate else { return }
                 let frames = AVAudioFramePosition(buf.frameLength)
                 let total = bufferedFrames.withLock { $0 += frames; return $0 }
-                self.node.scheduleBuffer(buf) { [weak self] in
-                    guard let self else { return }
+                // Called on the render thread once the buffer has been played.
+                self.node.scheduleBuffer(buf) { @Sendable [weak self] in
                     let left = bufferedFrames.withLock { $0 -= frames; return $0 }
                     guard left <= 0 else { return }
-                    DispatchQueue.main.async {
+                    DispatchQueue.main.async { [self] in
                         // Ran dry (nothing arrived meanwhile): hold the player until 2 s are queued again, instead
                         // of playing each piece the moment it arrives (choppy bursts on a flaky connection).
-                        guard self.stream === src, self.state == .playing, bufferedFrames.withLock({ $0 }) <= 0 else { return }
+                        guard let self, self.isCurrentStream(connection), self.state == .playing,
+                              bufferedFrames.withLock({ $0 }) <= 0 else { return }
                         self.isBuffering = true
                         self.stalled = true
                         self.node.pause()
@@ -452,16 +463,16 @@ final class AudioPlayer {
                 self.isBuffering = false
             }
         }
-        src.onUnsupported = { [weak self, weak src] type in
-            DispatchQueue.main.async {
-                guard let self, self.stream === src, let u = self.streamURL else { return }
+        src.onUnsupported = { [weak self] type in
+            DispatchQueue.main.async { [self] in
+                guard let self, self.isCurrentStream(connection), let u = self.streamURL else { return }
                 NSLog("OmniAmp: %@ stream, using the system player", type)
                 self.openSystemStream(u, codec: type.contains("mpegurl") ? "HLS" : (type.contains("opus") ? "OPUS" : "OGG"))
             }
         }
-        src.onEnd = { [weak self, weak src] error in
-            DispatchQueue.main.async {
-                guard let self, self.stream === src, self.state == .playing else { return }
+        src.onEnd = { [weak self] error in
+            DispatchQueue.main.async { [self] in
+                guard let self, self.isCurrentStream(connection), self.state == .playing else { return }
                 // Dropped connection: retry a few times before giving up. A connection that played for a
                 // while earns the retries back (a long session can see several unrelated drops).
                 if let t = self.connectionPlayingSince, CACurrentMediaTime() - t > 60 { self.reconnects = 0 }
@@ -489,7 +500,7 @@ final class AudioPlayer {
     }
 
     /// Short, human message for a failed station.
-    static func friendly(_ error: Error?) -> String {
+    nonisolated static func friendly(_ error: Error?) -> String {
         guard let e = error else { return "station closed the connection" }
         if let u = e as? URLError {
             switch u.code {
@@ -542,7 +553,7 @@ final class AudioPlayer {
         engine.connect(node, to: converter, format: nil)
         rebuildGraph()
         NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            self?.engineConfigurationChanged()
+            MainActor.assumeIsolated { self?.engineConfigurationChanged() }
         }
         AudioDevices.observeDeviceChanges { [weak self] in self?.devicesChanged() }
         engine.prepare()
@@ -580,7 +591,7 @@ final class AudioPlayer {
             let url = URL(fileURLWithPath: path).deletingPathExtension().appendingPathExtension("\(Int(rate)).caf")
             if recorders[rate] == nil { recorders[rate] = try? AVAudioFile(forWriting: url, settings: f.settings) }
             let rec = recorders[rate]
-            engine.mainMixerNode.installTap(onBus: 0, bufferSize: 4096, format: f) { buf, _ in try? rec?.write(from: buf) }
+            engine.mainMixerNode.installTap(onBus: 0, bufferSize: 4096, format: f) { @Sendable buf, _ in try? rec?.write(from: buf) }
         }
         applyMixState()
     }
@@ -597,7 +608,7 @@ final class AudioPlayer {
         guard let f = tapFormat else { return }
         eq.removeTap(onBus: 0)
         // After the EQ, before the volume (like Winamp).
-        eq.installTap(onBus: 0, bufferSize: 2048, format: f) { [spectrum] buf, _ in spectrum.process(buf) }
+        eq.installTap(onBus: 0, bufferSize: 2048, format: f) { @Sendable [spectrum] buf, _ in spectrum.process(buf) }   // render thread
     }
 
     /// ReplayGain for the current track (linear). Ignored in bit-perfect mode, which must not alter samples.
@@ -614,7 +625,7 @@ final class AudioPlayer {
 
     /// The volume slider is a position, not a gain: cubed, it follows loudness (50 % ≈ −18 dB, 80 % ≈ −6 dB)
     /// instead of crowding everything audible into the bottom quarter.
-    static func loudness(_ position: Float) -> Float {
+    nonisolated static func loudness(_ position: Float) -> Float {
         let p = max(0, min(1, position))
         return p * p * p
     }
@@ -842,7 +853,7 @@ final class AudioPlayer {
         preparing = url
         Self.opener.async { [weak self] in
             let file = try? AVAudioFile(forReading: url)
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [self] in
                 guard let self, self.preparing == url else { return }
                 self.preparing = nil
                 if let file { self.prepared = (url, file) }
@@ -854,7 +865,7 @@ final class AudioPlayer {
     /// the file in seconds (CUE tracks). The old track stops at once; `opened` says (on the main thread)
     /// whether the new one could be played.
     func play(url: URL, from start: Double = 0, range: (start: Double, end: Double?)? = nil,
-              opened: @escaping (Bool) -> Void = { _ in }) {
+              opened: @escaping @Sendable @MainActor (Bool) -> Void = { _ in }) {
         // The old track fades out while the new file opens; the new one starts once both are done. After a track
         // that ended by itself there's nothing to fade (its tail is already past the mixer), and its player keeps
         // running, empty: the next track goes onto it (or the spare) and sounds right away.
@@ -890,7 +901,7 @@ final class AudioPlayer {
                 NSLog("OmniAmp: cannot open %@: %@", url.path, error.localizedDescription)
                 file = nil
             }
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [self] in
                 guard let self, token == self.openToken else { return }   // another track (or stop) came since
                 self.opening = false
                 guard let file else { self.state = .stopped; opened(false); return }
@@ -978,7 +989,7 @@ final class AudioPlayer {
     /// Schedule `url` to start exactly when the current track ends. `queued` says (on the main thread)
     /// whether it could: not if it's unreadable or in another format (the normal end-of-track path plays it
     /// then). `tag`: the caller's name for it (`currentTag` once it plays).
-    func queueNext(url: URL, range: (start: Double, end: Double?)? = nil, tag: String? = nil, queued: @escaping (Bool) -> Void) {
+    func queueNext(url: URL, range: (start: Double, end: Double?)? = nil, tag: String? = nil, queued: @escaping @Sendable @MainActor (Bool) -> Void) {
         // Not while the device settles: the restart that follows would drop it, and it could land first.
         guard current != nil, upcoming == nil, pendingNext == nil, state != .stopped, !awaitingRateSettle else { queued(false); return }
         nextToken += 1
@@ -988,7 +999,7 @@ final class AudioPlayer {
         Self.opener.async { [weak self] in
             guard wanted.withLock({ $0 }) == playing else { return }   // another track started meanwhile
             let file = try? AVAudioFile(forReading: url)
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [self] in
                 guard let self, self.pendingNext == token, self.openToken == playing else { return }   // taken back meanwhile
                 self.pendingNext = nil
                 guard let file, let c = self.current, self.state != .stopped, !self.awaitingRateSettle else { queued(false); return }
@@ -1175,18 +1186,27 @@ final class AudioPlayer {
             // .dataRendered: the end is known once the last audio has gone through the mixer, while it is still on
             // its way to the speakers. A next track that can't be queued behind this one (another format) starts
             // then, right behind it, instead of after the tail has played out (a quarter-second gap before).
-            // Written out as a typed constant: inline in the call (`last ? { … } : nil`), Swift 6.4's strict
-            // concurrency checking crashes ("failed to produce diagnostic").
-            let done: AVAudioPlayerNodeCompletionHandler? = last ? { [weak self] _ in
-                DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
-            } : nil
-            node.scheduleSegment(item.file, startingFrame: p.start, frameCount: p.frames, at: nil,
-                                 completionCallbackType: .dataRendered, completionHandler: done)
+            // (Two plain calls: with the handler chosen inline, Swift 6.4's strict concurrency checking crashes.)
+            if last {
+                node.scheduleSegment(item.file, startingFrame: p.start, frameCount: p.frames, at: nil,
+                                     completionCallbackType: .dataRendered, completionHandler: Self.segmentDone(self, gen: gen, id: id))
+            } else {
+                node.scheduleSegment(item.file, startingFrame: p.start, frameCount: p.frames, at: nil)
+            }
+        }
+    }
+
+    /// The render thread's "segment done" call, handed to the main thread. Made outside the player's (main-thread)
+    /// code, so it can't be taken for main-thread code itself.
+    nonisolated private static func segmentDone(_ player: AudioPlayer, gen: Int, id: Int)
+        -> @Sendable (AVAudioPlayerNodeCompletionCallbackType) -> Void {
+        { [weak player] _ in
+            DispatchQueue.main.async { [player] in player?.segmentFinished(gen: gen, id: id) }
         }
     }
 
     /// `count` frames from `start`, in pieces a segment can hold (at most `limit` frames each).
-    static func segments(from start: AVAudioFramePosition, count: AVAudioFramePosition,
+    nonisolated static func segments(from start: AVAudioFramePosition, count: AVAudioFramePosition,
                          limit: AVAudioFramePosition = AVAudioFramePosition(AVAudioFrameCount.max))
         -> [(start: AVAudioFramePosition, frames: AVAudioFrameCount)] {
         var out: [(start: AVAudioFramePosition, frames: AVAudioFrameCount)] = []
@@ -1311,17 +1331,24 @@ final class AudioPlayer {
 }
 
 /// Picks the song title out of the system player's timed metadata (ICY StreamTitle, ID3 in HLS…).
+@MainActor
 final class SystemMetadataDelegate: NSObject, AVPlayerItemMetadataOutputPushDelegate {
     var onTitle: ((String) -> Void)?
 
-    func metadataOutput(_ output: AVPlayerItemMetadataOutput, didOutputTimedMetadataGroups groups: [AVTimedMetadataGroup],
-                        from track: AVPlayerItemTrack?) {
+    // Set up with `queue: .main`: called on the main thread.
+    nonisolated func metadataOutput(_ output: AVPlayerItemMetadataOutput, didOutputTimedMetadataGroups groups: [AVTimedMetadataGroup],
+                                    from track: AVPlayerItemTrack?) {
+        let title = Self.title(in: groups)
+        MainActor.assumeIsolated { if let title { onTitle?(title) } }
+    }
+
+    nonisolated private static func title(in groups: [AVTimedMetadataGroup]) -> String? {
         for item in groups.flatMap(\.items) {
             let key = (item.identifier?.rawValue ?? "").lowercased()
             let isTitle = item.commonKey == .commonKeyTitle || key.contains("streamtitle") || key.hasSuffix("/tit2")
             guard isTitle, let v = item.stringValue?.trimmingCharacters(in: .whitespaces), !v.isEmpty else { continue }
-            onTitle?(v)
-            return
+            return v
         }
+        return nil
     }
 }

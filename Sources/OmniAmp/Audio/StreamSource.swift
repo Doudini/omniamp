@@ -3,8 +3,11 @@ import AVFoundation
 
 /// Pulls an Icecast/SHOUTcast stream (MP3 or AAC), strips ICY metadata, decodes to PCM and hands out
 /// buffers. Works on its own serial queue; callbacks arrive on that queue.
-final class StreamSource: NSObject, URLSessionDataDelegate {
-    struct Info {
+///
+/// Thread rule (why it's `@unchecked Sendable`): the owner sets the callbacks, then calls `start()` and later
+/// `stop()`; everything else (headers, metadata, decoding) happens on `queue`, where URLSession delivers.
+final class StreamSource: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    struct Info: Sendable {
         var name: String?
         var bitrate: Int?          // kbps (icy-br)
         var codec: String?         // "MP3" / "AAC"
@@ -13,15 +16,15 @@ final class StreamSource: NSObject, URLSessionDataDelegate {
     }
 
     /// Decoded audio, ready to schedule.
-    var onBuffer: ((AVAudioPCMBuffer) -> Void)?
+    var onBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
     /// "StreamTitle" changed (usually "Artist - Title").
-    var onTitle: ((String) -> Void)?
+    var onTitle: (@Sendable (String) -> Void)?
     /// Headers known / format known.
-    var onInfo: ((Info) -> Void)?
+    var onInfo: (@Sendable (Info) -> Void)?
     /// Connection ended (error or server closed).
-    var onEnd: ((Error?) -> Void)?
+    var onEnd: (@Sendable (Error?) -> Void)?
     /// The stream is a format this decoder doesn't handle (HLS playlist, Ogg/Opus/FLAC…): content type given.
-    var onUnsupported: ((String) -> Void)?
+    var onUnsupported: (@Sendable (String) -> Void)?
 
     /// Content types that go to the system player instead.
     static func isSystemPlayerType(_ type: String) -> Bool {
