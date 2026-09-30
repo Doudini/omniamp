@@ -171,6 +171,8 @@ final class AudioPlayer {
     /// comes back only after a connection that really played a while, not after each failed attempt.
     private var connectionPlayingSince: CFTimeInterval?
     /// True while waiting for enough audio (start, or after the connection stalled).
+    /// A stream ran dry while playing: the player is held until enough is queued again.
+    private var stalled = false
     private(set) var isBuffering = false { didSet { if isBuffering != oldValue { onStreamChange?() } } }
     var isStreaming: Bool { stream != nil || systemPlayer != nil }
     var streamInfo: StreamSource.Info? { stream != nil ? mainStreamInfo : systemInfo }
@@ -382,6 +384,7 @@ final class AudioPlayer {
         mainStreamInfo = StreamSource.Info()
         connectionPlayingSince = nil
         streamStarted = false
+        stalled = false
         // Per connection: completions of an earlier connection's buffers must not count against this one.
         let bufferedFrames = OSAllocatedUnfairLock(initialState: AVAudioFramePosition(0))
         isBuffering = true
@@ -415,7 +418,15 @@ final class AudioPlayer {
                 self.node.scheduleBuffer(buf) { [weak self] in
                     guard let self else { return }
                     let left = bufferedFrames.withLock { $0 -= frames; return $0 }
-                    if left <= 0 { DispatchQueue.main.async { if self.stream === src, self.state == .playing { self.isBuffering = true } } }
+                    guard left <= 0 else { return }
+                    DispatchQueue.main.async {
+                        // Ran dry (nothing arrived meanwhile): hold the player until 2 s are queued again, instead
+                        // of playing each piece the moment it arrives (choppy bursts on a flaky connection).
+                        guard self.stream === src, self.state == .playing, bufferedFrames.withLock({ $0 }) <= 0 else { return }
+                        self.isBuffering = true
+                        self.stalled = true
+                        self.node.pause()
+                    }
                 }
                 // Start (or leave the stall) once 2 s are queued.
                 guard Double(total) >= f.sampleRate * 2, self.state == .playing else { return }
@@ -425,6 +436,10 @@ final class AudioPlayer {
                     guard self.playNode() else { return }
                     self.clockStart = CACurrentMediaTime()
                     self.connectionPlayingSince = CACurrentMediaTime()
+                }
+                if self.stalled {
+                    self.stalled = false
+                    guard self.playNode() else { return }
                 }
                 self.isBuffering = false
             }
@@ -795,7 +810,10 @@ final class AudioPlayer {
     /// takes up to a second, and the app must not stall meanwhile. A new `play` or `stop` makes a pending
     /// open moot.
     private static let opener = DispatchQueue(label: "omniamp.open", qos: .userInitiated)
-    private var openToken = 0
+    private var openToken = 0 { didSet { let t = openToken; wantedOpen.withLock { $0 = t } } }
+    /// `openToken` for the opener queue: files queued for opening that were skipped past meanwhile (pressing Next
+    /// several times on a slow share) aren't opened at all, one after the other, before the one wanted.
+    private let wantedOpen = OSAllocatedUnfairLock(initialState: 0)
     /// A file for `play` is being opened (Play/Pause still work meanwhile).
     private var opening = false
     /// A file opened ahead of time for what will probably play next (Next, the end of the track): starting it
@@ -846,7 +864,9 @@ final class AudioPlayer {
             return
         }
         opening = true
+        let wanted = wantedOpen
         Self.opener.async { [weak self] in
+            guard wanted.withLock({ $0 }) == token else { return }   // another track (or stop) came since
             let file: AVAudioFile?
             do { file = try AVAudioFile(forReading: url) } catch {
                 NSLog("OmniAmp: cannot open %@: %@", url.path, error.localizedDescription)
@@ -946,7 +966,9 @@ final class AudioPlayer {
         nextToken += 1
         let token = nextToken, playing = openToken
         pendingNext = token
+        let wanted = wantedOpen
         Self.opener.async { [weak self] in
+            guard wanted.withLock({ $0 }) == playing else { return }   // another track started meanwhile
             let file = try? AVAudioFile(forReading: url)
             DispatchQueue.main.async {
                 guard let self, self.pendingNext == token, self.openToken == playing else { return }   // taken back meanwhile
