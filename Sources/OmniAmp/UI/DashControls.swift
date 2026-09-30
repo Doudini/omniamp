@@ -185,9 +185,24 @@ private final class DashSearchCell: NSSearchFieldCell {
         return NSRect(x: rect.minX + 4, y: rect.minY + floor((rect.height - h) / 2), width: max(0, rect.width - 8), height: h)
     }
     // The system's text sits a little high for the taller field: 2.5 pt lower (the field is flipped).
-    override func searchTextRect(forBounds rect: NSRect) -> NSRect { super.searchTextRect(forBounds: centered(rect)).offsetBy(dx: 0, dy: 2.5) }
+    override func searchTextRect(forBounds rect: NSRect) -> NSRect {
+        // Handed back its own answer (the editor's frame below, on a system that works it out again): the same.
+        if rect == lastTextRect { return rect }
+        let r = super.searchTextRect(forBounds: centered(rect)).offsetBy(dx: 0, dy: 2.5)
+        lastTextRect = r
+        return r
+    }
+    private var lastTextRect: NSRect?
     override func searchButtonRect(forBounds rect: NSRect) -> NSRect { super.searchButtonRect(forBounds: centered(rect)) }
     override func cancelButtonRect(forBounds rect: NSRect) -> NSRect { super.cancelButtonRect(forBounds: centered(rect)) }
+    // While typing, the field editor goes where the text is drawn (macOS 27 put it over the whole field, from the
+    // top left, over the magnifier).
+    override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, start selStart: Int, length selLength: Int) {
+        super.select(withFrame: searchTextRect(forBounds: rect), in: controlView, editor: textObj, delegate: delegate, start: selStart, length: selLength)
+    }
+    override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?) {
+        super.edit(withFrame: searchTextRect(forBounds: rect), in: controlView, editor: textObj, delegate: delegate, event: event)
+    }
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView) {
         Dash.drawField(in: cellFrame, editing: Dash.isEditing(controlView))
         drawInterior(withFrame: cellFrame, in: controlView)
