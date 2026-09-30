@@ -115,10 +115,12 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         table.backgroundColor = Theme.playlistBackground
         table.rowHeight = PlaylistStyle.rowHeight
         observers.append(NotificationCenter.default.addObserver(forName: PlaylistStyle.changed, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            self.table.rowHeight = PlaylistStyle.rowHeight
-            self.table.reloadData()
-            self.fitColumns()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.table.rowHeight = PlaylistStyle.rowHeight
+                self.table.reloadData()
+                self.fitColumns()
+            }
         })
         table.intercellSpacing = NSSize(width: 6, height: 0)
         table.allowsMultipleSelection = true
@@ -144,7 +146,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         table.columnAutoresizingStyle = .noColumnAutoresizing
         cTitle.minWidth = 60
         observers.append(NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { [weak self] _ in
-            self?.fitColumns()
+            MainActor.assumeIsolated { self?.fitColumns() }
         })
         scroll.postsFrameChangedNotifications = true
 

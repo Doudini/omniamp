@@ -78,6 +78,7 @@ final class ArtView: NSView {
 }
 
 /// Floating card with big art + a few lines, shown while hovering the panel art.
+@MainActor
 final class HoverCard {
     private let panel: NSPanel
     private let art = ArtView()
@@ -156,14 +157,21 @@ final class HoverCard {
         }
     }
 
-    deinit { panel.orderOut(nil) }
+    // Its owner (the player's panel view) goes away on the main thread.
+    deinit {
+        let panel = self.panel
+        MainActor.assumeIsolated { panel.orderOut(nil) }
+    }
 
     func hide() {
         path = nil
+        // The completion comes on the main thread (AppKit animations run there).
         NSAnimationContext.runAnimationGroup({ $0.duration = 0.1; panel.animator().alphaValue = 0 }) { [weak self] in
-            guard let self, self.path == nil else { return }
-            self.panel.orderOut(nil)
-            self.art.image = nil   // drop the large bitmap
+            MainActor.assumeIsolated {
+                guard let self, self.path == nil else { return }
+                self.panel.orderOut(nil)
+                self.art.image = nil   // drop the large bitmap
+            }
         }
     }
 }
