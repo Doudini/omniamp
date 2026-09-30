@@ -24,5 +24,9 @@ final class OutputTests: XCTestCase {
         XCTAssertNotEqual(def, 0)
         XCTAssertTrue(AudioDevices.outputDevices().contains { $0.id == def })
         XCTAssertGreaterThan(AudioDevices.nominalRate(def), 0)
+        // Rendering to the speakers: a few ms at least (one IO buffer), well under a second.
+        let latency = AudioDevices.outputLatency(def)
+        XCTAssertGreaterThan(latency, 0.001)
+        XCTAssertLessThan(latency, 0.5)
     }
 }

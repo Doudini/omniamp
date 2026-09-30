@@ -50,7 +50,14 @@ final class AudioPlayer {
     private var nextItemID = 1
 
     private let engine = AVAudioEngine()
-    private let node = AVAudioPlayerNode()
+    /// The player the file (or radio) plays on.
+    private var node = AVAudioPlayerNode()
+    /// A second player, for a next track in another format: connected in that format and started (empty) ahead
+    /// of time, it takes over when the current track ends. A player that's only started then, or connected in a
+    /// new format then (which stops it), sounds ~150 ms late: a gap between the tracks.
+    private var spare = AVAudioPlayerNode()
+    /// The track ended by itself (its last audio went through the mixer): the player is still running, empty.
+    private var endedByItself = false
     let eq = AVAudioUnitEQ(numberOfBands: Equalizer.frequencies.count)
     /// Converts any file format to the stereo format the EQ runs in (no-op when rates already match).
     private let converter = AVAudioMixerNode()
@@ -380,6 +387,7 @@ final class AudioPlayer {
         stream?.stop()   // never two connections: an old one would keep downloading and decoding unseen
         let src = StreamSource(url: url)
         stream = src
+        endedByItself = false
         streamFormat = nil
         mainStreamInfo = StreamSource.Info()
         connectionPlayingSince = nil
@@ -520,6 +528,7 @@ final class AudioPlayer {
 
     init() {
         engine.attach(node)
+        engine.attach(spare)
         engine.attach(converter)
         engine.attach(eq)
         for (i, f) in Equalizer.frequencies.enumerated() {
@@ -555,6 +564,7 @@ final class AudioPlayer {
         guard let f = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2) else { return }
         eq.removeTap(onBus: 0)
         engine.mainMixerNode.removeTap(onBus: 0)
+        spare.stop()   // readied again for the next track if needed
         engine.disconnectNodeOutput(converter)
         engine.disconnectNodeOutput(eq)
         engine.disconnectNodeOutput(engine.mainMixerNode)
@@ -618,6 +628,9 @@ final class AudioPlayer {
     private var fading = false
     private var afterFade: [() -> Void] = []
     private var fadeEpoch = 0
+
+    /// How long rendered audio takes to reach the speakers (the output's buffers and the device's own latency).
+    private var outputLatency: Double { max(0, min(0.5, AudioDevices.outputLatency(deviceID))) }
 
     /// One render cycle of the output, a little more for safety.
     private var renderCycle: Double {
@@ -842,8 +855,13 @@ final class AudioPlayer {
     /// whether the new one could be played.
     func play(url: URL, from start: Double = 0, range: (start: Double, end: Double?)? = nil,
               opened: @escaping (Bool) -> Void = { _ in }) {
-        // The old track fades out while the new file opens; the new one starts once both are done.
-        if stream == nil { fadeOut { [weak self] in self?.stopNode() } } else { finishFade(); stopNode() }
+        // The old track fades out while the new file opens; the new one starts once both are done. After a track
+        // that ended by itself there's nothing to fade (its tail is already past the mixer), and its player keeps
+        // running, empty: the next track goes onto it (or the spare) and sounds right away.
+        if stream == nil, state == .playing { fadeOut { [weak self] in self?.stopNode() } }
+        else if stream == nil, endedByItself, node.isPlaying { finishFade(); generation += 1 }
+        else { finishFade(); stopNode() }
+        endedByItself = false
         stopStream()
         upcoming = nil
         pendingNext = nil
@@ -976,6 +994,8 @@ final class AudioPlayer {
                 guard let file, let c = self.current, self.state != .stopped, !self.awaitingRateSettle else { queued(false); return }
                 let a = file.processingFormat, b = c.file.processingFormat
                 guard a.sampleRate == b.sampleRate, a.channelCount == b.channelCount, a.commonFormat == b.commonFormat else {
+                    // Another format: not behind this track, but the spare player gets ready for it (see `spare`).
+                    self.readySpare(for: a)
                     queued(false)
                     return
                 }
@@ -1085,6 +1105,7 @@ final class AudioPlayer {
     func stop() {
         openToken += 1   // a file still being opened won't start
         opening = false
+        endedByItself = false
         pendingNext = nil
         awaitingRateSettle = false
         if stream == nil { fadeOut { [weak self] in self?.stopNode() } } else { finishFade(); stopNode() }
@@ -1151,8 +1172,11 @@ final class AudioPlayer {
         let id = item.id
         for (i, p) in pieces.enumerated() {
             let last = i == pieces.count - 1
+            // .dataRendered: the end is known once the last audio has gone through the mixer, while it is still on
+            // its way to the speakers. A next track that can't be queued behind this one (another format) starts
+            // then, right behind it, instead of after the tail has played out (a quarter-second gap before).
             node.scheduleSegment(item.file, startingFrame: p.start, frameCount: p.frames, at: nil,
-                                 completionCallbackType: .dataPlayedBack,
+                                 completionCallbackType: .dataRendered,
                                  completionHandler: last ? { [weak self] _ in
                                      DispatchQueue.main.async { self?.segmentFinished(gen: gen, id: id) }
                                  } : nil)
@@ -1174,7 +1198,7 @@ final class AudioPlayer {
         return out
     }
 
-    /// A scheduled segment finished playing out of the speakers.
+    /// A scheduled segment has been rendered: its last audio is on the way out of the speakers.
     private func segmentFinished(gen: Int, id: Int) {
         guard gen == generation, state == .playing, current?.id == id else { return }
         // The engine stopping (device change, reconfiguration) also completes the schedule: that's not the end
@@ -1184,19 +1208,43 @@ final class AudioPlayer {
             current = next
             upcoming = nil
             clockBase = 0
-            clockStart = CACurrentMediaTime()   // the previous track just finished playing out
+            // The previous track's tail is still playing out: the new one is heard once it has.
+            clockStart = CACurrentMediaTime() + outputLatency
             onGaplessAdvance?()
         } else {
             state = .stopped
+            endedByItself = true
             onTrackFinished?()
             if state == .stopped { scheduleIdleStop() }
         }
     }
 
     private func connect(format: AVAudioFormat) {
+        // Still running (the last track ended by itself) in this format: nothing to change, it plays on at once.
+        if node.isPlaying, node.outputFormat(forBus: 0) == format { return }
+        // The spare, running in this format already: it takes over, and the old player becomes the spare.
+        if spare.isPlaying, spare.outputFormat(forBus: 0) == format {
+            let old = node
+            node = spare
+            spare = old
+            old.stop()
+            dlog("spare player takes over (\(Int(format.sampleRate)) Hz)")
+            return
+        }
         // Player → converter in the file's own format; the converter resamples/upmixes only if needed.
         engine.disconnectNodeOutput(node)
         engine.connect(node, to: converter, format: format)
+    }
+
+    /// Connect the spare player in the next track's format and start it, empty, while this track still plays
+    /// (connecting it then doesn't disturb the running one). Not in bit-perfect mode: the device changes rate there.
+    private func readySpare(for format: AVAudioFormat) {
+        guard !bitPerfect, engine.isRunning, !(spare.isPlaying && spare.outputFormat(forBus: 0) == format) else { return }
+        spare.stop()
+        engine.disconnectNodeOutput(spare)
+        engine.connect(spare, to: converter, fromBus: 0, toBus: converter.nextAvailableInputBus, format: format)
+        spare.play()
+        dlog("spare player ready (\(Int(format.sampleRate)) Hz)")
     }
 
     /// Start the player, but only on a running engine: AVAudioPlayerNode throws (crashes the app) otherwise.

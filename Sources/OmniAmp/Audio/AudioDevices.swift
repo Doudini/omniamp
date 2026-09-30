@@ -117,6 +117,16 @@ enum AudioDevices {
         AudioObjectSetPropertyData(id, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v)
     }
 
+    /// Seconds from rendering to the speakers: the device's latency and safety offset plus one IO buffer. Read
+    /// from the device (HAL), not the engine: safe on the main thread, also while the device reconfigures.
+    static func outputLatency(_ id: AudioDeviceID) -> Double {
+        let rate = nominalRate(id)
+        guard rate > 0 else { return 0 }
+        let latency = get(id, address(kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput), UInt32(0)) ?? 0
+        let safety = get(id, address(kAudioDevicePropertySafetyOffset, kAudioObjectPropertyScopeOutput), UInt32(0)) ?? 0
+        return Double(latency + safety + ioBufferFrames(id)) / rate
+    }
+
     /// Frames per IO cycle (this process's setting): how long one render cycle lasts.
     static func ioBufferFrames(_ id: AudioDeviceID) -> UInt32 {
         get(id, address(kAudioDevicePropertyBufferFrameSize), UInt32(0)) ?? 0

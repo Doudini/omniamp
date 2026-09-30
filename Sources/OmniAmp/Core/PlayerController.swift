@@ -228,7 +228,9 @@ final class PlayerController {
                 self.ui?.currentTrackDidChange(old: nil, new: self.currentIndex)
             }
             // Start playing the first track as soon as it shows up, if nothing is loaded yet.
-            let autoplay = ProcessInfo.processInfo.environment["OMNIAMP_NO_AUTOPLAY"] == nil
+            // OMNIAMP_PLAY (a test hook) picks the row itself: autoplaying too started the track twice, 0.5 s apart.
+            let env = ProcessInfo.processInfo.environment
+            let autoplay = env["OMNIAMP_NO_AUTOPLAY"] == nil && env["OMNIAMP_PLAY"] == nil
             if autoplay, n > 0, self.player.state == .stopped, self.currentIndex == nil {
                 self.play(index: start)
             }
