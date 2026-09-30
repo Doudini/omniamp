@@ -164,7 +164,9 @@ enum ReleaseClassifier {
 
     // MARK: Folders
 
-    private static let discFolder = try! NSRegularExpression(pattern: #"^(cd|disc|disk|set|side|d)[\s_.-]*\d{1,2}\b"#, options: .caseInsensitive)
+    /// "CD 2", "disc_1", "d1", "d2 (sbd)"; not "D12 - Devil's Night" (a bare "d" and a number, then " - ": a name).
+    private static let discFolder = try! NSRegularExpression(
+        pattern: #"^(?:(?:cd|disc|disk|set|side)[\s_.-]*\d{1,2}\b|d[\s_.-]?\d{1,2}\b(?!\s*-))"#, options: .caseInsensitive)
 
     static func isDiscFolder(_ name: String) -> Bool {
         discFolder.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil

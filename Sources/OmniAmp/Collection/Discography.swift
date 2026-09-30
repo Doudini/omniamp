@@ -127,8 +127,10 @@ extension CollectionDB {
         var out: (ArtistDiscography?, stale: Bool) = (nil, true)
         try db.query("SELECT json, checked FROM artist_discography WHERE artist_key = ?", [key]) { r in
             let d = try? JSONDecoder().decode(ArtistDiscography.self, from: Data(r.text(0).utf8))
-            // Kept before recordings were: look up again.
-            out = (d, Date().timeIntervalSince1970 - r.double(1) > maxAge || d?.liveRecordings == nil)
+            // No recordings: kept before they were, or archive.org didn't answer. Looked up again, but after a day,
+            // not on every visit (that's up to 8 MusicBrainz pages each time while archive.org is away).
+            let age = Date().timeIntervalSince1970 - r.double(1)
+            out = (d, age > maxAge || d?.liveRecordings == nil && age > 86400)
         }
         return out
     }

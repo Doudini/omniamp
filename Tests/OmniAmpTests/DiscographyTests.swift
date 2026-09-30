@@ -81,6 +81,10 @@ final class DiscographyTests: XCTestCase {
         XCTAssertEqual(kept, d)
         XCTAssertFalse(stale)
         XCTAssertTrue(try db.discography("nirvana", maxAge: -1).stale)
+        // archive.org didn't answer: no recordings, fresh for a day (not looked up again on every visit).
+        d.liveRecordings = nil
+        try db.saveDiscography("nirvana", d)
+        XCTAssertFalse(try db.discography("nirvana").stale)
     }
 
     // MARK: Live Music Archive

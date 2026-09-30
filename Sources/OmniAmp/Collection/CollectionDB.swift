@@ -150,6 +150,12 @@ final class CollectionDB {
         try db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = OFF;")
         try migrate()
         guard Self.firstOpen(url.path) else { return }
+        // Only counts as done once it got through: a setup that failed (the database busy, say) runs again on the
+        // next connection instead of being skipped for the rest of the run.
+        var setUpNow = false
+        defer {
+            if !setUpNow { Self.setupLock.lock(); Self.setUp.remove(url.path); Self.setupLock.unlock() }
+        }
         try db.exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER)")
         // Columns added after the first release of the library.
         func addColumn(_ table: String, _ column: String, _ type: String) throws {
@@ -235,6 +241,7 @@ final class CollectionDB {
         // Files still marked for reading again: a full re-read was cut short by quitting (local folders would
         // otherwise only replay what changed).
         if !needsFullScan, (try db.scalar("SELECT EXISTS(SELECT 1 FROM files WHERE mtime = -1)") ?? 0) == 1 { needsFullScan = true }
+        setUpNow = true
     }
 
     private func migrate() throws {

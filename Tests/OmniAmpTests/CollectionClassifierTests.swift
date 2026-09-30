@@ -10,6 +10,11 @@ final class CollectionClassifierTests: XCTestCase {
 
     // MARK: Keys
 
+    func testDiscFolderNames() {
+        for n in ["CD1", "cd 2", "Disc_3", "disk-1", "Set 2", "d1", "D2", "d1 (sbd)"] { XCTAssertTrue(ReleaseClassifier.isDiscFolder(n), n) }
+        for n in ["D12 - Devil's Night", "Discipline", "Setlist", "d123", "Dune"] { XCTAssertFalse(ReleaseClassifier.isDiscFolder(n), n) }
+    }
+
     func testVariousArtistNames() {
         for name in ["VA", "Various", "various artists"] {
             let r = classify("Mixed/Now 42/01.flac", .init(artist: "Someone", albumArtist: name, album: "Now 42"))
