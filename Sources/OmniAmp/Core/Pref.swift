@@ -41,6 +41,8 @@ enum Pref {
     /// The Albums grid: how it's grouped (AlbumGrouping) and its cover size (0–2).
     static let libraryGridGroup = "libraryGridGroup"
     static let libraryGridSize = "libraryGridSize"
+    /// Plays OmniAmp counts go into the play history on this Mac (on unless turned off in Settings).
+    static let keepPlayHistory = "keepPlayHistory"
     /// Tracks: the column it's sorted by and which way ("artist:asc").
     static let libraryTracksSort = "libraryTracksSort"
     /// The library may look things up online in the background (artist countries from MusicBrainz).

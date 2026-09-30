@@ -1,6 +1,6 @@
 import AppKit
 
-/// Settings (⌘,): scrobbling to Last.fm and ListenBrainz, and where podcast downloads go.
+/// Settings (⌘,): scrobbling to Last.fm and ListenBrainz, the play history on this Mac, and where podcast downloads go.
 final class SettingsWindowController: NSWindowController {
     private let lfmStatus = NSTextField(labelWithString: "")
     private var lfmButton: Pill!
@@ -14,6 +14,10 @@ final class SettingsWindowController: NSWindowController {
     private let ownSecret = DashSecureField()
     private var ownKeyRows: NSStackView!
     private var stack: NSStackView!
+    private var historyBox: DashCheck!
+    private let historyLabel = NSTextField(labelWithString: "")
+    private var clearHistory: Pill!
+    private let observers = Observers()
     private let folderLabel = NSTextField(labelWithString: "")
     private var folderButtons: [Pill] = []
     private var authTask: Task<Void, Never>?
@@ -31,6 +35,10 @@ final class SettingsWindowController: NSWindowController {
         build()
         refresh()
         Scrobbler.shared.onChange = { [weak self] in self?.refresh() }
+        observers.add(NotificationCenter.default.addObserver(forName: ListeningHistory.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshHistory() }
+        })
+        refreshHistory()
         w.center()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -72,7 +80,14 @@ final class SettingsWindowController: NSWindowController {
         for r in [lfmRow, lbRow, tokenRow, queueRow] { r.orientation = .horizontal; r.distribution = .fill }
         lbToken.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
-        for l in [lfmStatus, lbStatus, folderLabel, queueLabel] { l.font = Dash.font(13); l.textColor = Dash.text }
+        historyBox = DashCheck(checkboxWithTitle: "Keep a history of what I play (on this Mac)", target: self, action: #selector(historyToggled))
+        historyBox.state = ListeningHistory.keepsHistory ? .on : .off
+        clearHistory = Pill("Clear…", target: self, action: #selector(clearHistoryTapped))
+        let historyRow = NSStackView(views: [historyLabel, NSView(), clearHistory])
+        historyRow.orientation = .horizontal
+        historyRow.distribution = .fill
+
+        for l in [lfmStatus, lbStatus, folderLabel, queueLabel, historyLabel] { l.font = Dash.font(13); l.textColor = Dash.text }
         folderLabel.lineBreakMode = .byTruncatingMiddle
         folderLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let reveal = Pill("Show in Finder", target: self, action: #selector(revealDownloads))
@@ -90,6 +105,8 @@ final class SettingsWindowController: NSWindowController {
             note("Your token is on listenbrainz.org → Settings. Tokens and sessions are stored in your Keychain."),
             header("Queue"), queueRow,
             note("Plays count after half the track or 4 minutes (tracks over 30 s). Scrobbles made offline are kept and sent later."),
+            header("Play History"), historyBox, historyRow,
+            note("Counted plays are kept in your library, with or without Last.fm, for Listening and play counts. Nothing leaves your Mac; plays Last.fm has too are stored once."),
             header("Podcast Downloads"), folderRow,
             note("Episodes you download are saved here as “Show - Episode” and deleted once you’ve listened to the end. Changing the folder moves the downloads already there."),
         ])
@@ -103,6 +120,7 @@ final class SettingsWindowController: NSWindowController {
         stack.setCustomSpacing(18, after: ownKeyRows)
         stack.setCustomSpacing(18, after: stack.arrangedSubviews[8])
         stack.setCustomSpacing(18, after: stack.arrangedSubviews[11])
+        stack.setCustomSpacing(18, after: stack.arrangedSubviews[15])
         self.stack = stack
         window?.contentView = stack
         let lfm = LastFM.shared
@@ -145,6 +163,40 @@ final class SettingsWindowController: NSWindowController {
         LastFM.shared.setCustomKey(ownKey.stringValue, secret: ownSecret.stringValue)
         ownSecret.stringValue = ""
         refresh()
+    }
+
+    // MARK: Play history
+
+    private func refreshHistory() {
+        Task { [weak self] in
+            let own = await ListeningHistory.shared.ownPlays()
+            guard let self else { return }
+            if own.count == 0 {
+                self.historyLabel.stringValue = ListeningHistory.keepsHistory ? "No plays kept yet" : "Off"
+            } else {
+                let since = own.since.map { " since " + Date(timeIntervalSince1970: TimeInterval($0)).formatted(date: .abbreviated, time: .omitted) } ?? ""
+                self.historyLabel.stringValue = "\(own.count.formatted()) play\(own.count == 1 ? "" : "s") kept\(since)"
+            }
+            self.clearHistory.isEnabled = own.count > 0
+        }
+    }
+
+    @objc private func historyToggled() {
+        UserDefaults.standard.set(historyBox.state == .on, forKey: Pref.keepPlayHistory)
+        refreshHistory()
+    }
+
+    @objc private func clearHistoryTapped() {
+        guard let w = window else { return }
+        let a = NSAlert()
+        a.messageText = "Clear the play history?"
+        a.informativeText = "The plays OmniAmp kept on this Mac go. Your Last.fm history stays."
+        a.addButton(withTitle: "Clear")
+        a.addButton(withTitle: "Cancel")
+        a.beginSheetModal(for: w) { r in
+            guard r == .alertFirstButtonReturn else { return }
+            MainActor.assumeIsolated { ListeningHistory.shared.forgetOwnPlays() }
+        }
     }
 
     @objc private func openLastfmAPI() { NSWorkspace.shared.open(URL(string: "https://www.last.fm/api/account/create")!) }

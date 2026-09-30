@@ -69,7 +69,8 @@ enum ScrobbleError: Error, LocalizedError {
 /// Rules (Last.fm and ListenBrainz agree): the track must be longer than 30 s and be listened to for
 /// half its length or 4 minutes, whichever comes first. Listening time is accumulated from play/pause
 /// events with a single one-shot timer — no polling. Main-thread only (like PlayerController); network
-/// results hop back to the main actor.
+/// results hop back to the main actor. A counted play also goes into the play history on this Mac (with no
+/// service connected too), unless that's turned off.
 @MainActor
 final class Scrobbler {
     static let shared = Scrobbler()
@@ -83,6 +84,8 @@ final class Scrobbler {
 
     // The play being timed.
     private var pending: Scrobble?
+    /// The file that's playing (nil for a stream), for the play history.
+    private var pendingPath: String?
     private var listened: TimeInterval = 0
     private var playingSince: Date?
     private var threshold: TimeInterval = .infinity
@@ -92,8 +95,16 @@ final class Scrobbler {
         LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("scrobble-queue.json")
     }
 
-    init(services: [ScrobbleService]? = nil) {
+    /// Where counted plays go besides the services (the play history), and whether it's kept; tests hand in their own.
+    private let history: (Scrobble, String?) -> Void
+    private let keepsHistory: () -> Bool
+    /// The clock listening time is measured by (tests move it on instead of waiting).
+    var now: () -> Date = Date.init
+
+    init(services: [ScrobbleService]? = nil, history: ((Scrobble, String?) -> Void)? = nil, keepsHistory: (() -> Bool)? = nil) {
         self.services = services ?? [LastFM.shared, ListenBrainz.shared]
+        self.history = history ?? { ListeningHistory.shared.record($0, path: $1) }
+        self.keepsHistory = keepsHistory ?? { ListeningHistory.keepsHistory }
         if let d = try? Data(contentsOf: Self.queueURL),
            let q = try? JSONDecoder().decode([String: [Scrobble]].self, from: d) { queues = q }
     }
@@ -127,13 +138,15 @@ final class Scrobbler {
         commitListening()
         timer?.invalidate()
         pending = nil
+        pendingPath = nil
         listened = 0
         guard let t, let id = Self.identify(t), let th = Self.threshold(for: duration),
-              services.contains(where: { $0.collectsScrobbles }) else { return }
+              services.contains(where: { $0.collectsScrobbles }) || keepsHistory() else { return }
         pending = Scrobble(artist: id.artist, title: id.title, album: t.album, duration: Sane.int(duration.rounded()),
-                           timestamp: Int(Date().timeIntervalSince1970))
+                           timestamp: Int(now().timeIntervalSince1970))
+        pendingPath = t.path.hasPrefix("/") ? t.path : nil   // a file, not a stream's URL
         threshold = th
-        playingSince = Date()
+        playingSince = now()
         armTimer()
         let s = pending!
         for svc in services where svc.isConnected {
@@ -148,12 +161,12 @@ final class Scrobbler {
 
     func playbackResumed() {
         guard pending != nil, playingSince == nil else { return }
-        playingSince = Date()
+        playingSince = now()
         armTimer()
     }
 
     private func commitListening() {
-        if let since = playingSince { listened += Date().timeIntervalSince(since) }
+        if let since = playingSince { listened += now().timeIntervalSince(since) }
         playingSince = nil
     }
 
@@ -168,12 +181,14 @@ final class Scrobbler {
         timer = t
     }
 
-    private func thresholdReached() {
+    /// The timer's end (internal for tests).
+    func thresholdReached() {
         commitListening()
         guard let s = pending else { return }
-        if listened + 0.5 < threshold { playingSince = Date(); armTimer(); return }
+        if listened + 0.5 < threshold { playingSince = now(); armTimer(); return }
         pending = nil
-        enqueue(s)
+        if services.contains(where: { $0.collectsScrobbles }) { enqueue(s) }
+        if keepsHistory() { history(s, pendingPath) }
     }
 
     // MARK: Queue

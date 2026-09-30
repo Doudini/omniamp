@@ -69,10 +69,26 @@ extension CollectionDB {
             ALTER TABLE scrobbles ADD COLUMN hour INTEGER;
             """)
         }
+        // Where a play comes from (0 = last.fm's history, 1 = counted by OmniAmp on this Mac) and, for OmniAmp's own,
+        // the file that played.
+        var hasSource = false
+        try db.query("PRAGMA table_info(scrobbles)") { if $0.text(1) == "source" { hasSource = true } }
+        if !hasSource {
+            try db.exec("""
+            ALTER TABLE scrobbles ADD COLUMN source INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE scrobbles ADD COLUMN path TEXT;
+            """)
+        }
         try db.exec("""
         CREATE INDEX IF NOT EXISTS scrobbles_year ON scrobbles(year, artist_key);
         CREATE INDEX IF NOT EXISTS scrobbles_md ON scrobbles(md);
         """)
+    }
+
+    /// A play's local calendar, as the charts group by it: year, "MM-DD", weekday (0 = Sunday), hour.
+    private static func calendar(_ ts: Int) -> (year: Int?, md: String, wday: Int, hour: Int?) {
+        let c = Calendar.current.dateComponents([.year, .month, .day, .weekday, .hour], from: Date(timeIntervalSince1970: TimeInterval(ts)))
+        return (c.year, String(format: "%02d-%02d", c.month ?? 1, c.day ?? 1), (c.weekday ?? 1) - 1, c.hour)
     }
 
     // MARK: Artist info cache
@@ -147,34 +163,63 @@ extension CollectionDB {
 
     // MARK: Plays
 
-    /// Store plays (ones already there are skipped). Returns how many were new.
+    /// Store plays from last.fm (ones already there are skipped). Returns how many were new.
+    ///
+    /// A play OmniAmp counted itself is the same play when last.fm has it with the same start time and artist (the
+    /// scrobble carried that time): it becomes last.fm's (its spelling), keeping the file, instead of a second one.
     @discardableResult
     func addPlays(_ plays: [LastFM.Play]) throws -> Int {
         guard !plays.isEmpty else { return 0 }
         return try db.transaction {
             var added = 0
-            let cal = Calendar.current
             for p in plays {
-                let c = cal.dateComponents([.year, .month, .day, .weekday, .hour], from: Date(timeIntervalSince1970: TimeInterval(p.ts)))
+                let key = Keys.artist(p.artist)
+                try db.run("""
+                    UPDATE OR IGNORE scrobbles SET source = 0, artist = ?, album = ?, title = ?, mbid = ? WHERE ts = ? AND artist_key = ? AND source = 1
+                    """, [p.artist, p.album, p.title, p.artistMBID, p.ts, key])
+                if db.changes > 0 { added += 1; continue }
+                let c = Self.calendar(p.ts)
                 try db.run("""
                     INSERT OR IGNORE INTO scrobbles(ts, artist, album, title, artist_key, mbid, year, md, wday, hour) VALUES (?,?,?,?,?,?,?,?,?,?)
-                    """, [p.ts, p.artist, p.album, p.title, Keys.artist(p.artist), p.artistMBID, c.year,
-                          String(format: "%02d-%02d", c.month ?? 1, c.day ?? 1), (c.weekday ?? 1) - 1, c.hour])
+                    """, [p.ts, p.artist, p.album, p.title, key, p.artistMBID, c.year, c.md, c.wday, c.hour])
                 added += db.changes
             }
             return added
         }
     }
 
-    /// Oldest and newest play stored, and how many.
+    /// A play OmniAmp counted (the play history on this Mac), with the file that played (nil for a stream).
+    func addOwnPlay(_ s: Scrobble, path: String?) throws {
+        let c = Self.calendar(s.timestamp)
+        try db.run("""
+            INSERT OR IGNORE INTO scrobbles(ts, artist, album, title, artist_key, year, md, wday, hour, source, path)
+            VALUES (?,?,?,?,?,?,?,?,?,1,?)
+            """, [s.timestamp, s.artist, s.album, s.title, Keys.artist(s.artist), c.year, c.md, c.wday, c.hour, path])
+    }
+
+    /// Oldest and newest play imported from last.fm, and how many (what the import picks up from; OmniAmp's own
+    /// plays don't count, or a first import would think the history was in).
     func playRange() throws -> (oldest: Int?, newest: Int?, count: Int) {
         var r: (Int?, Int?, Int) = (nil, nil, 0)
-        try db.query("SELECT min(ts), max(ts), count(*) FROM scrobbles") { s in r = (s.optInt(0), s.optInt(1), s.int(2)) }
+        try db.query("SELECT min(ts), max(ts), count(*) FROM scrobbles WHERE source = 0") { s in r = (s.optInt(0), s.optInt(1), s.int(2)) }
         return r
     }
 
+    /// Another last.fm account: its history goes. OmniAmp's own plays stay (they're this Mac's, not the account's).
     func forgetPlays() throws {
-        try db.exec("DELETE FROM scrobbles; DELETE FROM meta WHERE key LIKE 'lastfm%'")
+        try db.exec("DELETE FROM scrobbles WHERE source = 0; DELETE FROM meta WHERE key LIKE 'lastfm%'")
+    }
+
+    /// Settings → Play History → Clear: only OmniAmp's own plays (an imported history stays).
+    func forgetOwnPlays() throws {
+        try db.exec("DELETE FROM scrobbles WHERE source = 1")
+    }
+
+    /// OmniAmp's own plays: how many, and since when.
+    func ownPlays() throws -> (count: Int, since: Int?) {
+        var r: (Int, Int?) = (0, nil)
+        try db.query("SELECT count(*), min(ts) FROM scrobbles WHERE source = 1") { s in r = (s.int(0), s.optInt(1)) }
+        return r
     }
 
     // MARK: Artist places

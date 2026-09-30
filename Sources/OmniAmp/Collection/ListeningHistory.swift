@@ -85,6 +85,44 @@ final class ListeningHistory {
         }
     }
 
+    // MARK: Play history (OmniAmp's own)
+
+    /// Plays go into the history on this Mac unless that's turned off (Settings → Play History).
+    static var keepsHistory: Bool { UserDefaults.standard.object(forKey: Pref.keepPlayHistory) as? Bool ?? true }
+
+    /// A play OmniAmp counted: stored on the database's queue (never on the main thread), then the Listening page
+    /// and play counts hear about it (at most once a minute).
+    func record(_ s: Scrobble, path: String?) {
+        Task {
+            try? await onDB { try $0.addOwnPlay(s, path: path) }
+            postSoon()
+        }
+    }
+
+    /// OmniAmp's own plays: how many, and since when (Settings).
+    func ownPlays() async -> (count: Int, since: Int?) {
+        (try? await onDB { try $0.ownPlays() }) ?? (0, nil)
+    }
+
+    func forgetOwnPlays() {
+        Task {
+            try? await onDB { try $0.forgetOwnPlays() }
+            post(force: true)
+        }
+    }
+
+    private var postPending = false
+
+    private func postSoon() {
+        guard !postPending else { return }
+        postPending = true
+        let wait = max(0, 60 - Date().timeIntervalSince(lastPost))
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+            self?.postPending = false
+            self?.post(force: true)
+        }
+    }
+
     // MARK: Import
 
     private var importing = false

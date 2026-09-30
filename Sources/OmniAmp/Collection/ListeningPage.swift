@@ -323,18 +323,21 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let history = MainActor.assumeIsolated { self.history }
         var subtitle: String?
-        if let st = stats, st.plays > 0, let first = st.firstPlay, let u = MainActor.assumeIsolated({ history.user }) {
+        if let st = stats, st.plays > 0, let first = st.firstPlay {
             let f = DateFormatter()
             f.dateStyle = .medium
-            subtitle = "\(st.plays.formatted()) plays of \(st.artists.formatted()) artists by \(u) since \(f.string(from: first))"
+            let who = MainActor.assumeIsolated({ history.user }).map { " by \($0)" } ?? ""
+            subtitle = "\(st.plays.formatted()) plays of \(st.artists.formatted()) artists\(who) since \(f.string(from: first))"
         }
         var rows: [NSView] = [dashHeading("Your listening", subtitle), controls()]
-        guard MainActor.assumeIsolated({ history.canImport }) else {
-            rows.append(note("This build of OmniAmp has no last.fm API key, so it can't read your history."))
+        // Plays OmniAmp kept itself show without last.fm; the notes only when there's nothing at all.
+        let hasPlays = (stats?.plays ?? 0) > 0
+        guard hasPlays || MainActor.assumeIsolated({ history.canImport }) else {
+            rows.append(note("This build of OmniAmp has no last.fm API key, so it can't read your history. What you play in OmniAmp shows up here."))
             return finish(rows)
         }
-        guard MainActor.assumeIsolated({ history.user }) != nil else {
-            rows.append(note("Type your last.fm user name above (or connect last.fm in Settings), then press Sync. A public profile is enough: no login needed."))
+        guard hasPlays || MainActor.assumeIsolated({ history.user }) != nil else {
+            rows.append(note("Type your last.fm user name above (or connect last.fm in Settings), then press Sync. A public profile is enough: no login needed. What you play in OmniAmp shows up here too."))
             return finish(rows)
         }
         guard let s = stats else { return finish(rows) }
