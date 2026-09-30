@@ -1061,7 +1061,7 @@ final class StatsPage: DashPage {
     }
 }
 
-/// The key figures as the front panel of hi-fi gear: one dark glass display, glowing digits over their unlit
+/// The key figures as the front panel of hi-fi gear: one dark glass display, digits in the chart color over their unlit
 /// segments, tiny caps labels, thin separators; a trend as a small level meter. Hover a figure for details.
 final class HiFiDisplay: StatsChart {
     struct Item {
@@ -1122,6 +1122,14 @@ final class HiFiDisplay: StatsChart {
         return size
     }
 
+    /// The figures in the chart palette's color, flat like the charts below; with the Phosphor palette, the
+    /// theme's lit phosphor, glowing, with its dim labels.
+    private var glowing: Bool { Theme.chart.id == "phosphor" }
+    private var ink: NSColor { Dash.amount }
+    private var inkHot: NSColor { glowing ? Theme.current : Dash.text }
+    private var labelInk: NSColor { glowing ? Theme.phosphorDim : Dash.text3 }
+    private func noteInk(_ alpha: CGFloat) -> NSColor { glowing ? Theme.phosphor.withAlphaComponent(alpha) : Dash.text2 }
+
     private var glow: NSShadow {
         let g = NSShadow()
         g.shadowColor = Theme.phosphor.withAlphaComponent(0.55)
@@ -1155,7 +1163,7 @@ final class HiFiDisplay: StatsChart {
         for (i, item) in items.enumerated() {
             let r = cell(i)
             if i > 0 || feature != nil {
-                Theme.phosphorDim.withAlphaComponent(0.25).setFill()
+                (glowing ? Theme.phosphorDim.withAlphaComponent(0.25) : Dash.border).setFill()
                 NSRect(x: r.minX, y: 16, width: 1, height: bounds.height - 32).fill()
             }
             let text = item.value
@@ -1172,12 +1180,12 @@ final class HiFiDisplay: StatsChart {
             // Unlit segments behind the digits (a real LCD shows its 8s faintly).
             if numeric {
                 let ghost = String(text.map { $0.isNumber ? "8" : $0 })
-                NSAttributedString(string: ghost, attributes: [.font: font, .foregroundColor: Theme.phosphor.withAlphaComponent(0.07)])
+                NSAttributedString(string: ghost, attributes: [.font: font, .foregroundColor: ink.withAlphaComponent(0.07)])
                     .draw(at: NSPoint(x: x, y: textTop))
             }
             NSGraphicsContext.saveGraphicsState()
-            glow.set()
-            let lit = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: hovered == i + (feature == nil ? 0 : 1) ? Theme.current : Theme.phosphor])
+            if glowing { glow.set() }
+            let lit = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: hovered == i + (feature == nil ? 0 : 1) ? inkHot : ink])
             lit.draw(with: NSRect(x: x, y: textTop, width: room, height: font.pointSize * 1.4),
                      options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             NSGraphicsContext.restoreGraphicsState()
@@ -1188,7 +1196,7 @@ final class HiFiDisplay: StatsChart {
                 let mx = x + w + 10, mh = size * 0.8
                 for (j, v) in bars.enumerated() {
                     let h = max(2, mh * CGFloat(v / hi))
-                    Theme.phosphor.withAlphaComponent(j == bars.count - 1 ? 0.95 : 0.4).setFill()
+                    ink.withAlphaComponent(j == bars.count - 1 ? 0.95 : 0.4).setFill()
                     NSRect(x: mx + CGFloat(j) * 4, y: top + size * 1.1 - h, width: 3, height: h).fill()
                 }
             }
@@ -1197,7 +1205,7 @@ final class HiFiDisplay: StatsChart {
             if let share = item.share {
                 let n = max(6, min(16, Int(room / 7))), lit = Int((Double(n) * share).rounded())
                 for j in 0..<n {
-                    Theme.phosphor.withAlphaComponent(j < lit ? 0.85 : 0.12).setFill()
+                    ink.withAlphaComponent(j < lit ? 0.9 : 0.15).setFill()
                     NSRect(x: x + CGFloat(j) * 7, y: vy + 3, width: 5, height: 8).fill()
                 }
             }
@@ -1206,7 +1214,7 @@ final class HiFiDisplay: StatsChart {
                     .draw(with: NSRect(x: x, y: vy - 1, width: room, height: visualH + 2), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             }
             let ly = vy + visualH + 4
-            NSAttributedString(string: item.label.uppercased(), attributes: [.font: Dash.mono(9, bold: true), .foregroundColor: Theme.phosphorDim, .kern: 0.8])
+            NSAttributedString(string: item.label.uppercased(), attributes: [.font: Dash.mono(9, bold: true), .foregroundColor: labelInk, .kern: 0.8])
                 .draw(with: NSRect(x: x, y: ly, width: r.width - 22, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             // The line under the label: the change first (it has its own color), then the note.
             let n = NSMutableAttributedString()
@@ -1215,7 +1223,7 @@ final class HiFiDisplay: StatsChart {
                                                                                               .foregroundColor: d.up ? Dash.up : Dash.down]))
             }
             if let note = item.note {
-                n.append(NSAttributedString(string: (n.length > 0 ? "  " : "") + note, attributes: [.font: Dash.mono(9.5), .foregroundColor: Theme.phosphor.withAlphaComponent(0.5)]))
+                n.append(NSAttributedString(string: (n.length > 0 ? "  " : "") + note, attributes: [.font: Dash.mono(9.5), .foregroundColor: noteInk(0.5)]))
             }
             n.draw(with: NSRect(x: x, y: ly + 15, width: r.width - 22, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }
@@ -1234,13 +1242,13 @@ final class HiFiDisplay: StatsChart {
             NSImage(cgImage: img, size: .zero).draw(in: NSRect(x: pic.midX - w / 2, y: pic.midY - h / 2, width: w, height: h),
                                                     from: .zero, operation: .sourceOver, fraction: 0.92, respectFlipped: true, hints: nil)
         } else {
-            Theme.phosphor.withAlphaComponent(0.08).setFill()
+            ink.withAlphaComponent(0.08).setFill()
             pic.fill()
-            let g = NSAttributedString(string: f.placeholder, attributes: [.font: Fonts.hack(side * 0.36), .foregroundColor: Theme.phosphorDim])
+            let g = NSAttributedString(string: f.placeholder, attributes: [.font: Fonts.hack(side * 0.36), .foregroundColor: labelInk])
             g.draw(at: NSPoint(x: pic.midX - g.size().width / 2, y: pic.midY - g.size().height / 2))
         }
         NSGraphicsContext.restoreGraphicsState()
-        Theme.phosphor.withAlphaComponent(0.2).setStroke()
+        (glowing ? Theme.phosphor.withAlphaComponent(0.2) : Dash.border).setStroke()
         NSBezierPath(roundedRect: pic.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6).stroke()
 
         let x = pic.maxX + 14, room = r.maxX - x - 14
@@ -1248,17 +1256,17 @@ final class HiFiDisplay: StatsChart {
         while size > 12, (f.title as NSString).size(withAttributes: [.font: Dash.mono(size, bold: true)]).width > room { size -= 1 }
         let block = 12 + 4 + size * 1.25 + 4 + CGFloat(f.lines.count) * 14
         var y = ((bounds.height - block) / 2).rounded()
-        NSAttributedString(string: f.kicker.uppercased(), attributes: [.font: Dash.mono(9, bold: true), .foregroundColor: Theme.phosphorDim, .kern: 0.8])
+        NSAttributedString(string: f.kicker.uppercased(), attributes: [.font: Dash.mono(9, bold: true), .foregroundColor: labelInk, .kern: 0.8])
             .draw(with: NSRect(x: x, y: y, width: room, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         y += 16
         NSGraphicsContext.saveGraphicsState()
-        glow.set()
-        NSAttributedString(string: f.title, attributes: [.font: Dash.mono(size, bold: true), .foregroundColor: hovered == 0 ? Theme.current : Theme.phosphor])
+        if glowing { glow.set() }
+        NSAttributedString(string: f.title, attributes: [.font: Dash.mono(size, bold: true), .foregroundColor: hovered == 0 ? inkHot : ink])
             .draw(with: NSRect(x: x, y: y, width: room, height: size * 1.4), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         NSGraphicsContext.restoreGraphicsState()
         y += size * 1.25 + 4
         for line in f.lines {
-            NSAttributedString(string: line, attributes: [.font: Dash.mono(10), .foregroundColor: Theme.phosphor.withAlphaComponent(0.65)])
+            NSAttributedString(string: line, attributes: [.font: Dash.mono(10), .foregroundColor: noteInk(0.65)])
                 .draw(with: NSRect(x: x, y: y, width: room, height: 14), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             y += 14
         }
