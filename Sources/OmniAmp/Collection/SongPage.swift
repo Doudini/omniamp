@@ -154,7 +154,7 @@ final class SongPage: DashPage {
         artistKey = artist
         generation += 1
         let gen = generation
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let db = try? CollectionDB()
             let v = (try? db?.versions(artist: artist, titleKey: titleKey)) ?? []
             let p = (try? db?.songPlays(artist: artist, titleKey: titleKey)) ?? SongPlays()

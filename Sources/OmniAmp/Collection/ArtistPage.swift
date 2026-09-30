@@ -212,7 +212,7 @@ final class ArtistPage: DashPage {
         let gen = generation
         info = nil
         photoImage = nil
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let db = try? CollectionDB()
             let d = (try? db?.artistDashboard(key)) ?? ArtistDashboard(key: key)
             let cached: CollectionDB.CachedInfo = (db.flatMap { try? $0.artistInfo(key) }) ?? .unknown
@@ -549,7 +549,7 @@ final class ArtistPage: DashPage {
     /// Your most played songs, one recording each (the studio one where there is one), most played first.
     @objc private func playFavorites() {
         let key = dash.key, songs = dash.topSongs.filter { $0.versions > 0 }.prefix(25).map(\.titleKey)
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let db = try? CollectionDB()
             let tracks: [LibraryTrack] = songs.compactMap { t in
                 let v = (try? db?.versions(artist: key, titleKey: t)) ?? []

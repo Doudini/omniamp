@@ -425,7 +425,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         // Counted on a connection of its own, off the main thread (a 100k-track library takes a moment).
         statsGeneration += 1
         let gen = statsGeneration, filter = self.filter
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let stats = try? CollectionDB().stats(filter)
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.statsGeneration, self.showingStats, let stats else { return }

@@ -197,7 +197,7 @@ final class ListeningHistory {
                         failures += 1
                         let wait = min(600, 30 * failures)
                         NSLog("OmniAmp: artist countries paused for %d s", wait)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(wait)) { [weak self] in self?.startLookups() }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(wait)) { [self] in startLookups() }   // the app-long shared one
                         break outer
                     }
                     failures = 0

@@ -24,7 +24,7 @@ final class AttentionPage: DashPage {
         generation += 1
         let gen = generation, only = group
         let keepScroll = shown == .some(only) ? contentView.bounds.origin : nil
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let a = (only == nil ? try? CollectionDB().attention() : try? CollectionDB().attention(limit: 5000, only: only)) ?? LibraryAttention()
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }

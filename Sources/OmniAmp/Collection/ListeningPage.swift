@@ -166,7 +166,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         generation += 1
         let gen = generation
         let started = Date()
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let db = try? CollectionDB()
             try? db?.fillPlayCalendar()
             // The same plays, places and library as last time (and the same day): the figures from then.
@@ -306,7 +306,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
             t.append(NSAttributedString(string: "   " + (owned ? "tracks owned" : "plays"), attributes: [.font: Dash.font(11), .foregroundColor: Dash.text3]))
             return t
         }()
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let bars = (try? CollectionDB().artists(country: c.iso, owned: owned)) ?? []
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.country?.iso == c.iso, self.showOwned == owned else { return }
@@ -589,7 +589,7 @@ final class ListeningPage: DashPage, NSTextFieldDelegate {
         case .year(let y): year = y
         case .all: break
         }
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let bars = (try? CollectionDB().topArtists(from: from, to: nil, year: year)) ?? []
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.period == p else { return }
