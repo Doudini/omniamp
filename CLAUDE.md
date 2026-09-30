@@ -53,6 +53,7 @@ There is no linter; the compiler's Swift 6 concurrency checking is the gate.
 - **Untrusted downloads** (feeds, logos, anything from user-editable directories) go through `Core/BoundedFetch` with a size and time limit.
 - **Tests:** `@MainActor` test classes use `override func setUp() async throws` / `tearDown() async throws`; results from callbacks go through a lock. Unit tests never use the real cache dir even without `OMNIAMP_CACHE_DIR`.
 - **Test the `.app` for network features**, not just `.build/*/OmniAmp`: the bare binary has no Info.plist, so App Transport Security (plain-http radio) doesn't apply to it.
+- **Launch test instances with `OMNIAMP_BACKGROUND=1`**: without it the app activates and takes the keyboard, and what the user is typing elsewhere lands in it. Screenshot by window id instead.
 - **Never stop test instances by name** (`pkill -x OmniAmp`): the user's own OmniAmp may be running. Keep the test PID and kill that (SIGTERM is handled and restores the device rate/hog).
 - After runtime tests, check `~/Library/Logs/DiagnosticReports` for new `OmniAmp*.ips` — that's how a main-actor isolation trap shows up.
 
