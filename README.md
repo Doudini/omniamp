@@ -1,6 +1,15 @@
 # OmniAmp
 
-OmniAmp is a music player for macOS inspired by Winamp, made for collectors of bootlegs and live recordings. Its music library tells official albums apart from live shows, bootlegs and demos, and sorts shows by date and venue. A taper's folders don't end up as a pile of "Unknown Album"s.
+OmniAmp is a music player for macOS inspired by Winamp, made for collectors of bootlegs and live recordings. Its music library tells official albums apart from live shows, bootlegs and demos, and sorts shows by date and venue.
+
+It's written in Swift with AppKit and AVAudioEngine and has no third-party dependencies.
+
+<p align="center">
+  <img src="docs/modern.png" alt="OmniAmp's modern look in the Green theme: 7-segment time display, spectrum, album art, hi-fi keys and playlist" width="330">
+  &nbsp;&nbsp;
+  <img src="docs/classic.png" alt="OmniAmp's classic look with the original Winamp 2.91 base skin: main window, equalizer and playlist" width="337">
+</p>
+<p align="center"><sub>The modern look (left) and the classic look with the original Winamp 2.91 skin (right).</sub></p>
 
 **Highlights**
 - **Made for bootlegs:** official albums, live albums, shows and bootlegs, and demos are kept apart. Browse by show (date and venue) instead of by artist.
@@ -13,15 +22,6 @@ OmniAmp is a music player for macOS inspired by Winamp, made for collectors of b
 - **Scrobbling** to Last.fm and ListenBrainz.
 - **Internet radio and podcasts** built in.
 - **Winamp skins:** real Winamp 2.x `.wsz` skins, next to a modern look.
-
-It's written in Swift with AppKit and AVAudioEngine and has no third-party dependencies.
-
-<p align="center">
-  <img src="docs/modern.png" alt="OmniAmp's modern look in the Green theme: 7-segment time display, spectrum, album art, hi-fi keys and playlist" width="330">
-  &nbsp;&nbsp;
-  <img src="docs/classic.png" alt="OmniAmp's classic look with the original Winamp 2.91 base skin: main window, equalizer and playlist" width="337">
-</p>
-<p align="center"><sub>The modern look (left) and the classic look with the original Winamp 2.91 skin (right).</sub></p>
 
 ## The player
 
