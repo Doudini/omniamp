@@ -190,7 +190,7 @@ final class TextCell: NSTableCellView {
 }
 
 /// A reusable text cell; return the cell (not its field) from viewFor, or the text isn't centred.
-func libraryCell(_ table: NSTableView, _ id: String) -> TextCell {
+@MainActor func libraryCell(_ table: NSTableView, _ id: String) -> TextCell {
     (table.makeView(withIdentifier: NSUserInterfaceItemIdentifier(id), owner: nil) as? TextCell) ?? TextCell(id)
 }
 

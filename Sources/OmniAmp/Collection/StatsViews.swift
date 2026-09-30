@@ -861,7 +861,7 @@ final class PageDocument: NSView {
 /// A row of the page grid: each card spans `span` of `columns` equal columns (12 pt gaps), so cards line up
 /// with the rows above and below; all as tall as the tallest, their content at the top.
 /// `equalHeights: false`: each card as tall as its own content (lists of very different lengths side by side).
-func dashGrid(_ items: [(NSView, Int)], columns: Int = 3, gap: CGFloat = 12, equalHeights: Bool = true) -> NSView {
+@MainActor func dashGrid(_ items: [(NSView, Int)], columns: Int = 3, gap: CGFloat = 12, equalHeights: Bool = true) -> NSView {
     let row = NSView()
     row.translatesAutoresizingMaskIntoConstraints = false
     var previous: NSView?
@@ -886,7 +886,7 @@ func dashGrid(_ items: [(NSView, Int)], columns: Int = 3, gap: CGFloat = 12, equ
 }
 
 /// A page heading: big white title, grey line under it.
-func dashHeading(_ title: String, _ subtitle: String?) -> NSView {
+@MainActor func dashHeading(_ title: String, _ subtitle: String?) -> NSView {
     let t = Dash.label(title, Dash.font(22, .semibold), Dash.text)
     var views: [NSView] = [t]
     if let subtitle { views.append(Dash.label(subtitle, Dash.font(12.5), Dash.text2)) }

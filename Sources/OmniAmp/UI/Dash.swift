@@ -55,7 +55,7 @@ enum Dash {
 
     /// Everything in a page gives way sideways (labels truncate, rows clip) instead of setting the window's
     /// minimum width: text and stack views resist being narrowed more strongly than the window keeps its size.
-    static func relaxWidth(_ view: NSView) {
+    @MainActor static func relaxWidth(_ view: NSView) {
         if let stack = view as? NSStackView { stack.setClippingResistancePriority(.defaultLow, for: .horizontal) }
         // Pills keep their size (squeezed, their labels ran into each other); text gives way.
         // Only ever lowered: a view meant to give way first (a card's note) keeps its lower priority.
@@ -65,7 +65,7 @@ enum Dash {
         view.subviews.forEach(relaxWidth)
     }
 
-    static func label(_ s: String, _ font: NSFont, _ color: NSColor) -> NSTextField {
+    @MainActor static func label(_ s: String, _ font: NSFont, _ color: NSColor) -> NSTextField {
         let l = NSTextField(labelWithString: s)
         l.font = font
         l.textColor = color
@@ -74,7 +74,7 @@ enum Dash {
     }
 
     /// A list in a card: no header or grid, rows with a soft accent selection.
-    static func applyList(_ table: NSTableView, in scroll: NSScrollView, rowHeight: CGFloat) {
+    @MainActor static func applyList(_ table: NSTableView, in scroll: NSScrollView, rowHeight: CGFloat) {
         table.headerView = nil
         table.rowHeight = rowHeight
         table.intercellSpacing = NSSize(width: table.numberOfColumns > 1 ? 8 : 0, height: 0)
@@ -92,7 +92,7 @@ enum Dash {
         ScrollFades.add(to: scroll, color: card)
     }
 
-    static func styleCard(_ v: NSView, color: NSColor = card) {
+    @MainActor static func styleCard(_ v: NSView, color: NSColor = card) {
         v.wantsLayer = true
         v.layer?.cornerRadius = 8
         v.layer?.masksToBounds = true
@@ -104,7 +104,7 @@ enum Dash {
 
     private static let cardFill = "dashCardFill"
 
-    private static func paintCard(_ v: NSView) {
+    @MainActor private static func paintCard(_ v: NSView) {
         guard let layer = v.layer, let fill = layer.value(forKey: cardFill) as? NSColor else { return }
         layer.borderColor = border.cgColor
         if !(v is NSScrollView) { layer.backgroundColor = fill.cgColor }
@@ -112,7 +112,7 @@ enum Dash {
 
     /// After a theme change: cards and list fades painted again, everything redrawn (the rest of the colors
     /// follow the theme by themselves). Pages keep their state; nothing is rebuilt.
-    static func restyle(_ root: NSView) {
+    @MainActor static func restyle(_ root: NSView) {
         paintCard(root)
         (root as? ScrollFades)?.recolor()
         root.needsDisplay = true
