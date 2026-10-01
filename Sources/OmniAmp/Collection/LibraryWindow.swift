@@ -1390,7 +1390,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Dragging releases or tracks out (to the playlist, or Finder): their files.
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
         if tableView === trackTable, row < tracks.count { return URL(exactPath: tracks[row].path) as NSURL }
-        if tableView === albumTable, row < items.count, case .album(let a) = items[row] { return URL(exactPath: a.folder, isDirectory: true) as NSURL }
+        if tableView === albumTable, row < items.count, case .album(let a) = items[row] { return LibraryDrag.writer(for: a, db: db) }
         return nil
     }
 }

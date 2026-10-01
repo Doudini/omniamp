@@ -665,7 +665,7 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
             tableView.selectRowIndexes(moved, byExtendingSelection: false)
             return true
         }
-        let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let urls = LibraryDrag.urls(from: pb)   // a library release sharing its folder: just its own files
         guard !urls.isEmpty else { return false }
         let at = row >= 0 && controller.visible == nil ? row : nil
         if let open = onOpenFiles { open(urls, at) } else { controller.add(urls, at: at) }

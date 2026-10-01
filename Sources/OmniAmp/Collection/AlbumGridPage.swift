@@ -292,6 +292,7 @@ final class AlbumGridPage: NSView, NSCollectionViewDataSource, NSCollectionViewD
             self.select(at)
             self.play(at)
         }
+        tile.dragWriter = { [weak self] a in LibraryDrag.writer(for: a, db: self?.db) }
         tile.onMenu = { [weak self, weak tile] in
             guard let self, let key = tile?.album?.key, let at = self.position(of: key) else { return nil }
             self.select(at)
@@ -434,6 +435,8 @@ final class AlbumTileView: NSView, NSDraggingSource {
     var onClick: ((Int) -> Void)?
     var onPlay: (() -> Void)?
     var onMenu: (() -> NSMenu?)?
+    /// What dragging the cover carries (LibraryDrag: its folder, or its own files when the folder is shared).
+    var dragWriter: ((LibraryAlbum) -> NSPasteboardWriting)?
 
     override var isFlipped: Bool { true }
 
@@ -613,7 +616,7 @@ final class AlbumTileView: NSView, NSDraggingSource {
 
     private func drag(_ event: NSEvent) {
         guard let a = album else { return }
-        let item = NSDraggingItem(pasteboardWriter: URL(exactPath: a.folder, isDirectory: true) as NSURL)
+        let item = NSDraggingItem(pasteboardWriter: dragWriter?(a) ?? URL(exactPath: a.folder, isDirectory: true) as NSURL)
         let snapshot = NSImage(size: cover.size)
         if let rep = bitmapImageRepForCachingDisplay(in: cover) {
             cacheDisplay(in: cover, to: rep)

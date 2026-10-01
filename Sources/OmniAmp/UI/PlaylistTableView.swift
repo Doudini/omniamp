@@ -91,8 +91,7 @@ final class DropView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self],
-                                                         options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let urls = LibraryDrag.urls(from: sender.draggingPasteboard)
         guard !urls.isEmpty else { return false }
         onDrop?(urls)
         return true
