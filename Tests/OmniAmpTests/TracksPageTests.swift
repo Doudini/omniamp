@@ -125,6 +125,8 @@ final class TracksPageTests: XCTestCase {
         XCTAssertEqual(Set(all.filter(\.multiDisc).map(\.track.title)), ["Misunderstood", "Sunken Treasure"])
         XCTAssertEqual(all.first { $0.track.title == "Floyd the Barber" }?.genre, "Grunge")
         XCTAssertEqual(all.first { $0.track.title == "Misunderstood" }?.year, 1996)
+        // Added as Recently Added has it: the release's newest file date on disk (1 here), not when it was scanned.
+        XCTAssertEqual(Set(all.map(\.added)), [1])
         XCTAssertEqual(try visible(LibraryFilter(scope: .unofficial)).map(\.track.album), ["1991-11-25 Amsterdam"])
         XCTAssertEqual(try visible(LibraryFilter(scope: .official)).count, 4)
         XCTAssertEqual(Set(try visible(LibraryFilter(), "blew").map(\.track.album)), ["Bleach", "1991-11-25 Amsterdam"])

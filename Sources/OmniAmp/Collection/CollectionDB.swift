@@ -729,7 +729,8 @@ final class CollectionDB {
     }
 
     /// Every track, for the Tracks list: read in one go, unsorted (the list sorts and filters them itself). Artists,
-    /// albums and genres repeat: each one's sort key is worked out once.
+    /// albums and genres repeat: each one's sort key is worked out once. "Added" is its release's, as Recently Added
+    /// has it (the newest file's date on disk; the scan time when there's none: NFS shares have no creation dates).
     func trackRows() throws -> [TrackRow] {
         var out: [TrackRow] = []
         var discs: [String: Int] = [:]
@@ -742,7 +743,7 @@ final class CollectionDB {
             return k
         }
         try db.query("""
-            SELECT \(Self.trackColumns), f.genre, coalesce(f.year, a.year), f.added, f.artist_key, a.kind, a.lossless, f.title_key
+            SELECT \(Self.trackColumns), f.genre, coalesce(f.year, a.year), a.added, f.artist_key, a.kind, a.lossless, f.title_key
             FROM files f JOIN albums a ON a.key = f.album_key
             """) { s in
             let t = Self.track(s), genre = s.optText(19) ?? ""
