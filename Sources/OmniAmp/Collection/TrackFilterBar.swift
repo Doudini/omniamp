@@ -1,9 +1,9 @@
 import AppKit
 
-/// Above the Tracks list: a slim strip with the filter's conditions as chips (× takes one away, Clear all of them),
-/// and under it a panel that folds open (closed by default) to set them: a year range over a chart of the library's
-/// years, how often and how lately songs were played, when they were added, genres, kinds of release, and two presets.
-/// It only shows and edits a TrackFilter; the list does the filtering.
+/// Above the Tracks list: a slim strip with the filter's conditions as chips (× takes one away, Clear all of them)
+/// and the presets, and under it a panel that folds open (closed by default) to set them: on the left a year range
+/// over a chart of the library's years, on the right how often and how lately songs were played (Listening) and when
+/// they were added, their kind and genres (Library). It only shows and edits a TrackFilter; the list filters.
 @MainActor
 final class TrackFilterBar: NSView {
     var filter = TrackFilter() { didSet { if filter != oldValue { sync() } } }
@@ -17,35 +17,42 @@ final class TrackFilterBar: NSView {
     static let stripHeight: CGFloat = 32
     private let toggle: Pill
     private let chips = NSStackView()
+    private let presets: Pill
     private let clear: Pill
     private let panel = NSView()
     private var panelHeight: NSLayoutConstraint!
     private let years = YearRangeSlider()
-    private var playPills: [(Pill, TrackFilter.Plays)] = []
-    private var lastPills: [(Pill, TrackFilter.LastPlayed)] = []
-    private var addedPills: [(Pill, TrackFilter.Added)] = []
-    private var kindPills: [(Pill, TrackFilter.KindGroup)] = []
+    private static let playOptions: [(String, TrackFilter.Plays)] = [("Any", .any), ("Never", .never), ("1+", .atLeast(1)),
+                                                                      ("10+", .atLeast(10)), ("50+", .atLeast(50)), ("100+", .atLeast(100))]
+    private static let lastOptions: [(String, TrackFilter.LastPlayed)] = [("Any", .any), ("This year", .thisYear), ("1+ yrs ago", .yearsAgo(1)),
+                                                                           ("5+ yrs ago", .yearsAgo(5)), ("Never", .never)]
+    private static let addedOptions: [(String, TrackFilter.Added)] = [("Any", .any), ("30 days", .days(30)), ("This year", .thisYear)]
+    private let plays = SegmentedPicker(playOptions.map(\.0))
+    private let last = SegmentedPicker(lastOptions.map(\.0))
+    private let added = SegmentedPicker(addedOptions.map(\.0))
+    private let kinds = SegmentedPicker(TrackFilter.KindGroup.allCases.map(\.title), multiple: true)
     private let genreRow = NSStackView()
-    private var addGenre: Pill!
+    private let addGenre = SegmentedPicker(["+ Genre"], momentary: true)
     /// The library's genres and how many tracks each has, for the genre menu.
     private var genreCounts: [(String, Int)] = []
-    private var content: NSStackView!
+    private var content: NSView!
 
     override init(frame: NSRect) {
         toggle = Pill("Filters", glyph: "▸", target: nil, action: #selector(toggled))
+        presets = Pill("Presets ▾", target: nil, action: #selector(presetMenu(_:)))
         clear = Pill("Clear", target: nil, action: #selector(clearAll))
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
-        toggle.target = self
-        clear.target = self
-        toggle.toolTip = "Narrow the list by year, plays, when it was added, genre or kind"
+        for p in [toggle, presets, clear] { p.target = self }
+        toggle.toolTip = "Narrow the list by year, plays, when it was added, kind or genre"
+        presets.toolTip = "Ready-made filters"
         chips.orientation = .horizontal
         chips.spacing = 6
         chips.setClippingResistancePriority(.defaultLow, for: .horizontal)
         chips.setHuggingPriority(.defaultLow, for: .horizontal)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let strip = NSStackView(views: [toggle, chips, spacer, clear])
+        let strip = NSStackView(views: [toggle, chips, spacer, presets, clear])
         strip.orientation = .horizontal
         strip.spacing = 8
         strip.edgeInsets = NSEdgeInsets(top: 0, left: 2, bottom: 0, right: 2)
@@ -75,67 +82,90 @@ final class TrackFilterBar: NSView {
 
     // MARK: Panel
 
+    /// Year on the left (the chart has room to read as a picture of the library); the choices on the right, under
+    /// two small headings.
     private func buildPanel() {
-        func label(_ s: String) -> NSTextField {
-            let l = Dash.label(s, Dash.font(11.5, .medium), Dash.text3)
-            l.widthAnchor.constraint(equalToConstant: 84).isActive = true
+        func heading(_ s: String) -> NSTextField {
+            let l = Dash.label("", Dash.font(10, .semibold), Dash.text3)
+            l.attributedStringValue = NSAttributedString(string: s.uppercased(), attributes: [
+                .font: Dash.font(10, .semibold), .foregroundColor: Dash.text3, .kern: 1.2,
+            ])
             return l
         }
-        func row(_ title: String, _ views: [NSView]) -> NSStackView {
-            let r = NSStackView(views: [label(title)] + views)
+        func row(_ title: String, _ view: NSView) -> NSStackView {
+            let l = Dash.label(title, Dash.font(11.5), Dash.text2)
+            l.widthAnchor.constraint(equalToConstant: 76).isActive = true
+            let r = NSStackView(views: [l, view])
             r.orientation = .horizontal
-            r.spacing = 6
+            r.spacing = 8
             r.alignment = .centerY
+            r.setHuggingPriority(.required, for: .horizontal)   // as wide as its choices (Add stays beside the genres)
             return r
         }
-        func pills<V>(_ options: [(String, V)], _ action: Selector) -> [(Pill, V)] {
-            options.enumerated().map { i, o in
-                let p = Pill(o.0, target: self, action: action)
-                p.tag = i
-                return (p, o.1)
-            }
+        for (picker, action) in [(plays, #selector(playsChanged)), (last, #selector(lastChanged)), (added, #selector(addedChanged)),
+                                 (kinds, #selector(kindsChanged)), (addGenre, #selector(genreMenu(_:)))] {
+            picker.target = self
+            picker.action = action
         }
-        let forgotten = Pill("Forgotten favourites", target: self, action: #selector(presetForgotten))
-        forgotten.toolTip = "Songs you played 10+ times but not in the last 5 years, most played first"
-        let never = Pill("Never played", target: self, action: #selector(presetNever))
-        never.toolTip = "Tracks with no plays (from Last.fm or OmniAmp)"
-        years.target = self
-        years.action = #selector(yearsChanged)
-        years.widthAnchor.constraint(lessThanOrEqualToConstant: 560).isActive = true
-        let yearsWide = years.widthAnchor.constraint(equalToConstant: 560)
-        yearsWide.priority = .defaultLow
-        yearsWide.isActive = true
-        playPills = pills([("Any", .any), ("Never", .never), ("1+", .atLeast(1)), ("10+", .atLeast(10)), ("50+", .atLeast(50)),
-                           ("100+", .atLeast(100))], #selector(playsClicked(_:)))
-        lastPills = pills([("Any", .any), ("This year", .thisYear), ("Over a year ago", .yearsAgo(1)), ("Over 5 years ago", .yearsAgo(5)),
-                           ("Never", .never)], #selector(lastClicked(_:)))
-        addedPills = pills([("Any", .any), ("Last 30 days", .days(30)), ("This year", .thisYear)], #selector(addedClicked(_:)))
-        kindPills = pills(TrackFilter.KindGroup.allCases.map { ($0.title, $0) }, #selector(kindClicked(_:)))
-        addGenre = Pill("Add", glyph: "+", target: self, action: #selector(genreMenu(_:)))
+        plays.toolTip = "Plays of the song, from your Last.fm history and OmniAmp's own"
+        last.toolTip = "When the song was last played"
+        kinds.toolTip = "Albums (with singles and compilations), official live albums, shows and bootlegs, demos and outtakes. None chosen: all"
         genreRow.orientation = .horizontal
         genreRow.spacing = 6
-        let plays = row("Plays", playPills.map(\.0))
-        plays.toolTip = "Plays of the song, from your Last.fm history and OmniAmp's own"
-        content = NSStackView(views: [
-            row("Presets", [forgotten, never]),
-            row("Year", [years]),
-            plays,
-            row("Last played", lastPills.map(\.0)),
-            row("Added", addedPills.map(\.0)),
-            row("Genre", [genreRow, addGenre]),
-            row("Kind", kindPills.map(\.0)),
+        let genres = NSStackView(views: [genreRow, addGenre])
+        genres.orientation = .horizontal
+        genres.spacing = 6
+        genres.setHuggingPriority(.required, for: .horizontal)
+        genreRow.setHuggingPriority(.required, for: .horizontal)
+
+        years.target = self
+        years.action = #selector(yearsChanged)
+        let left = NSStackView(views: [heading("Year"), years])
+        left.orientation = .vertical
+        left.alignment = .leading
+        left.spacing = 6
+        left.distribution = .fill
+        // The chart takes the column's height (as tall as the choices beside it).
+        years.setContentHuggingPriority(.defaultLow, for: .vertical)
+        years.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
+
+        let right = NSStackView(views: [
+            heading("Listening"), row("Plays", plays), row("Last played", last),
+            heading("Library"), row("Added", added), row("Kind", kinds), row("Genre", genres),
         ])
-        content.orientation = .vertical
-        content.alignment = .leading
-        content.spacing = 6
-        content.edgeInsets = NSEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
-        content.translatesAutoresizingMaskIntoConstraints = false
-        panel.addSubview(content)
+        right.orientation = .vertical
+        right.alignment = .leading
+        right.spacing = 6
+        right.setCustomSpacing(12, after: right.arrangedSubviews[2])
+        right.setContentHuggingPriority(.required, for: .horizontal)
+
+        let box = NSView()
+        for v in [left, right] as [NSView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            box.addSubview(v)
+        }
+        let leftWide = left.widthAnchor.constraint(equalToConstant: 520)
+        leftWide.priority = .defaultLow
         NSLayoutConstraint.activate([
-            content.topAnchor.constraint(equalTo: panel.topAnchor),
-            content.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            content.trailingAnchor.constraint(lessThanOrEqualTo: panel.trailingAnchor),
+            left.topAnchor.constraint(equalTo: box.topAnchor),
+            left.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+            left.bottomAnchor.constraint(equalTo: right.bottomAnchor),
+            left.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
+            leftWide,
+            years.heightAnchor.constraint(greaterThanOrEqualToConstant: 70),
+            right.topAnchor.constraint(equalTo: box.topAnchor),
+            right.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: 32),
+            right.trailingAnchor.constraint(lessThanOrEqualTo: box.trailingAnchor),
+            right.bottomAnchor.constraint(equalTo: box.bottomAnchor),
         ])
+        box.translatesAutoresizingMaskIntoConstraints = false
+        panel.addSubview(box)
+        NSLayoutConstraint.activate([
+            box.topAnchor.constraint(equalTo: panel.topAnchor, constant: 8),
+            box.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 8),
+            box.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -8),
+        ])
+        content = box
     }
 
     /// The library as the slider and the genre menu see it (from all tracks, not the filtered ones).
@@ -146,7 +176,7 @@ final class TrackFilterBar: NSView {
     }
 
     private func setOpen(_ open: Bool, animated: Bool) {
-        let h = open ? content.fittingSize.height : 0
+        let h = open ? content.fittingSize.height + 8 : 0
         if open { panel.isHidden = false }
         toggle.glyph = open ? "▾" : "▸"
         toggle.needsDisplay = true
@@ -180,10 +210,10 @@ final class TrackFilterBar: NSView {
             chips.addArrangedSubview(chip)
         }
         years.selection = f.years
-        for (p, v) in playPills { p.isOn = f.plays == v }
-        for (p, v) in lastPills { p.isOn = f.lastPlayed == v }
-        for (p, v) in addedPills { p.isOn = f.added == v }
-        for (p, v) in kindPills { p.isOn = f.kinds.contains(v) }
+        plays.selected = Set(Self.playOptions.indices.filter { Self.playOptions[$0].1 == f.plays })
+        last.selected = Set(Self.lastOptions.indices.filter { Self.lastOptions[$0].1 == f.lastPlayed })
+        added.selected = Set(Self.addedOptions.indices.filter { Self.addedOptions[$0].1 == f.added })
+        kinds.selected = Set(TrackFilter.KindGroup.allCases.indices.filter { f.kinds.contains(TrackFilter.KindGroup.allCases[$0]) })
         genreRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for g in f.genres {
             genreRow.addArrangedSubview(FilterChip(g) { [weak self] in
@@ -191,7 +221,7 @@ final class TrackFilterBar: NSView {
                 self.change(self.filter.removing(.genre(g)))
             })
         }
-        genreRow.isHidden = f.genres.isEmpty   // empty, it would push Add to the far end
+        genreRow.isHidden = f.genres.isEmpty
         addGenre.isEnabled = !genreCounts.isEmpty
     }
 
@@ -209,6 +239,19 @@ final class TrackFilterBar: NSView {
     }
 
     @objc private func clearAll() { change(TrackFilter()) }
+
+    @objc private func presetMenu(_ sender: Pill) {
+        let menu = NSMenu()
+        for (title, tip, action) in [("Forgotten favourites", "Songs you played 10+ times but not in the last 5 years, most played first",
+                                      #selector(presetForgotten)),
+                                     ("Never played", "Tracks with no plays (from Last.fm or OmniAmp)", #selector(presetNever))] {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.toolTip = tip
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
     @objc private func presetForgotten() { filter = .forgottenFavourites; onPreset?(.forgottenFavourites, TrackSort(column: .plays, ascending: false)) }
     @objc private func presetNever() { filter = .neverPlayed; onPreset?(.neverPlayed, nil) }
 
@@ -218,35 +261,34 @@ final class TrackFilterBar: NSView {
         change(f)
     }
 
-    @objc private func playsClicked(_ sender: Pill) {
+    @objc private func playsChanged() {
         var f = filter
-        f.plays = playPills[sender.tag].1
+        f.plays = plays.selected.first.map { Self.playOptions[$0].1 } ?? .any
         change(f)
     }
 
-    @objc private func lastClicked(_ sender: Pill) {
+    @objc private func lastChanged() {
         var f = filter
-        f.lastPlayed = lastPills[sender.tag].1
+        f.lastPlayed = last.selected.first.map { Self.lastOptions[$0].1 } ?? .any
         change(f)
     }
 
-    @objc private func addedClicked(_ sender: Pill) {
+    @objc private func addedChanged() {
         var f = filter
-        f.added = addedPills[sender.tag].1
+        f.added = added.selected.first.map { Self.addedOptions[$0].1 } ?? .any
         change(f)
     }
 
-    @objc private func kindClicked(_ sender: Pill) {
+    @objc private func kindsChanged() {
         var f = filter
-        let k = kindPills[sender.tag].1
-        if f.kinds.contains(k) { f.kinds.remove(k) } else { f.kinds.insert(k) }
+        f.kinds = Set(kinds.selected.map { TrackFilter.KindGroup.allCases[$0] })
         // All four on is the same as none: every kind.
         if f.kinds.count == TrackFilter.KindGroup.allCases.count { f.kinds = [] }
         change(f)
     }
 
     /// The library's genres, most tracks first; the ones already chosen left out.
-    @objc private func genreMenu(_ sender: Pill) {
+    @objc private func genreMenu(_ sender: SegmentedPicker) {
         let menu = NSMenu()
         let chosen = Set(filter.genres.map(Keys.fold))
         for (g, n) in genreCounts where !chosen.contains(Keys.fold(g)) {
@@ -263,6 +305,112 @@ final class TrackFilterBar: NSView {
         f.genres.append(g)
         change(f)
     }
+}
+
+// MARK: - Segmented picker
+
+/// Choices in one rounded box, divided by hairlines: one at a time (the first being "any", drawn quietly so only a
+/// real choice stands out), several (none on: all), or a single momentary button in the same style.
+final class SegmentedPicker: NSControl {
+    let titles: [String]
+    let multiple: Bool
+    let momentary: Bool
+    var selected: Set<Int> = [] { didSet { if selected != oldValue { needsDisplay = true } } }
+    private var hover: Int? { didSet { if hover != oldValue { needsDisplay = true } } }
+    private var pressed = false { didSet { needsDisplay = true } }
+    override var isEnabled: Bool { didSet { needsDisplay = true } }
+
+    init(_ titles: [String], multiple: Bool = false, momentary: Bool = false) {
+        self.titles = titles
+        self.multiple = multiple
+        self.momentary = momentary
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private static let pad: CGFloat = 10
+    private func text(_ i: Int, _ color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: titles[i], attributes: [.font: Dash.font(11.5, .medium), .foregroundColor: color])
+    }
+    private var widths: [CGFloat] { titles.indices.map { ceil(text($0, .white).size().width) + 2 * Self.pad } }
+    override var intrinsicContentSize: NSSize { NSSize(width: widths.reduce(0, +), height: 22) }
+
+    private func segment(at x: CGFloat) -> Int? {
+        var left: CGFloat = 0
+        for (i, w) in widths.enumerated() {
+            if x >= left, x < left + w { return i }
+            left += w
+        }
+        return nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let r = bounds.insetBy(dx: 0.5, dy: 0.5), radius = r.height / 2
+        let outline = NSBezierPath(roundedRect: r, xRadius: radius, yRadius: radius)
+        Dash.card.setFill()
+        outline.fill()
+        NSGraphicsContext.saveGraphicsState()
+        outline.addClip()
+        var x: CGFloat = 0
+        for (i, w) in widths.enumerated() {
+            let seg = NSRect(x: x, y: 0, width: w, height: bounds.height)
+            let on = momentary ? pressed : selected.contains(i)
+            // The "any" choice (the first of one-at-a-time choices) is quiet when it's on: nothing is filtered.
+            let quiet = !multiple && !momentary && i == 0
+            if on {
+                (quiet ? Dash.cardRaised : Dash.accent.withAlphaComponent(0.18)).setFill()
+                seg.fill()
+            } else if hover == i, isEnabled {
+                Dash.cardRaised.setFill()
+                seg.fill()
+            }
+            if i > 0 {
+                Dash.border.setFill()
+                NSRect(x: x, y: 4, width: 1, height: bounds.height - 8).fill()
+            }
+            let color: NSColor = !isEnabled ? Dash.text3 : on && !quiet ? Dash.accent : on || hover == i ? Dash.text : Dash.text2
+            let t = text(i, color), s = t.size()
+            t.draw(at: NSPoint(x: x + (w - s.width) / 2, y: (bounds.height - s.height) / 2))
+            x += w
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        let anyOn = !momentary && selected.contains(where: { multiple || $0 > 0 })
+        (anyOn ? Dash.accent.withAlphaComponent(0.45) : Dash.border).setStroke()
+        outline.stroke()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+    override func mouseMoved(with event: NSEvent) { hover = segment(at: convert(event.locationInWindow, from: nil).x) }
+    override func mouseExited(with event: NSEvent) { hover = nil }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled, let i = segment(at: convert(event.locationInWindow, from: nil).x) else { return }
+        if momentary {
+            pressed = true
+            sendAction(action, to: target)
+            pressed = false
+            return
+        }
+        if multiple {
+            if selected.contains(i) { selected.remove(i) } else { selected.insert(i) }
+        } else {
+            guard !selected.contains(i) else { return }
+            selected = [i]
+        }
+        sendAction(action, to: target)
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { momentary ? .button : .radioGroup }
+    override func accessibilityLabel() -> String? { toolTip ?? titles.joined(separator: ", ") }
+    override func accessibilityValue() -> Any? { selected.sorted().map { titles[$0] }.joined(separator: ", ") }
 }
 
 // MARK: - Chip
@@ -332,7 +480,7 @@ final class YearRangeSlider: NSControl {
     private var dragging: Int?   // 0 the low handle, 1 the high one
 
     override var isFlipped: Bool { true }
-    override var intrinsicContentSize: NSSize { NSSize(width: 360, height: 46) }
+    override var intrinsicContentSize: NSSize { NSSize(width: 360, height: 70) }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -357,7 +505,8 @@ final class YearRangeSlider: NSControl {
         return lo...max(hi, lo + 1)
     }
     private var shown: ClosedRange<Int> { selection.map { $0.clamped(to: span) } ?? span }
-    private var track: NSRect { NSRect(x: 8, y: 30, width: bounds.width - 16, height: 3) }
+    /// The track along the bottom (the years under it); the chart fills what's above.
+    private var track: NSRect { NSRect(x: 8, y: bounds.height - 20, width: bounds.width - 16, height: 3) }
 
     private func x(_ year: Int) -> CGFloat {
         let s = span, t = track
@@ -371,13 +520,16 @@ final class YearRangeSlider: NSControl {
 
     override func draw(_ dirtyRect: NSRect) {
         let s = span, sel = shown, t = track
-        // The chart: a bar a year, the chosen years in the chart color.
-        let most = CGFloat(histogram.values.max() ?? 1), chartTop: CGFloat = 2, chartH = t.minY - 6 - chartTop
+        // The chart: a bar a year (square root: a year with a few tracks still shows), the chosen years in the chart
+        // color, over a faint baseline.
+        let most = sqrt(CGFloat(histogram.values.max() ?? 1)), chartTop: CGFloat = 2, base = t.minY - 6, chartH = base - chartTop
         let barW = max(1, t.width / CGFloat(s.upperBound - s.lowerBound + 1) - 1)
+        Dash.border.withAlphaComponent(0.6).setFill()
+        NSRect(x: t.minX, y: base, width: t.width, height: 1).fill()
         for (y, n) in histogram where s.contains(y) {
-            let h = max(1, CGFloat(n) / most * chartH)
+            let h = max(2, sqrt(CGFloat(n)) / most * chartH)
             (sel.contains(y) ? Dash.amount : Dash.compare.withAlphaComponent(0.35)).setFill()
-            NSRect(x: x(y) - barW / 2, y: t.minY - 6 - h, width: barW, height: h).fill()
+            NSRect(x: x(y) - barW / 2, y: base - h, width: barW, height: h).fill()
         }
         // The track, the chosen part brighter, and the handles.
         Dash.border.setFill()
