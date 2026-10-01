@@ -52,6 +52,21 @@ final class TracksPageTests: XCTestCase {
         XCTAssertEqual(Array(titles(TrackSort(column: .genre)).prefix(2)), ["Hunter", "Postcards"])
     }
 
+    func testPlaysAndLastPlayed() {
+        let counts = [rows[1].countKey: PlayCount(plays: 7, last: 3000),   // Hunter
+                      rows[2].countKey: PlayCount(plays: 2, last: 9000),   // Pictures of You
+                      rows[5].countKey: PlayCount(plays: 7, last: 1000)]   // Postcards
+        // Most played first (ties by artist), then the never played in their natural order.
+        XCTAssertEqual(TrackSort(column: .plays, ascending: false).sorted(rows, counts: counts).map(\.track.title),
+                       ["Postcards", "Hunter", "Pictures of You", "Plainsong", "High", "Open"])
+        // Last played: never played at the end, either way.
+        XCTAssertEqual(Array(TrackSort(column: .lastPlayed).sorted(rows, counts: counts).map(\.track.title).prefix(3)),
+                       ["Postcards", "Hunter", "Pictures of You"])
+        XCTAssertEqual(Array(TrackSort(column: .lastPlayed, ascending: false).sorted(rows, counts: counts).map(\.track.title).prefix(3)),
+                       ["Pictures of You", "Hunter", "Postcards"])
+        XCTAssertEqual(rows[2].countKey, "cure\u{1}" + Keys.title("Pictures of You"))
+    }
+
     func testPrefRoundTrip() {
         XCTAssertEqual(TrackSort(pref: "year:desc"), TrackSort(column: .year, ascending: false))
         XCTAssertEqual(TrackSort(pref: TrackSort(column: .album).pref), TrackSort(column: .album))

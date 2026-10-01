@@ -741,14 +741,15 @@ final class CollectionDB {
             return k
         }
         try db.query("""
-            SELECT \(Self.trackColumns), f.genre, coalesce(f.year, a.year), f.added, f.artist_key, a.kind, a.lossless
+            SELECT \(Self.trackColumns), f.genre, coalesce(f.year, a.year), f.added, f.artist_key, a.kind, a.lossless, f.title_key
             FROM files f JOIN albums a ON a.key = f.album_key
             """) { s in
             let t = Self.track(s), genre = s.optText(19) ?? ""
             if let d = t.disc { discs[t.albumKey] = max(discs[t.albumKey] ?? 1, d) }
             let keys = (key(t.artist, &artists) { TrackRow.sortKey(Keys.sortName($0)) }, key(t.album, &albums, TrackRow.sortKey),
                         key(genre, &genres, TrackRow.sortKey))
-            var r = TrackRow(track: t, genre: genre, year: s.optInt(20), added: s.optDouble(21) ?? 0, artistKey: s.text(22), keys: keys)
+            var r = TrackRow(track: t, genre: genre, year: s.optInt(20), added: s.optDouble(21) ?? 0, artistKey: s.text(22),
+                             titleKey: s.optText(25) ?? Keys.title(t.title), keys: keys)
             r.official = s.int(23) <= ReleaseKind.live.rawValue
             r.lossless = s.int(24) == 1
             out.append(r)

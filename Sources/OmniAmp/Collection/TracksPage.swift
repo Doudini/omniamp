@@ -1,6 +1,7 @@
 import AppKit
 
-/// Tracks: the whole library as one sortable list, like Winamp's. Columns can be sorted (click a header, again to
+/// Tracks: the whole library as one sortable list, like Winamp's, with each song's plays and when it last played
+/// (Last.fm's history and OmniAmp's own, by song: every recording of it). Columns can be sorted (click a header, again to
 /// reverse), resized, moved and hidden (right-click the header); the layout and the sort are remembered. Filters and
 /// the search narrow the list. Return or a double-click plays (one track: its album from there; several: those),
 /// ⌥Return adds, rows drag to the playlist.
@@ -11,12 +12,21 @@ import AppKit
 
 /// A track as the list shows it, with its sort keys worked out once (folding strings for every comparison would be
 /// most of a sort's cost).
+/// A song's plays and the last one (UNIX time; 0: never).
+struct PlayCount: Sendable, Equatable {
+    var plays = 0
+    var last = 0
+}
+
 struct TrackRow: Sendable {
     let track: LibraryTrack
     let genre: String
     let year: Int?
     let added: Double
     let artistKey: String
+    /// The song's key (Keys.title): its plays are looked up by artist and song.
+    let titleKey: String
+    var countKey: String { artistKey + "\u{1}" + titleKey }
     /// Its release: official (album, single, live album) or not, lossless (what the filters look at).
     var official = true
     var lossless = false
@@ -25,13 +35,14 @@ struct TrackRow: Sendable {
     let artistSort: String, albumSort: String, titleSort: String, genreSort: String
 
     /// `keys`: sort keys already worked out for this artist, album and genre (they repeat: each is folded once).
-    init(track: LibraryTrack, genre: String, year: Int?, added: Double, artistKey: String,
+    init(track: LibraryTrack, genre: String, year: Int?, added: Double, artistKey: String, titleKey: String? = nil,
          keys: (artist: String, album: String, genre: String)? = nil) {
         self.track = track
         self.genre = genre
         self.year = year
         self.added = added
         self.artistKey = artistKey
+        self.titleKey = titleKey ?? Keys.title(track.title)
         artistSort = keys?.artist ?? Self.sortKey(Keys.sortName(track.artist))
         albumSort = keys?.album ?? Self.sortKey(track.album)
         titleSort = Self.sortKey(track.title)
@@ -65,7 +76,7 @@ struct TrackRow: Sendable {
 
 /// The list's columns. The ids are kept in the user's defaults (the table's saved layout): never rename one.
 enum TrackColumn: String, CaseIterable, Sendable {
-    case length, title, artist, album, track, genre, year, format, added
+    case length, title, artist, album, track, genre, year, format, added, plays, lastPlayed
 
     var title: String {
         switch self {
@@ -78,6 +89,8 @@ enum TrackColumn: String, CaseIterable, Sendable {
         case .year: "Year"
         case .format: "Format"
         case .added: "Added"
+        case .plays: "Plays"
+        case .lastPlayed: "Last Played"
         }
     }
     var width: CGFloat {
@@ -91,10 +104,12 @@ enum TrackColumn: String, CaseIterable, Sendable {
         case .year: 44
         case .format: 82
         case .added: 84
+        case .plays: 46
+        case .lastPlayed: 96
         }
     }
     /// Numbers read best right-aligned.
-    var rightAligned: Bool { [.length, .track, .year].contains(self) }
+    var rightAligned: Bool { [.length, .track, .year, .plays].contains(self) }
     /// The text columns share the width the list has (so it fits without scrolling sideways); the rest keep theirs.
     var stretches: Bool { [.title, .artist, .album, .genre].contains(self) }
 }
@@ -113,16 +128,17 @@ struct TrackSort: Equatable, Sendable {
     }
     var pref: String { column.rawValue + (ascending ? ":asc" : ":desc") }
 
-    func sorted(_ rows: [TrackRow]) -> [TrackRow] {
+    /// `counts`: plays per song (TrackRow.countKey), for the Plays and Last Played columns.
+    func sorted(_ rows: [TrackRow], counts: [String: PlayCount] = [:]) -> [TrackRow] {
         rows.sorted { a, b in
-            let c = primary(a, b)
+            let c = primary(a, b, counts)
             if c != 0 { return ascending ? c < 0 : c > 0 }
             return Self.natural(a, b)
         }
     }
 
     /// -1, 0 or 1 by the column; a missing value after a present one either way (so it's flipped back for descending).
-    private func primary(_ a: TrackRow, _ b: TrackRow) -> Int {
+    private func primary(_ a: TrackRow, _ b: TrackRow, _ counts: [String: PlayCount]) -> Int {
         func str(_ x: String, _ y: String) -> Int {
             if x.isEmpty != y.isEmpty { return (x.isEmpty ? 1 : -1) * (ascending ? 1 : -1) }
             return x < y ? -1 : x > y ? 1 : 0
@@ -147,6 +163,11 @@ struct TrackSort: Equatable, Sendable {
         case .track:
             let d = num(a.track.disc ?? 1, b.track.disc ?? 1)
             return d != 0 ? d : num(a.track.number, b.track.number)
+        case .plays: return num(counts[a.countKey]?.plays ?? 0, counts[b.countKey]?.plays ?? 0)
+        case .lastPlayed:
+            // Never played: last, either way.
+            let x = counts[a.countKey]?.last ?? 0, y = counts[b.countKey]?.last ?? 0
+            return num(x > 0 ? x : nil, y > 0 ? y : nil)
         }
     }
 
@@ -194,6 +215,10 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private var generation = 0
     private var loaded = false
     private var emptyText = ""
+    /// Plays per song, read after the list is on screen (never holding it up), again when the history changes.
+    private var counts: [String: PlayCount] = [:]
+    private var countsRead = false
+    private let observers = Observers()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -230,6 +255,9 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         let rowMenu = NSMenu()
         rowMenu.delegate = self
         table.menu = rowMenu
+        observers.add(NotificationCenter.default.addObserver(forName: ListeningHistory.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { if self?.loaded == true { self?.readCounts() } }
+        })
         let headerMenu = NSMenu()
         headerMenu.delegate = self
         table.headerView?.menu = headerMenu
@@ -263,19 +291,38 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         self.filter = filter
         self.query = query.trimmingCharacters(in: .whitespaces)
         generation += 1
-        let gen = generation, sort = sort, q = self.query
+        let gen = generation, sort = sort, q = self.query, counts = counts
         let known = stale ? nil : all
         stale = false
         if !loaded { showEmpty("Loading…") }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let db = try? CollectionDB()
-            let everything = known ?? sort.sorted((try? db?.trackRows()) ?? [])
+            let everything = known ?? sort.sorted((try? db?.trackRows()) ?? [], counts: counts)
             let ids = q.isEmpty ? nil : ((try? db?.fileIDs(matching: q)) ?? [])
             let list = TrackRow.visible(everything, filter: filter, ids: ids)
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.all = everything
                 self.show(list)
+                if !self.countsRead { self.readCounts() }
+            }
+        }
+    }
+
+    /// Plays per song, in the background. Sorted by plays: sorted again; else just those columns redrawn.
+    private func readCounts() {
+        countsRead = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let c = (try? CollectionDB().playCounts()) ?? [:]
+            DispatchQueue.main.async { [weak self] in
+                guard let self, c != self.counts else { return }
+                self.counts = c
+                if self.sort.column == .plays || self.sort.column == .lastPlayed {
+                    self.resort(self.sort)
+                } else {
+                    let cols = [TrackColumn.plays, .lastPlayed].map { self.table.column(withIdentifier: NSUserInterfaceItemIdentifier($0.rawValue)) }
+                    self.table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<self.rows.count), columnIndexes: IndexSet(cols.filter { $0 >= 0 }))
+                }
             }
         }
     }
@@ -309,11 +356,11 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         UserDefaults.standard.set(s.pref, forKey: Pref.libraryTracksSort)
         showSortIndicator()
         generation += 1
-        let gen = generation, everything = all, shown = rows, whole = rows.count == all.count
+        let gen = generation, everything = all, shown = rows, whole = rows.count == all.count, counts = counts
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // The whole library sorted (for the next filter or search), and what's listed now.
-            let sortedAll = s.sorted(everything)
-            let sorted = whole ? sortedAll : s.sorted(shown)
+            let sortedAll = s.sorted(everything, counts: counts)
+            let sorted = whole ? sortedAll : s.sorted(shown, counts: counts)
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.all = sortedAll
@@ -477,9 +524,27 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             f.stringValue = r.added > 0 ? Self.day.string(from: Date(timeIntervalSince1970: r.added)) : ""
             f.font = Dash.mono(11)
             f.textColor = Dash.text3
+        case .plays:
+            let n = counts[r.countKey]?.plays ?? 0
+            f.stringValue = n > 0 ? n.formatted() : ""
+            f.font = Dash.mono(11)
+            // Counted by song: a live recording shows the studio one's plays too.
+            if n > 0 { f.toolTip = "\(n.formatted()) play\(n == 1 ? "" : "s") of this song (every recording)" }
+        case .lastPlayed:
+            let last = counts[r.countKey]?.last ?? 0
+            let when = Date(timeIntervalSince1970: TimeInterval(last))
+            f.stringValue = last > 0 ? Self.ago.localizedString(for: when, relativeTo: Date()) : ""
+            f.toolTip = last > 0 ? when.formatted(date: .long, time: .shortened) : nil
+            f.textColor = Dash.text3
         }
         return cell
     }
+
+    private static let ago: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
 
     private static let day: DateFormatter = {
         let f = DateFormatter()

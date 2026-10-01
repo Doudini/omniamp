@@ -215,6 +215,24 @@ extension CollectionDB {
         try db.exec("DELETE FROM scrobbles WHERE source = 1")
     }
 
+    /// Plays per song (artist key + "\u{1}" + title key, as TrackRow.countKey): how many, and the last one. Every
+    /// spelling of a title counts for the song ("Blew (Remastered)" is "Blew").
+    func playCounts() throws -> [String: PlayCount] {
+        var out: [String: PlayCount] = [:]
+        var titleKeys: [String: String] = [:]
+        try db.query("SELECT artist_key, title, count(*), max(ts) FROM scrobbles GROUP BY artist_key, title") { s in
+            let title = s.text(1)
+            let tk: String
+            if let k = titleKeys[title] { tk = k } else { tk = Keys.title(title); titleKeys[title] = tk }
+            let key = s.text(0) + "\u{1}" + tk
+            var c = out[key] ?? PlayCount()
+            c.plays += s.int(2)
+            c.last = max(c.last, s.int(3))
+            out[key] = c
+        }
+        return out
+    }
+
     /// OmniAmp's own plays: how many, and since when.
     func ownPlays() throws -> (count: Int, since: Int?) {
         var r: (Int, Int?) = (0, nil)

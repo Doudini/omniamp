@@ -113,6 +113,19 @@ final class PlayHistoryTests: XCTestCase {
         XCTAssertEqual(try d.playRange().count, 1)
     }
 
+    func testPlayCountsBySong() throws {
+        let d = try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite"))
+        try d.addPlays([LastFM.Play(ts: 100, artist: "Nirvana", album: "Bleach", title: "Blew (Remastered)", artistMBID: nil),
+                        LastFM.Play(ts: 300, artist: "Nirvana", album: "Bleach", title: "Blew", artistMBID: nil)])
+        try d.addOwnPlay(play(500), path: "/m/blew.flac")
+        try d.addOwnPlay(play(200, title: "School"), path: nil)
+        let c = try d.playCounts()
+        // Every spelling and source of one song together, keyed like the Tracks list (artist key + title key).
+        XCTAssertEqual(c["nirvana\u{1}" + Keys.title("Blew")], PlayCount(plays: 3, last: 500))
+        XCTAssertEqual(c["nirvana\u{1}" + Keys.title("School")], PlayCount(plays: 1, last: 200))
+        XCTAssertEqual(c.count, 2)
+    }
+
     func testListeningStatsIncludeOwnPlays() throws {
         let d = try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite"))
         try d.addOwnPlay(play(1_700_000_000), path: nil)
