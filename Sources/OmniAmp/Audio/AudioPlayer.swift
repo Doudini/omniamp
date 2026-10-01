@@ -934,6 +934,7 @@ final class AudioPlayer {
     /// The file is open: set the device up for it and start it.
     private func start(_ file: AVAudioFile, url: URL, from start: Double, range: (start: Double, end: Double?)?) -> Bool {
         let item = Item(id: nextItemID, file: file, url: url, range: range, offset: start)
+        FileWarmer.warm(url)   // a FLAC on the NAS: in the cache before a seek needs it
         // No audio in it (a header-only or cut-off download, a CUE range past the end): nothing would ever finish,
         // so it would show "playing" forever. Unplayable instead, like a file that doesn't open.
         guard item.trackEnd > item.trackStart else {
@@ -1133,6 +1134,7 @@ final class AudioPlayer {
 
     func stop() {
         openToken += 1   // a file still being opened won't start
+        FileWarmer.cancel()
         opening = false
         endedByItself = false
         pendingNext = nil
@@ -1246,6 +1248,7 @@ final class AudioPlayer {
         guard engine.isRunning || currentTime >= duration - 1 else { return }
         if let next = upcoming {
             current = next
+            FileWarmer.warm(next.url)
             upcoming = nil
             clockBase = 0
             // The previous track's tail is still playing out: the new one is heard once it has.
