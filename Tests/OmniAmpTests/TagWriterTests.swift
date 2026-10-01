@@ -45,6 +45,25 @@ final class TagWriterTests: XCTestCase {
         XCTAssertEqual(Array(d.suffix(audio.count)), audio, "audio bytes changed")
     }
 
+    // MARK: The file's date
+
+    func testWritingKeepsTheFilesDate() throws {
+        // The date the music came into the collection stays, whether the tag fits in place or the file is rewritten.
+        let old = Date(timeIntervalSince1970: 1_262_304_000)   // 2010-01-01
+        let inPlace = try mp3(frame("TIT2", "Plea"), padding: 1024)
+        let grown = try mp3(frame("TIT2", "Plea"), padding: 0)
+        for url in [inPlace, grown] {
+            try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: url.path)
+            XCTAssertEqual(TagWriter.write(tags, to: url.path, backupDir: nil), .written)
+            XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date, old, url.lastPathComponent)
+            XCTAssertEqual(read(url).album, "Flightsafety")
+        }
+        // Asked not to (keepDate: false), the date is the write's.
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: inPlace.path)
+        XCTAssertEqual(TagWriter.write(BasicTags(genre: "Rock"), to: inPlace.path, backupDir: nil, keepDate: false), .written)
+        XCTAssertNotEqual(try FileManager.default.attributesOfItem(atPath: inPlace.path)[.modificationDate] as? Date, old)
+    }
+
     // MARK: MP3
 
     func testMP3InPlaceKeepsOtherFramesAndArtist() throws {

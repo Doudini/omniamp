@@ -294,7 +294,8 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
             let coverBytes = wantCover ? data : nil
             let result = await Task.detached { FindInfoSheet.write(tags, paths: paths, cover: coverBytes, folder: folder, release: release) }.value
             if coverBytes != nil { LibraryArt.shared.forget(folder: folder) }
-            MusicCollection.shared.rescan(folder: folder)
+            // The files keep their dates (TagWriter): told to read them again rather than left to notice.
+            MusicCollection.shared.reread(paths, in: folder)
             self.onDone?(result)
         }
     }

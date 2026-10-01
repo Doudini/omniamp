@@ -276,6 +276,12 @@ final class CollectionDB {
     // MARK: Writing (the writer connection only)
 
     /// Size and mtime of every file under `scope` (a folder), to tell new and changed files from known ones.
+    /// Files OmniAmp rewrote without changing their size or date (tags written, the date kept): read again on the
+    /// next scan of their folder.
+    func markChanged(paths: [String]) throws {
+        try db.transaction { for p in paths { try db.run("UPDATE files SET mtime = -1 WHERE path = ?", [p]) } }
+    }
+
     func known(under scope: String) throws -> [String: (size: Int64, mtime: Double)] {
         var out: [String: (Int64, Double)] = [:]
         // Keys under a folder sort between "folder/" and "folder0" ("0" follows "/").

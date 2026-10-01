@@ -20,6 +20,9 @@ struct BasicTags: Equatable, Sendable {
 /// When the new tag fits in the space the old one had (tags usually carry padding), only the tag is
 /// rewritten in place; otherwise the file is copied to a temporary file next to it, with room to spare, and
 /// swapped in. The old tag bytes are saved in the cache folder first (TagBackups/), so a change can be undone.
+///
+/// The file keeps its modification date: it's when the music came into the collection (Recently Added, the Tracks
+/// list), not when a tag was fixed. Whoever writes tells the library to read the file again (the date won't).
 enum TagWriter {
     enum Outcome: Equatable {
         case written
@@ -28,8 +31,25 @@ enum TagWriter {
         case failed(String)
     }
 
-    static func write(_ tags: BasicTags, to path: String, backupDir: URL? = TagWriter.backupDir) -> Outcome {
+    static func write(_ tags: BasicTags, to path: String, backupDir: URL? = TagWriter.backupDir, keepDate: Bool = true) -> Outcome {
         guard !tags.isEmpty else { return .unchanged }
+        let before = keepDate ? times(path) : nil
+        let outcome = writeTags(tags, to: path, backupDir: backupDir)
+        // Set back by path, after the file is closed: a rewrite swapped in a new file, and NFS writes at close.
+        if outcome == .written, let t = before {
+            var ts = [t.0, t.1]
+            _ = utimensat(AT_FDCWD, path, &ts, 0)
+        }
+        return outcome
+    }
+
+    /// Access and modification times, as utimensat wants them.
+    private static func times(_ path: String) -> (timespec, timespec)? {
+        var st = stat()
+        return stat(path, &st) == 0 ? (st.st_atimespec, st.st_mtimespec) : nil
+    }
+
+    private static func writeTags(_ tags: BasicTags, to path: String, backupDir: URL?) -> Outcome {
         let fd = open(path, O_RDWR)
         guard fd >= 0 else { return .failed(String(cString: strerror(errno))) }
         defer { close(fd) }

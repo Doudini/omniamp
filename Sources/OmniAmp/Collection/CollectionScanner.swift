@@ -120,6 +120,14 @@ final class CollectionScanner: @unchecked Sendable {
         }
     }
 
+    /// Files to read again however they look on disk (OmniAmp wrote their tags and kept their date). Queued with the
+    /// writes, so a scan started after this sees them as changed.
+    func markChanged(paths: [String]) {
+        writes.async {
+            do { try self.db.markChanged(paths: paths) } catch { NSLog("OmniAmp: library: %@", "\(error)") }
+        }
+    }
+
     /// The user took a folder out of the library: its files go (after anything still being written).
     func forget(root: String) {
         writes.async {

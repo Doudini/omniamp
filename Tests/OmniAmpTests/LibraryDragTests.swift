@@ -55,4 +55,15 @@ final class LibraryDragTests: XCTestCase {
         pb.writeObjects([LibraryDrag.writer(for: bleach, db: d)])
         XCTAssertEqual(LibraryDrag.urls(from: pb).map(\.path), ["/m/Bleach"])
     }
+
+    func testRewrittenFilesAreReadAgain() throws {
+        // Tags written with the date kept: the next scan of the folder must read the file again anyway.
+        let d = try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite"))
+        try d.upsert([file("/m/Bleach/01 Blew.flac", artist: "Nirvana", album: "Bleach", title: "Blew", folder: "/m/Bleach"),
+                      file("/m/Bleach/02 Floyd.flac", artist: "Nirvana", album: "Bleach", title: "Floyd", folder: "/m/Bleach")])
+        try d.markChanged(paths: ["/m/Bleach/01 Blew.flac"])
+        let known = try d.known(under: "/m/Bleach")
+        XCTAssertEqual(known["/m/Bleach/01 Blew.flac"]?.mtime, -1, "looks changed to the scanner")
+        XCTAssertEqual(known["/m/Bleach/02 Floyd.flac"]?.mtime, 1)
+    }
 }

@@ -92,6 +92,12 @@ final class MusicCollection {
     /// Read one folder again now (after OmniAmp changed files in it; a share wouldn't tell).
     func rescan(folder: String) { rescan([folder]) }
 
+    /// Tags OmniAmp wrote into these files (their dates kept, so a scan wouldn't notice): read them again, now.
+    func reread(_ paths: [String], in folder: String) {
+        scanner?.markChanged(paths: paths)
+        rescan([folder])
+    }
+
     private func saveRoots() {
         UserDefaults.standard.set(roots, forKey: Pref.libraryFolders)
         started = true
