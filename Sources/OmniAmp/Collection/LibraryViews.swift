@@ -203,6 +203,9 @@ final class EmptyNotice: NSView {
     var onSuggestion: ((String) -> Void)?
     var text = "" { didSet { update() } }
     var suggestion: String? { didSet { update() } }
+    /// A button of another kind under the text ("Clear Filters"), instead of a suggestion.
+    var actionTitle: String? { didSet { update() } }
+    var onAction: (() -> Void)?
     private let label = NSTextField(wrappingLabelWithString: "")
     private lazy var button = Pill("", glyph: Fonts.Icon.search, target: self, action: #selector(useSuggestion))
 
@@ -228,12 +231,14 @@ final class EmptyNotice: NSView {
 
     private func update() {
         label.stringValue = text
-        button.title = suggestion.map { "Search for “\($0)”" } ?? ""
-        button.isHidden = suggestion == nil
+        button.title = actionTitle ?? suggestion.map { "Search for “\($0)”" } ?? ""
+        button.glyph = actionTitle == nil ? Fonts.Icon.search : nil
+        button.isHidden = suggestion == nil && actionTitle == nil
         isHidden = text.isEmpty
     }
 
     @objc private func useSuggestion() {
+        if actionTitle != nil { onAction?(); return }
         if let s = suggestion { onSuggestion?(s) }
     }
 }

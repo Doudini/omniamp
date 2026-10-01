@@ -26,13 +26,20 @@ struct TrackRow: Sendable {
     let artistKey: String
     /// The song's key (Keys.title).
     let titleKey: String
-    /// Its plays are kept under who performs it (the track's artist, not the album's: a compilation's tracks are
-    /// "Various Artists" in the library but their own artist on last.fm) and the song. Worked out once (sorting by
-    /// plays looks it up in every comparison).
+    /// Who performs it (Keys.artist of the track's own artist; a compilation's tracks are "Various Artists" in the
+    /// library but their own artist on last.fm).
+    let performerKey: String
+    /// Its plays are kept under the performer and the song. Worked out once (sorting by plays looks it up in every
+    /// comparison).
     let countKey: String
-    /// Its release: official (album, single, live album) or not, lossless (what the filters look at).
-    var official = true
+    /// Its release's kind and whether it's lossless (what the filters look at).
+    var kind: ReleaseKind = .album
+    var official: Bool { kind.isOfficial }
     var lossless = false
+    /// Its genres, split ("Disco; Soul" is both) and folded, for the genre filter.
+    let genreKeys: [String]
+    /// The genres as the column shows them (old ID3 numbers as names: "(17)" is Rock).
+    let genreName: String
     /// Its album has more than one disc: the track number shows the disc ("2-05").
     var multiDisc = false
     let artistSort: String, albumSort: String, titleSort: String, genreSort: String
@@ -40,18 +47,23 @@ struct TrackRow: Sendable {
     /// `keys`: sort keys already worked out for this artist, album and genre (they repeat: each is folded once).
     /// `performerKey`: Keys.artist of the track's own artist (worked out once per artist by the caller).
     init(track: LibraryTrack, genre: String, year: Int?, added: Double, artistKey: String, titleKey: String? = nil,
-         performerKey: String? = nil, keys: (artist: String, album: String, genre: String)? = nil) {
+         performerKey: String? = nil, genreKeys: [String]? = nil, genreName: String? = nil,
+         keys: (artist: String, album: String, genre: String)? = nil) {
         self.track = track
         self.genre = genre
         self.year = year
         self.added = added
         self.artistKey = artistKey
         self.titleKey = titleKey ?? Keys.title(track.title)
-        countKey = (performerKey ?? Keys.artist(track.artist)) + "\u{1}" + self.titleKey
+        self.performerKey = performerKey ?? Keys.artist(track.artist)
+        countKey = self.performerKey + "\u{1}" + self.titleKey
+        self.genreKeys = genreKeys ?? Self.genreKeys(genre)
         artistSort = keys?.artist ?? Self.sortKey(Keys.sortName(track.artist))
         albumSort = keys?.album ?? Self.sortKey(track.album)
         titleSort = Self.sortKey(track.title)
-        genreSort = keys?.genre ?? Self.sortKey(genre)
+        let name = genreName ?? CollectionDB.genres(genre).joined(separator: ", ")
+        self.genreName = name
+        genreSort = keys?.genre ?? Self.sortKey(name)
     }
 
     /// Case and accents don't count ("Björk" by "bjork"). Cheaper than `Keys.fold` (it runs for every track).
@@ -59,9 +71,14 @@ struct TrackRow: Sendable {
         s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
     }
 
-    /// What the filters let through; `ids`: a search's files (nil: no search).
-    static func visible(_ rows: [TrackRow], filter: LibraryFilter, ids: Set<Int64>?) -> [TrackRow] {
-        if filter == LibraryFilter(), ids == nil { return rows }
+    /// "Disco; Soul" → ["disco", "soul"] (split as the Genres section splits them).
+    static func genreKeys(_ genre: String) -> [String] { CollectionDB.genres(genre).map(Keys.fold) }
+
+    /// What the window's filters, the search (`ids`: its files; nil: no search) and the Tracks filter let through.
+    static func visible(_ rows: [TrackRow], filter: LibraryFilter, ids: Set<Int64>?, tracks: TrackFilter = TrackFilter(),
+                        counts: [String: PlayCount] = [:], now: Date = Date()) -> [TrackRow] {
+        if filter == LibraryFilter(), ids == nil, tracks.isEmpty { return rows }
+        let m = tracks.isEmpty ? nil : tracks.matcher(now: now)
         return rows.filter { r in
             switch filter.scope {
             case .all: break
@@ -69,7 +86,8 @@ struct TrackRow: Sendable {
             case .unofficial: if r.official { return false }
             }
             if filter.losslessOnly, !r.lossless { return false }
-            return ids?.contains(r.track.id) ?? true
+            if let ids, !ids.contains(r.track.id) { return false }
+            return m?.matches(r, counts[r.countKey]) ?? true
         }
     }
 
@@ -205,6 +223,8 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     var onKey: ((NSEvent) -> Bool)?
     /// The status line changed (what's listed or selected).
     var onSummary: (() -> Void)?
+    /// Filter words typed into the search were taken out of it (they're chips now): the search field's new text.
+    var onSearchText: ((String) -> Void)?
 
     private let table = KeyTableView()
     private let scroll = NSScrollView()
@@ -229,6 +249,11 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     /// Counts to read the next time the list is shown: never read yet, or the history changed while it was hidden.
     private var countsDirty = true
     private let observers = Observers()
+    /// The Tracks filter (the bar's chips), and a filter word still being typed in the search (it filters as it's
+    /// typed, and becomes a chip once it's finished: a space after it, or Return).
+    private var trackFilter = TrackFilter()
+    private var typed = TrackFilter()
+    private let bar = TrackFilterBar()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -277,17 +302,34 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         table.headerView?.menu = headerMenu
         showSortIndicator()
         empty.isHidden = true
-        for v in [scroll, empty] as [NSView] {
+        empty.onAction = { [weak self] in self?.setFilter(TrackFilter()) }
+        bar.onChange = { [weak self] f in self?.setFilter(f) }
+        bar.onPreset = { [weak self] f, s in
+            guard let self else { return }
+            self.trackFilter = f
+            if let s { self.sort = s; UserDefaults.standard.set(s.pref, forKey: Pref.libraryTracksSort); self.showSortIndicator() }
+            self.refresh(revealSelection: true)
+        }
+        bar.onToggle = { open in UserDefaults.standard.set(open, forKey: Pref.libraryTracksFiltersOpen) }
+        let env = ProcessInfo.processInfo.environment
+        // Test hooks: OMNIAMP_TRACKS_FILTER="year:1990-1992 plays:10+" sets the filter, OMNIAMP_TRACKS_FILTERS_OPEN=1 opens the panel.
+        if let typed = env["OMNIAMP_TRACKS_FILTER"] { trackFilter = TrackFilter.parse(typed).filter }
+        bar.filter = trackFilter
+        bar.isOpen = env["OMNIAMP_TRACKS_FILTERS_OPEN"] != nil || UserDefaults.standard.bool(forKey: Pref.libraryTracksFiltersOpen)
+        for v in [bar, scroll, empty] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: topAnchor),
+            bar.topAnchor.constraint(equalTo: topAnchor),
+            bar.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: bar.bottomAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            empty.centerXAnchor.constraint(equalTo: centerXAnchor),
-            empty.centerYAnchor.constraint(equalTo: centerYAnchor),
+            empty.centerXAnchor.constraint(equalTo: scroll.centerXAnchor),
+            empty.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
             empty.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -40),
         ])
     }
@@ -302,7 +344,50 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     func reload(filter: LibraryFilter, query: String, emptyText: String) {
         self.emptyText = emptyText
         self.filter = filter
-        self.query = query.trimmingCharacters(in: .whitespaces)
+        self.query = takeFilterWords(query)
+        refresh()
+    }
+
+    /// Filter words in the search ("year:1990-1992") become chips once they're finished; the one still being typed
+    /// (the last, with no space after it) filters as it is but stays in the field. Returns the words left to search.
+    private func takeFilterWords(_ text: String, finished: Bool = false) -> String {
+        let (head, last) = Self.splitLast(text, finished: finished)
+        let done = TrackFilter.parse(head)
+        let lastParsed = TrackFilter.parse(last)
+        let lastIsFilter = !last.isEmpty && lastParsed.rest.isEmpty && !lastParsed.filter.isEmpty
+        typed = lastIsFilter ? lastParsed.filter : TrackFilter()
+        if !done.filter.isEmpty {
+            trackFilter = trackFilter.merged(with: done.filter)
+            bar.filter = trackFilter
+            // The finished words leave the field; what's left (and the word being typed) stays.
+            let left = [done.rest, last].filter { !$0.isEmpty }.joined(separator: " ")
+            onSearchText?(left.isEmpty ? left : left + (text.hasSuffix(" ") ? " " : ""))
+        }
+        return [done.rest, lastIsFilter ? "" : last].filter { !$0.isEmpty }.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Return in the search: the filter word being typed is finished too.
+    func finishTyping(_ text: String) {
+        guard !typed.isEmpty else { return }
+        query = takeFilterWords(text, finished: true)
+        refresh()
+    }
+
+    /// The last word (a quoted value with its spaces), unless the text ends in a space or it's `finished`.
+    static func splitLast(_ text: String, finished: Bool) -> (head: String, last: String) {
+        if finished || text.hasSuffix(" ") || text.isEmpty { return (text, "") }
+        var start = text.startIndex, quoted = false, i = text.startIndex
+        while i < text.endIndex {
+            if text[i] == "\"" { quoted.toggle() } else if text[i] == " ", !quoted { start = text.index(after: i) }
+            i = text.index(after: i)
+        }
+        return (String(text[..<start]), String(text[start...]))
+    }
+
+    /// A change from the bar (or Clear filters): the list again, with the selection kept.
+    private func setFilter(_ f: TrackFilter) {
+        trackFilter = f
+        bar.filter = f
         refresh()
     }
 
@@ -312,6 +397,7 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private func refresh(revealSelection: Bool = false) {
         generation += 1
         let gen = generation, sort = sort, q = query, filter = filter, counts = counts, version = libraryVersion
+        let tracks = trackFilter.merged(with: typed)
         let known = readVersion == libraryVersion ? all : nil
         let inOrder = known != nil && allSort == sort
         if !loaded { showEmpty("Loading…") }
@@ -324,17 +410,36 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                 everything = sort.sorted((try? db?.trackRows()) ?? [], counts: counts)
             }
             let ids = q.isEmpty ? nil : ((try? db?.fileIDs(matching: q)) ?? [])
-            let list = TrackRow.visible(everything, filter: filter, ids: ids)
+            let list = TrackRow.visible(everything, filter: filter, ids: ids, tracks: tracks, counts: counts)
+            // Read again: the years and genres the filter bar offers.
+            let library = known == nil ? Self.facts(everything) : nil
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.all = everything
                 self.allSort = sort
                 if known == nil { self.readVersion = version }   // a change during the read: read again next time
+                if let library { self.bar.setLibrary(years: library.years, genres: library.genres) }
                 self.show(list)
                 if revealSelection, let first = self.table.selectedRowIndexes.first { self.table.scrollRowToVisible(first) }
                 if self.countsDirty { self.readCounts() }
             }
         }
+    }
+
+    /// Tracks per year, and the genres (as the library spells them, most tracks first).
+    nonisolated private static func facts(_ rows: [TrackRow]) -> (years: [Int: Int], genres: [(String, Int)]) {
+        var years: [Int: Int] = [:], counts: [String: Int] = [:], names: [String: String] = [:], split: [String: [String]] = [:]
+        for r in rows {
+            if let y = r.year { years[y, default: 0] += 1 }
+            guard !r.genre.isEmpty else { continue }
+            let gs = split[r.genre] ?? { let g = CollectionDB.genres(r.genre); split[r.genre] = g; return g }()
+            for g in gs {
+                let k = Keys.fold(g)
+                counts[k, default: 0] += 1
+                if names[k] == nil { names[k] = g }
+            }
+        }
+        return (years, counts.sorted { $0.value > $1.value }.map { (names[$0.key]!, $0.value) })
     }
 
     /// Plays per song, in the background. Sorted by plays: sorted again; else just those columns redrawn.
@@ -345,8 +450,9 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             DispatchQueue.main.async { [weak self] in
                 guard let self, c != self.counts else { return }
                 self.counts = c
-                if self.sort.column == .plays || self.sort.column == .lastPlayed {
-                    self.allSort = nil
+                let sortsByPlays = self.sort.column == .plays || self.sort.column == .lastPlayed
+                if sortsByPlays || self.trackFilter.merged(with: self.typed).usesCounts {
+                    if sortsByPlays { self.allSort = nil }
                     self.refresh()
                 } else {
                     let cols = [TrackColumn.plays, .lastPlayed].map { self.table.column(withIdentifier: NSUserInterfaceItemIdentifier($0.rawValue)) }
@@ -371,7 +477,9 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         }
         let again = IndexSet(rows.indices.filter { keep.contains(rows[$0].track.id) })
         table.selectRowIndexes(again, byExtendingSelection: false)
-        showEmpty(rows.isEmpty ? emptyText : nil)
+        let filtered = !trackFilter.merged(with: typed).isEmpty
+        empty.actionTitle = rows.isEmpty && filtered ? "Clear Filters" : nil
+        showEmpty(rows.isEmpty ? (filtered && !all.isEmpty ? "Nothing matches these filters." : emptyText) : nil)
         onSummary?()
     }
 
@@ -408,7 +516,9 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         let time = seconds >= 86400 ? String(format: "%.1f days", seconds / 86400)
             : seconds >= 3600 ? String(format: "%.1f hours", seconds / 3600) : AlbumCell.length(seconds)
         let n = rows.count == 1 ? "1 track" : "\(rows.count.formatted()) tracks"
-        return sel.count > 1 ? "\(sel.count.formatted()) of \(n) selected · \(time)" : "\(n) · \(time)"
+        if sel.count > 1 { return "\(sel.count.formatted()) of \(n) selected · \(time)" }
+        // Narrowed (filters, a search): how much of the library that is.
+        return rows.count < all.count ? "\(rows.count.formatted()) of \(all.count.formatted()) tracks · \(time)" : "\(n) · \(time)"
     }
 
     /// What Play and Add act on: the selected tracks, in the list's order.
@@ -455,6 +565,9 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         if menu === table.headerView?.menu {
+            let item = menu.addItem(withTitle: bar.isOpen ? "Hide Filters" : "Show Filters", action: #selector(toggleFilters), keyEquivalent: "")
+            item.target = self
+            menu.addItem(.separator())
             // Show or hide columns (not Title: a list needs something to read).
             for c in TrackColumn.allCases where c != .title {
                 let item = menu.addItem(withTitle: c.title, action: #selector(toggleColumn(_:)), keyEquivalent: "")
@@ -473,7 +586,35 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         add("Add to Playlist", #selector(addSelected))
         add("Replace Playlist and Play", #selector(replaceSelected))
         menu.addItem(.separator())
-        if table.selectedRowIndexes.count == 1 {
+        if table.selectedRowIndexes.count == 1, let r = clicked {
+            // Narrow the list to what this track has.
+            let sub = NSMenu()
+            func by(_ title: String, _ f: TrackFilter) {
+                let item = sub.addItem(withTitle: title, action: #selector(filterBy(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = FilterBox(f)
+            }
+            var f = trackFilter
+            f.artist = .init(key: r.performerKey, name: r.track.artist)
+            by("Same Artist (\(r.track.artist))", f)
+            f = trackFilter
+            f.album = .init(key: r.track.albumKey, name: r.track.album)
+            by("Same Album (\(r.track.album))", f)
+            if let y = r.year {
+                f = trackFilter
+                f.years = y...y
+                by("Same Year (\(y))", f)
+                f.years = (y / 10 * 10)...(y / 10 * 10 + 9)
+                by("Same Decade (\(y / 10 * 10)s)", f)
+            }
+            for g in CollectionDB.genres(r.genre) {
+                f = trackFilter
+                if !f.genres.contains(where: { Keys.fold($0) == Keys.fold(g) }) { f.genres.append(g) }
+                by("Genre \(g)", f)
+            }
+            let filterItem = menu.addItem(withTitle: "Filter", action: nil, keyEquivalent: "")
+            filterItem.submenu = sub
+            menu.addItem(.separator())
             add("Show Album", #selector(showAlbum))
             add("Artist Page", #selector(artistPage))
             add("Show All Versions", #selector(versions))
@@ -493,6 +634,15 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     @objc private func artistPage() { if let r = clicked { onArtist?(r.artistKey) } }
     @objc private func versions() { if let r = clicked { onVersions?(r.artistKey, Keys.title(r.track.title)) } }
     @objc private func showInFinder() { NSWorkspace.shared.activateFileViewerSelecting(selectedTracks.map { URL(exactPath: $0.path) }) }
+
+    @objc private func filterBy(_ sender: NSMenuItem) {
+        if let f = (sender.representedObject as? FilterBox)?.filter { setFilter(f) }
+    }
+
+    @objc private func toggleFilters() {
+        bar.isOpen.toggle()
+        UserDefaults.standard.set(bar.isOpen, forKey: Pref.libraryTracksFiltersOpen)
+    }
 
     @objc private func toggleColumn(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, let col = table.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier(id)) else { return }
@@ -528,7 +678,7 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             f.stringValue = r.trackNumber
             f.font = Dash.mono(11)
             f.textColor = Dash.text3
-        case .genre: f.stringValue = r.genre
+        case .genre: f.stringValue = r.genreName
         case .year:
             f.stringValue = r.year.map(String.init) ?? ""
             f.font = Dash.mono(11)
@@ -581,6 +731,12 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
         row < rows.count ? URL(exactPath: rows[row].track.path) as NSURL : nil
     }
+}
+
+/// A filter carried by a menu item (representedObject needs an object).
+private final class FilterBox: NSObject {
+    let filter: TrackFilter
+    init(_ f: TrackFilter) { filter = f }
 }
 
 // MARK: - Header

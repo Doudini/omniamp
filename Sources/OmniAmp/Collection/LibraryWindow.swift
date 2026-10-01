@@ -327,6 +327,13 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         tracksPage.onVersions = { [weak self] a, t in self?.showSong(artist: a, titleKey: t) }
         tracksPage.onKey = { [weak self] e in self?.gridKey(e) ?? false }
         tracksPage.onSummary = { [weak self] in self?.updateStatus() }
+        // Filter words typed into the search became chips: they leave the field (no new search for that).
+        tracksPage.onSearchText = { [weak self] text in
+            guard let self else { return }
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(self.searchChanged), object: nil)
+            self.search.stringValue = text
+            self.query = text
+        }
         for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage,
                   songPage, artistPage, attentionPage, gridPage, tracksPage] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
@@ -927,6 +934,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         switch sel {
         case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.moveDown(_:)), #selector(NSResponder.insertTab(_:)):
             searchChanged()
+            if showingTracks, sel == #selector(NSResponder.insertNewline(_:)) { tracksPage.finishTyping(search.stringValue) }
             focusList()
         case #selector(NSResponder.cancelOperation(_:)):
             if !search.stringValue.isEmpty { search.stringValue = ""; searchChanged() } else { focusList() }

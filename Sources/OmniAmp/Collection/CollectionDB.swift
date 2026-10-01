@@ -734,6 +734,7 @@ final class CollectionDB {
         var out: [TrackRow] = []
         var discs: [String: Int] = [:]
         var artists: [String: String] = [:], albums: [String: String] = [:], genres: [String: String] = [:], performers: [String: String] = [:]
+        var genreKeys: [String: [String]] = [:], genreNames: [String: String] = [:]
         func key(_ s: String, _ cache: inout [String: String], _ make: (String) -> String) -> String {
             if let k = cache[s] { return k }
             let k = make(s)
@@ -746,11 +747,15 @@ final class CollectionDB {
             """) { s in
             let t = Self.track(s), genre = s.optText(19) ?? ""
             if let d = t.disc { discs[t.albumKey] = max(discs[t.albumKey] ?? 1, d) }
+            // Genres shown by name (old ID3 numbers too) and sorted that way.
+            let genreName = key(genre, &genreNames) { Self.genres($0).joined(separator: ", ") }
             let keys = (key(t.artist, &artists) { TrackRow.sortKey(Keys.sortName($0)) }, key(t.album, &albums, TrackRow.sortKey),
-                        key(genre, &genres, TrackRow.sortKey))
+                        key(genreName, &genres, TrackRow.sortKey))
             var r = TrackRow(track: t, genre: genre, year: s.optInt(20), added: s.optDouble(21) ?? 0, artistKey: s.text(22),
-                             titleKey: s.optText(25) ?? Keys.title(t.title), performerKey: key(t.artist, &performers, Keys.artist), keys: keys)
-            r.official = s.int(23) <= ReleaseKind.live.rawValue
+                             titleKey: s.optText(25) ?? Keys.title(t.title), performerKey: key(t.artist, &performers, Keys.artist),
+                             genreKeys: genreKeys[genre] ?? { let k = TrackRow.genreKeys(genre); genreKeys[genre] = k; return k }(),
+                             genreName: genreName, keys: keys)
+            r.kind = ReleaseKind(rawValue: s.int(23)) ?? .album
             r.lossless = s.int(24) == 1
             out.append(r)
         }

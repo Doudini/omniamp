@@ -45,6 +45,8 @@ enum Pref {
     static let keepPlayHistory = "keepPlayHistory"
     /// Tracks: the column it's sorted by and which way ("artist:asc").
     static let libraryTracksSort = "libraryTracksSort"
+    /// Tracks: the filter panel is open (closed until opened once).
+    static let libraryTracksFiltersOpen = "libraryTracksFiltersOpen"
     /// The library may look things up online in the background (artist countries from MusicBrainz).
     static let libraryOnlineLookups = "libraryOnlineLookups"
     /// Where Live Music Archive downloads go (a folder per artist inside).
