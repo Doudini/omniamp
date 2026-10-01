@@ -69,6 +69,35 @@ final class TrackFilterTests: XCTestCase {
         XCTAssertFalse(TrackFilter(years: 1990...1991).usesCounts)
     }
 
+    func testPlayedYearsCountOnlyThoseYears() {
+        let rows = [row(1, title: "Then"), row(2, title: "Always"), row(3, title: "Lately"), row(4, title: "Never")]
+        let counts = [rows[0].countKey: PlayCount(plays: 30, last: ts(2010), byYear: [2008: 20, 2009: 8, 2010: 2]),
+                      rows[1].countKey: PlayCount(plays: 60, last: ts(2026), byYear: [2008: 3, 2015: 27, 2026: 30]),
+                      rows[2].countKey: PlayCount(plays: 12, last: ts(2026), byYear: [2025: 5, 2026: 7])]
+        func t(_ f: TrackFilter) -> [String] { titles(rows, f, counts: counts) }
+        // Played in those years at all; with Plays, only the plays in them count.
+        XCTAssertEqual(t(TrackFilter(playedYears: 2008...2009)), ["Then", "Always"])
+        XCTAssertEqual(t(TrackFilter(playedYears: 2008...2009, plays: .atLeast(10))), ["Then"])
+        XCTAssertEqual(t(TrackFilter(playedYears: 2008...2009, plays: .never)), ["Lately", "Never"])
+        XCTAssertEqual(t(TrackFilter(playedYears: 2025...TrackFilter.latest)), ["Always", "Lately"])
+        // Never played (all time) stays all time.
+        XCTAssertEqual(t(TrackFilter(playedYears: 2008...2009, lastPlayed: .never)), [])
+        // Sorted by plays in the range: "my top songs of 2008".
+        let top = TrackSort(column: .plays, ascending: false).sorted(rows, counts: counts, played: 2008...2008).map(\.track.title)
+        XCTAssertEqual(Array(top.prefix(2)), ["Then", "Always"])
+        let allTime = TrackSort(column: .plays, ascending: false).sorted(rows, counts: counts).map(\.track.title)
+        XCTAssertEqual(Array(allTime.prefix(2)), ["Always", "Then"])
+        XCTAssertEqual(counts[rows[1].countKey]?.plays(in: 2008...2015), 30)
+        // Chips and typed words.
+        XCTAssertEqual(TrackFilter(playedYears: 2008...2010).title(.playedYears), "Played 2008–2010")
+        XCTAssertEqual(TrackFilter(playedYears: 2008...2008).title(.playedYears), "Played in 2008")
+        XCTAssertEqual(TrackFilter(playedYears: 2015...TrackFilter.latest).title(.playedYears), "Played since 2015")
+        XCTAssertEqual(TrackFilter.parse("played:2008-2010 plays:10+").filter, TrackFilter(playedYears: 2008...2010, plays: .atLeast(10)))
+        XCTAssertEqual(TrackFilter.parse("played:never").filter, TrackFilter(plays: .never))
+        XCTAssertTrue(TrackFilter(playedYears: 2008...2009).usesCounts)
+        XCTAssertEqual(YearRangeSlider.span([2005: 3, 2008: 900, 2026: 40], decadeStart: false), 2005...2026)
+    }
+
     func testAdded() {
         let day = 86400.0, n = now.timeIntervalSince1970
         let rows = [row(1, title: "Yesterday", added: n - day), row(2, title: "Two months", added: n - 60 * day),
@@ -119,7 +148,8 @@ final class TrackFilterTests: XCTestCase {
     func testTextRoundTrip() {
         let filters = [TrackFilter.forgottenFavourites, .neverPlayed,
                        TrackFilter(years: 1990...1992, added: .thisYear, genres: ["Post Punk", "Grunge"], kinds: [.live, .demos]),
-                       TrackFilter(years: 1977...1977, lastPlayed: .thisYear, added: .days(7))]
+                       TrackFilter(years: 1977...1977, lastPlayed: .thisYear, added: .days(7)),
+                       TrackFilter(playedYears: 2008...2010, plays: .atLeast(10)), TrackFilter(playedYears: 2015...TrackFilter.latest)]
         for f in filters { XCTAssertEqual(TrackFilter.parse(f.text).filter, f, f.text) }
     }
 

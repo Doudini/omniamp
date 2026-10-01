@@ -136,8 +136,10 @@ final class PlayHistoryTests: XCTestCase {
         try d.addOwnPlay(play(200, title: "School"), path: nil)
         let c = try d.playCounts()
         // Every spelling and source of one song together, keyed like the Tracks list (artist key + title key).
-        XCTAssertEqual(c["nirvana\u{1}" + Keys.title("Blew")], PlayCount(plays: 3, last: 500))
-        XCTAssertEqual(c["nirvana\u{1}" + Keys.title("School")], PlayCount(plays: 1, last: 200))
+        let blew = try XCTUnwrap(c["nirvana\u{1}" + Keys.title("Blew")])
+        XCTAssertEqual([blew.plays, blew.last], [3, 500])
+        XCTAssertEqual(blew.byYear, [1970: 3], "plays per year (all in 1970 here)")
+        XCTAssertEqual(c["nirvana\u{1}" + Keys.title("School")]?.plays, 1)
         XCTAssertEqual(c.count, 2)
     }
 

@@ -12,10 +12,17 @@ import AppKit
 
 /// A track as the list shows it, with its sort keys worked out once (folding strings for every comparison would be
 /// most of a sort's cost).
-/// A song's plays and the last one (UNIX time; 0: never).
+/// A song's plays, the last one (UNIX time; 0: never), and its plays per year.
 struct PlayCount: Sendable, Equatable {
     var plays = 0
     var last = 0
+    var byYear: [Int: Int] = [:]
+
+    /// Plays in those years (all of them without).
+    func plays(in years: ClosedRange<Int>?) -> Int {
+        guard let years else { return plays }
+        return byYear.reduce(0) { years.contains($1.key) ? $0 + $1.value : $0 }
+    }
 }
 
 struct TrackRow: Sendable {
@@ -151,17 +158,20 @@ struct TrackSort: Equatable, Sendable {
     }
     var pref: String { column.rawValue + (ascending ? ":asc" : ":desc") }
 
-    /// `counts`: plays per song (TrackRow.countKey), for the Plays and Last Played columns.
-    func sorted(_ rows: [TrackRow], counts: [String: PlayCount] = [:]) -> [TrackRow] {
-        rows.sorted { a, b in
-            let c = primary(a, b, counts)
+    /// `counts`: plays per song (TrackRow.countKey), for the Plays and Last Played columns; `played`: the years
+    /// Plays counts (a filter's played range; nil: all).
+    func sorted(_ rows: [TrackRow], counts: [String: PlayCount] = [:], played: ClosedRange<Int>? = nil) -> [TrackRow] {
+        // Plays in a range: summed once per song, not in every comparison.
+        let inRange: [String: Int]? = column == .plays && played != nil ? counts.mapValues { $0.plays(in: played) } : nil
+        return rows.sorted { a, b in
+            let c = primary(a, b, counts, inRange)
             if c != 0 { return ascending ? c < 0 : c > 0 }
             return Self.natural(a, b)
         }
     }
 
     /// -1, 0 or 1 by the column; a missing value after a present one either way (so it's flipped back for descending).
-    private func primary(_ a: TrackRow, _ b: TrackRow, _ counts: [String: PlayCount]) -> Int {
+    private func primary(_ a: TrackRow, _ b: TrackRow, _ counts: [String: PlayCount], _ inRange: [String: Int]?) -> Int {
         func str(_ x: String, _ y: String) -> Int {
             if x.isEmpty != y.isEmpty { return (x.isEmpty ? 1 : -1) * (ascending ? 1 : -1) }
             return x < y ? -1 : x > y ? 1 : 0
@@ -186,7 +196,9 @@ struct TrackSort: Equatable, Sendable {
         case .track:
             let d = num(a.track.disc ?? 1, b.track.disc ?? 1)
             return d != 0 ? d : num(a.track.number, b.track.number)
-        case .plays: return num(counts[a.countKey]?.plays ?? 0, counts[b.countKey]?.plays ?? 0)
+        case .plays:
+            if let inRange { return num(inRange[a.countKey] ?? 0, inRange[b.countKey] ?? 0) }
+            return num(counts[a.countKey]?.plays ?? 0, counts[b.countKey]?.plays ?? 0)
         case .lastPlayed:
             // Never played: last, either way.
             let x = counts[a.countKey]?.last ?? 0, y = counts[b.countKey]?.last ?? 0
@@ -232,6 +244,10 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     /// Every track, sorted by `allSort`; `rows` is what the filters and the search let through of it.
     private var all: [TrackRow] = []
     private var allSort: TrackSort?
+    /// The played years `all` was sorted with (it matters when sorted by Plays).
+    private var allPlayed: ClosedRange<Int>?
+    /// The played years the list shows now: Plays counts those (the Tracks filter's, or a typed word's).
+    private var played: ClosedRange<Int>? { trackFilter.merged(with: typed).playedYears }
     private var rows: [TrackRow] = []
     /// How long `rows` play, worked out when they're set (the status line asks on every selection change).
     private var rowsSeconds: Double = 0
@@ -399,15 +415,16 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         let gen = generation, sort = sort, q = query, filter = filter, counts = counts, version = libraryVersion
         let tracks = trackFilter.merged(with: typed)
         let known = readVersion == libraryVersion ? all : nil
-        let inOrder = known != nil && allSort == sort
+        let range = tracks.playedYears
+        let inOrder = known != nil && allSort == sort && (sort.column != .plays || allPlayed == range)
         if !loaded { showEmpty("Loading…") }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let db = known == nil || !q.isEmpty ? try? CollectionDB() : nil
             let everything: [TrackRow]
             if let known {
-                everything = inOrder ? known : sort.sorted(known, counts: counts)
+                everything = inOrder ? known : sort.sorted(known, counts: counts, played: range)
             } else {
-                everything = sort.sorted((try? db?.trackRows()) ?? [], counts: counts)
+                everything = sort.sorted((try? db?.trackRows()) ?? [], counts: counts, played: range)
             }
             let ids = q.isEmpty ? nil : ((try? db?.fileIDs(matching: q)) ?? [])
             let list = TrackRow.visible(everything, filter: filter, ids: ids, tracks: tracks, counts: counts)
@@ -417,6 +434,8 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
                 guard let self, gen == self.generation else { return }
                 self.all = everything
                 self.allSort = sort
+                self.allPlayed = range
+                self.showPlayedHeader(range)
                 if known == nil { self.readVersion = version }   // a change during the read: read again next time
                 if let library { self.bar.setLibrary(years: library.years, genres: library.genres) }
                 self.show(list)
@@ -447,9 +466,13 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         countsDirty = false
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let c = (try? CollectionDB().playCounts()) ?? [:]
+            // Plays per year over the whole history, for the filter's Played chart.
+            var perYear: [Int: Int] = [:]
+            for song in c.values { for (y, n) in song.byYear { perYear[y, default: 0] += n } }
             DispatchQueue.main.async { [weak self] in
                 guard let self, c != self.counts else { return }
                 self.counts = c
+                self.bar.setPlays(years: perYear)
                 let sortsByPlays = self.sort.column == .plays || self.sort.column == .lastPlayed
                 if sortsByPlays || self.trackFilter.merged(with: self.typed).usesCounts {
                     if sortsByPlays { self.allSort = nil }
@@ -494,6 +517,18 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         UserDefaults.standard.set(s.pref, forKey: Pref.libraryTracksSort)
         showSortIndicator()
         refresh(revealSelection: true)
+    }
+
+    /// The Plays column says which years it counts ("Plays 2008–2010") while a played range is set.
+    private func showPlayedHeader(_ range: ClosedRange<Int>?) {
+        guard let col = table.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier(TrackColumn.plays.rawValue)) else { return }
+        let title = range.map { "Plays " + TrackFilter.span($0).replacingOccurrences(of: "in ", with: "") } ?? TrackColumn.plays.title
+        guard col.title != title else { return }
+        col.title = title
+        col.headerCell.stringValue = title
+        // Room for the years in the header.
+        if range != nil, col.width < 96 { col.width = 96 } else if range == nil, col.width == 96 { col.width = TrackColumn.plays.width }
+        table.headerView?.needsDisplay = true
     }
 
     private func showSortIndicator() {
@@ -692,11 +727,13 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             f.font = Dash.mono(11)
             f.textColor = Dash.text3
         case .plays:
-            let n = counts[r.countKey]?.plays ?? 0
+            let range = played
+            let n = counts[r.countKey]?.plays(in: range) ?? 0
             f.stringValue = n > 0 ? n.formatted() : ""
             f.font = Dash.mono(11)
             // Counted by song: a live recording shows the studio one's plays too.
-            if n > 0 { f.toolTip = "\(n.formatted()) play\(n == 1 ? "" : "s") of this song (every recording)" }
+            let when = range.map { " " + TrackFilter.span($0) } ?? ""
+            if n > 0 { f.toolTip = "\(n.formatted()) play\(n == 1 ? "" : "s") of this song\(when) (every recording)" }
         case .lastPlayed:
             let last = counts[r.countKey]?.last ?? 0
             let when = Date(timeIntervalSince1970: TimeInterval(last))

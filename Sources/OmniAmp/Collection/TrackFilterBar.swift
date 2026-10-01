@@ -1,9 +1,11 @@
 import AppKit
 
 /// Above the Tracks list: a slim strip with the filter's conditions as chips (× takes one away, Clear all of them)
-/// and the presets, and under it a panel that folds open (closed by default) to set them: on the left a year range
-/// over a chart of the library's years, on the right how often and how lately songs were played (Listening) and when
-/// they were added, their kind and genres (Library). It only shows and edits a TrackFilter; the list filters.
+/// and the presets, and under it a panel that folds open (closed by default) to set them: on the left two year ranges,
+/// when songs were released (over a chart of the library's years) and when they were played (over a chart of the
+/// play history; choosing years there makes Plays count only those), on the right how often and how lately songs were
+/// played (Listening) and when they were added, their kind and genres (Library). It only shows and edits a
+/// TrackFilter; the list filters.
 @MainActor
 final class TrackFilterBar: NSView {
     var filter = TrackFilter() { didSet { if filter != oldValue { sync() } } }
@@ -22,6 +24,8 @@ final class TrackFilterBar: NSView {
     private let panel = NSView()
     private var panelHeight: NSLayoutConstraint!
     private let years = YearRangeSlider()
+    private let playedYears = YearRangeSlider(decadeStart: false)
+    private var playedBlock: NSView!
     private static let playOptions: [(String, TrackFilter.Plays)] = [("Any", .any), ("Never", .never), ("1+", .atLeast(1)),
                                                                       ("10+", .atLeast(10)), ("50+", .atLeast(50)), ("100+", .atLeast(100))]
     private static let lastOptions: [(String, TrackFilter.LastPlayed)] = [("Any", .any), ("This year", .thisYear), ("1+ yrs ago", .yearsAgo(1)),
@@ -120,14 +124,30 @@ final class TrackFilterBar: NSView {
 
         years.target = self
         years.action = #selector(yearsChanged)
-        let left = NSStackView(views: [heading("Year"), years])
+        years.toolTip = "When the songs came out"
+        playedYears.target = self
+        playedYears.action = #selector(playedChanged)
+        playedYears.toolTip = "Your plays per year (Last.fm and OmniAmp). Choose years and Plays counts only those"
+        let released = NSStackView(views: [heading("Released"), years])
+        let played = NSStackView(views: [heading("Played"), playedYears])
+        for b in [released, played] {
+            b.orientation = .vertical
+            b.alignment = .leading
+            b.spacing = 4
+        }
+        playedBlock = played
+        played.isHidden = true   // until there's a play history
+        let left = NSStackView(views: [released, played])
         left.orientation = .vertical
         left.alignment = .leading
-        left.spacing = 6
-        left.distribution = .fill
-        // The chart takes the column's height (as tall as the choices beside it).
-        years.setContentHuggingPriority(.defaultLow, for: .vertical)
-        years.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
+        left.spacing = 10
+        left.distribution = .fillEqually
+        // The charts share the column's height (as tall as the choices beside it).
+        for (slider, block) in [(years, released), (playedYears, played)] {
+            slider.setContentHuggingPriority(.defaultLow, for: .vertical)
+            slider.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
+            block.widthAnchor.constraint(equalTo: left.widthAnchor).isActive = true
+        }
 
         let right = NSStackView(views: [
             heading("Listening"), row("Plays", plays), row("Last played", last),
@@ -152,7 +172,7 @@ final class TrackFilterBar: NSView {
             left.bottomAnchor.constraint(equalTo: right.bottomAnchor),
             left.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
             leftWide,
-            years.heightAnchor.constraint(greaterThanOrEqualToConstant: 70),
+            years.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
             right.topAnchor.constraint(equalTo: box.topAnchor),
             right.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: 32),
             right.trailingAnchor.constraint(lessThanOrEqualTo: box.trailingAnchor),
@@ -173,6 +193,12 @@ final class TrackFilterBar: NSView {
         years.histogram = counts
         genreCounts = genres
         sync()
+    }
+
+    /// Plays per year over the whole history (the Played chart); none: the Played range isn't shown.
+    func setPlays(years counts: [Int: Int]) {
+        playedYears.histogram = counts
+        playedBlock.isHidden = counts.isEmpty
     }
 
     private func setOpen(_ open: Bool, animated: Bool) {
@@ -210,6 +236,7 @@ final class TrackFilterBar: NSView {
             chips.addArrangedSubview(chip)
         }
         years.selection = f.years
+        playedYears.selection = f.playedYears
         plays.selected = Set(Self.playOptions.indices.filter { Self.playOptions[$0].1 == f.plays })
         last.selected = Set(Self.lastOptions.indices.filter { Self.lastOptions[$0].1 == f.lastPlayed })
         added.selected = Set(Self.addedOptions.indices.filter { Self.addedOptions[$0].1 == f.added })
@@ -258,6 +285,12 @@ final class TrackFilterBar: NSView {
     @objc private func yearsChanged() {
         var f = filter
         f.years = years.selection
+        change(f)
+    }
+
+    @objc private func playedChanged() {
+        var f = filter
+        f.playedYears = playedYears.selection
         change(f)
     }
 
@@ -474,7 +507,9 @@ final class FilterChip: NSControl {
 /// Two handles over the library's years, with a faint chart of how many tracks each year has behind them. Dragging
 /// sends the action as it goes; a double-click (or both handles at the ends) means any year.
 final class YearRangeSlider: NSControl {
-    var histogram: [Int: Int] = [:] { didSet { span = Self.span(histogram); needsDisplay = true } }
+    var histogram: [Int: Int] = [:] { didSet { span = Self.span(histogram, decadeStart: decadeStart); needsDisplay = true } }
+    /// The range starts at a decade (release years) or at the first year there is (a play history from 2005).
+    private let decadeStart: Bool
     /// nil: any year.
     var selection: ClosedRange<Int>? { didSet { if selection != oldValue { needsDisplay = true } } }
     private var dragging: Int?   // 0 the low handle, 1 the high one
@@ -482,8 +517,9 @@ final class YearRangeSlider: NSControl {
     override var isFlipped: Bool { true }
     override var intrinsicContentSize: NSSize { NSSize(width: 360, height: 70) }
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
+    init(decadeStart: Bool = true) {
+        self.decadeStart = decadeStart
+        super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         isContinuous = true
         setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -493,15 +529,16 @@ final class YearRangeSlider: NSControl {
     /// The years the slider covers: from the decade the library really starts in (a few tracks tagged 1901 or 1000
     /// don't squash the rest into a corner) to its last year. A handle at an end means "and earlier" / "and later".
     private var span: ClosedRange<Int> = 1960...2030
-    static func span(_ histogram: [Int: Int]) -> ClosedRange<Int> {
-        guard let hi = histogram.keys.max() else { return 1960...2030 }
+    static func span(_ histogram: [Int: Int], decadeStart: Bool = true) -> ClosedRange<Int> {
+        guard let hi = histogram.keys.max(), let first = histogram.keys.min() else { return 1960...2030 }
+        guard decadeStart else { return first...max(hi, first + 1) }   // a play history: every year of it
         let total = histogram.values.reduce(0, +)
         var seen = 0, lo = histogram.keys.min()!
         for y in histogram.keys.sorted() {
             seen += histogram[y]!
             if Double(seen) > Double(total) * 0.005 { lo = y; break }
         }
-        lo = lo / 10 * 10
+        if decadeStart { lo = lo / 10 * 10 }
         return lo...max(hi, lo + 1)
     }
     private var shown: ClosedRange<Int> { selection.map { $0.clamped(to: span) } ?? span }

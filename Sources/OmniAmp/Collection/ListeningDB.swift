@@ -223,19 +223,25 @@ extension CollectionDB {
         try db.exec("DELETE FROM scrobbles WHERE source = 1; UPDATE scrobbles SET source = 0, path = NULL WHERE source = 2")
     }
 
-    /// Plays per song (artist key + "\u{1}" + title key, as TrackRow.countKey): how many, and the last one. Every
-    /// spelling of a title counts for the song ("Blew (Remastered)" is "Blew").
+    /// Plays per song (artist key + "\u{1}" + title key, as TrackRow.countKey): how many, the last one, and how
+    /// many in each year (for "played in 2008–2010"). Every spelling of a title counts for the song ("Blew
+    /// (Remastered)" is "Blew").
     func playCounts() throws -> [String: PlayCount] {
         var out: [String: PlayCount] = [:]
         var titleKeys: [String: String] = [:]
-        try db.query("SELECT artist_key, title, count(*), max(ts) FROM scrobbles GROUP BY artist_key, title") { s in
+        try db.query("""
+            SELECT artist_key, title, coalesce(year, CAST(strftime('%Y', ts, 'unixepoch', 'localtime') AS INTEGER)), count(*), max(ts)
+            FROM scrobbles GROUP BY artist_key, title, 3
+            """) { s in
             let title = s.text(1)
             let tk: String
             if let k = titleKeys[title] { tk = k } else { tk = Keys.title(title); titleKeys[title] = tk }
             let key = s.text(0) + "\u{1}" + tk
             var c = out[key] ?? PlayCount()
-            c.plays += s.int(2)
-            c.last = max(c.last, s.int(3))
+            let n = s.int(3)
+            c.plays += n
+            c.last = max(c.last, s.int(4))
+            c.byYear[s.int(2), default: 0] += n
             out[key] = c
         }
         return out

@@ -44,6 +44,8 @@ struct TrackFilter: Equatable, Sendable {
     }
 
     var years: ClosedRange<Int>?
+    /// Played in these years (the play history's). With it, Plays counts only the plays in them.
+    var playedYears: ClosedRange<Int>?
     var plays: Plays = .any
     var lastPlayed: LastPlayed = .any
     var added: Added = .any
@@ -58,7 +60,7 @@ struct TrackFilter: Equatable, Sendable {
     /// Year bounds that mean "open that way" ("up to 1992", "1990 and later").
     static let earliest = 1000, latest = 2999
     /// Plays or last played: needs the play counts.
-    var usesCounts: Bool { plays != .any || lastPlayed != .any }
+    var usesCounts: Bool { plays != .any || lastPlayed != .any || playedYears != nil }
 
     static let forgottenFavourites = TrackFilter(plays: .atLeast(10), lastPlayed: .yearsAgo(5))
     static let neverPlayed = TrackFilter(plays: .never)
@@ -78,15 +80,15 @@ struct TrackFilter: Equatable, Sendable {
             if let a = f.artist, r.performerKey != a.key, r.artistKey != a.key { return false }
             if let a = f.album, r.track.albumKey != a.key { return false }
             if !genreKeys.isEmpty, !r.genreKeys.contains(where: genreKeys.contains) { return false }
-            let plays = count?.plays ?? 0, last = count?.last ?? 0
+            let plays = count?.plays(in: f.playedYears) ?? 0, last = count?.last ?? 0
             switch f.plays {
-            case .any: break
+            case .any: if f.playedYears != nil, plays == 0 { return false }   // played in those years at all
             case .never: if plays > 0 { return false }
             case .atLeast(let n): if plays < n { return false }
             }
             switch f.lastPlayed {
             case .any: break
-            case .never: if plays > 0 { return false }
+            case .never: if (count?.plays ?? 0) > 0 { return false }
             case .thisYear: if last < startOfYear { return false }
             case .yearsAgo: if last == 0 || last >= lastCut ?? 0 { return false }
             }
@@ -116,7 +118,7 @@ struct TrackFilter: Equatable, Sendable {
 
     /// One condition, as a chip shows it (its × takes it away).
     enum Condition: Hashable, Sendable {
-        case years, plays, lastPlayed, added, artist, album
+        case years, playedYears, plays, lastPlayed, added, artist, album
         case genre(String)
         case kind(KindGroup)
     }
@@ -124,6 +126,7 @@ struct TrackFilter: Equatable, Sendable {
     var conditions: [Condition] {
         var c: [Condition] = []
         if years != nil { c.append(.years) }
+        if playedYears != nil { c.append(.playedYears) }
         if artist != nil { c.append(.artist) }
         if album != nil { c.append(.album) }
         if plays != .any { c.append(.plays) }
@@ -143,6 +146,9 @@ struct TrackFilter: Equatable, Sendable {
             if y.lowerBound == y.upperBound { return "Year \(y.lowerBound)" }
             if y.lowerBound % 10 == 0, y.upperBound == y.lowerBound + 9 { return "\(y.lowerBound)s" }
             return "\(y.lowerBound)–\(y.upperBound)"
+        case .playedYears:
+            guard let y = playedYears else { return "" }
+            return "Played " + Self.span(y)
         case .plays:
             switch plays {
             case .any: return ""
@@ -171,10 +177,18 @@ struct TrackFilter: Equatable, Sendable {
         }
     }
 
+    /// "in 2008", "2008–2010", "up to 2010", "since 2015" (how played years read).
+    static func span(_ y: ClosedRange<Int>) -> String {
+        if y.lowerBound <= earliest { return "up to \(y.upperBound)" }
+        if y.upperBound >= latest { return "since \(y.lowerBound)" }
+        return y.lowerBound == y.upperBound ? "in \(y.lowerBound)" : "\(y.lowerBound)–\(y.upperBound)"
+    }
+
     func removing(_ c: Condition) -> TrackFilter {
         var f = self
         switch c {
         case .years: f.years = nil
+        case .playedYears: f.playedYears = nil
         case .plays: f.plays = .any
         case .lastPlayed: f.lastPlayed = .any
         case .added: f.added = .any
@@ -190,6 +204,7 @@ struct TrackFilter: Equatable, Sendable {
     func merged(with o: TrackFilter) -> TrackFilter {
         var f = self
         if o.years != nil { f.years = o.years }
+        if o.playedYears != nil { f.playedYears = o.playedYears }
         if o.plays != .any { f.plays = o.plays }
         if o.lastPlayed != .any { f.lastPlayed = o.lastPlayed }
         if o.added != .any { f.added = o.added }
@@ -232,8 +247,9 @@ struct TrackFilter: Equatable, Sendable {
             guard let n = Int(v.trimmingCharacters(in: CharacterSet(charactersIn: "+>="))), n > 0 else { return false }
             f.plays = .atLeast(n)
         case "played":
-            guard v == "never" else { return false }
-            f.plays = .never
+            if v == "never" { f.plays = .never; return true }
+            guard let r = years(v) else { return false }
+            f.playedYears = r
         case "last":
             if v == "never" { f.lastPlayed = .never; return true }
             if v == "thisyear" || v == "this-year" { f.lastPlayed = .thisYear; return true }
@@ -283,6 +299,10 @@ struct TrackFilter: Equatable, Sendable {
         if let y = years {
             w.append(y.lowerBound <= Self.earliest ? "year:-\(y.upperBound)" : y.upperBound >= Self.latest ? "year:\(y.lowerBound)-"
                      : y.lowerBound == y.upperBound ? "year:\(y.lowerBound)" : "year:\(y.lowerBound)-\(y.upperBound)")
+        }
+        if let y = playedYears {
+            w.append(y.lowerBound <= Self.earliest ? "played:-\(y.upperBound)" : y.upperBound >= Self.latest ? "played:\(y.lowerBound)-"
+                     : y.lowerBound == y.upperBound ? "played:\(y.lowerBound)" : "played:\(y.lowerBound)-\(y.upperBound)")
         }
         switch plays {
         case .any: break
