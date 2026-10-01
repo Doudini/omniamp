@@ -237,14 +237,20 @@ extension CollectionDB {
             let tk: String
             if let k = titleKeys[title] { tk = k } else { tk = Keys.title(title); titleKeys[title] = tk }
             let key = s.text(0) + "\u{1}" + tk
-            var c = out[key] ?? PlayCount()
-            let n = s.int(3)
-            c.plays += n
-            c.last = max(c.last, s.int(4))
-            c.byYear[s.int(2), default: 0] += n
-            out[key] = c
+            let n = s.int(3), last = s.int(4)
+            // Changed in place (a copy out and back would copy the song's years every time).
+            out[key, default: PlayCount()].plays += n
+            if last > out[key]!.last { out[key]!.last = last }
+            out[key]!.byYear[s.int(2), default: 0] += n
         }
         return out
+    }
+
+    /// The play history in a line ("plays:newest"): when it's the same, play counts read earlier still hold.
+    func playsFingerprint() throws -> String {
+        var f = ""
+        try db.query("SELECT count(*) || ':' || coalesce(max(ts), 0) FROM scrobbles") { f = $0.text(0) }
+        return f
     }
 
     /// OmniAmp's own plays (the ones last.fm has too included): how many, and since when.

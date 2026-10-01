@@ -82,10 +82,14 @@ struct TrackRow: Sendable {
     static func genreKeys(_ genre: String) -> [String] { CollectionDB.genres(genre).map(Keys.fold) }
 
     /// What the window's filters, the search (`ids`: its files; nil: no search) and the Tracks filter let through.
+    /// `rangePlays`: each song's plays in the filter's played years, when it has some (worked out once by the caller).
     static func visible(_ rows: [TrackRow], filter: LibraryFilter, ids: Set<Int64>?, tracks: TrackFilter = TrackFilter(),
-                        counts: [String: PlayCount] = [:], now: Date = Date()) -> [TrackRow] {
+                        counts: [String: PlayCount] = [:], rangePlays: [String: Int]? = nil, now: Date = Date()) -> [TrackRow] {
         if filter == LibraryFilter(), ids == nil, tracks.isEmpty { return rows }
         let m = tracks.isEmpty ? nil : tracks.matcher(now: now)
+        // Counts only looked up when a condition needs them (a year or genre filter doesn't).
+        let needsCounts = tracks.usesCounts
+        let inRange = tracks.playedYears == nil ? nil : rangePlays ?? counts.mapValues { $0.plays(in: tracks.playedYears) }
         return rows.filter { r in
             switch filter.scope {
             case .all: break
@@ -94,7 +98,8 @@ struct TrackRow: Sendable {
             }
             if filter.losslessOnly, !r.lossless { return false }
             if let ids, !ids.contains(r.track.id) { return false }
-            return m?.matches(r, counts[r.countKey]) ?? true
+            guard let m else { return true }
+            return needsCounts ? m.matches(r, counts[r.countKey], rangePlays: inRange?[r.countKey] ?? 0) : m.matches(r, nil)
         }
     }
 
@@ -160,9 +165,10 @@ struct TrackSort: Equatable, Sendable {
 
     /// `counts`: plays per song (TrackRow.countKey), for the Plays and Last Played columns; `played`: the years
     /// Plays counts (a filter's played range; nil: all).
-    func sorted(_ rows: [TrackRow], counts: [String: PlayCount] = [:], played: ClosedRange<Int>? = nil) -> [TrackRow] {
-        // Plays in a range: summed once per song, not in every comparison.
-        let inRange: [String: Int]? = column == .plays && played != nil ? counts.mapValues { $0.plays(in: played) } : nil
+    func sorted(_ rows: [TrackRow], counts: [String: PlayCount] = [:], played: ClosedRange<Int>? = nil,
+                rangePlays: [String: Int]? = nil) -> [TrackRow] {
+        // Plays in a range: summed once per song (or handed in), not in every comparison.
+        let inRange: [String: Int]? = column == .plays && played != nil ? rangePlays ?? counts.mapValues { $0.plays(in: played) } : nil
         return rows.sorted { a, b in
             let c = primary(a, b, counts, inRange)
             if c != 0 { return ascending ? c < 0 : c > 0 }
@@ -244,10 +250,14 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     /// Every track, sorted by `allSort`; `rows` is what the filters and the search let through of it.
     private var all: [TrackRow] = []
     private var allSort: TrackSort?
-    /// The played years `all` was sorted with (it matters when sorted by Plays).
+    /// The played years `all` was sorted with (it matters when sorted by Plays), and each song's plays in them
+    /// (worked out once per refresh, for the sort, the filter and the Plays cells).
     private var allPlayed: ClosedRange<Int>?
-    /// The played years the list shows now: Plays counts those (the Tracks filter's, or a typed word's).
-    private var played: ClosedRange<Int>? { trackFilter.merged(with: typed).playedYears }
+    private var shownPlays: [String: Int]?
+    /// One refresh at a time: a slider being dragged asks for one per mouse move, and only the latest matters.
+    private var refreshing = false, refreshAgain = false, revealAgain = false
+    /// What the play history was when the counts were read ("plays:newest"): unchanged, they aren't read again.
+    private var countsFingerprint = ""
     private var rows: [TrackRow] = []
     /// How long `rows` play, worked out when they're set (the status line asks on every selection change).
     private var rowsSeconds: Double = 0
@@ -411,6 +421,12 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     /// what's known (the library read again only when it changed, sorted again only when the order did), then shown.
     /// A newer refresh replaces one still running and starts from the same state, so nothing asked for is lost.
     private func refresh(revealSelection: Bool = false) {
+        if refreshing {
+            refreshAgain = true
+            revealAgain = revealAgain || revealSelection
+            return
+        }
+        refreshing = true
         generation += 1
         let gen = generation, sort = sort, q = query, filter = filter, counts = counts, version = libraryVersion
         let tracks = trackFilter.merged(with: typed)
@@ -420,40 +436,53 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         if !loaded { showEmpty("Loading…") }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let db = known == nil || !q.isEmpty ? try? CollectionDB() : nil
+            let rangePlays = range.map { r in counts.mapValues { $0.plays(in: r) } }
             let everything: [TrackRow]
             if let known {
-                everything = inOrder ? known : sort.sorted(known, counts: counts, played: range)
+                everything = inOrder ? known : sort.sorted(known, counts: counts, played: range, rangePlays: rangePlays)
             } else {
-                everything = sort.sorted((try? db?.trackRows()) ?? [], counts: counts, played: range)
+                everything = sort.sorted((try? db?.trackRows()) ?? [], counts: counts, played: range, rangePlays: rangePlays)
             }
             let ids = q.isEmpty ? nil : ((try? db?.fileIDs(matching: q)) ?? [])
-            let list = TrackRow.visible(everything, filter: filter, ids: ids, tracks: tracks, counts: counts)
+            let list = TrackRow.visible(everything, filter: filter, ids: ids, tracks: tracks, counts: counts, rangePlays: rangePlays)
             // Read again: the years and genres the filter bar offers.
             let library = known == nil ? Self.facts(everything) : nil
             DispatchQueue.main.async { [weak self] in
-                guard let self, gen == self.generation else { return }
-                self.all = everything
-                self.allSort = sort
-                self.allPlayed = range
-                self.showPlayedHeader(range)
-                if known == nil { self.readVersion = version }   // a change during the read: read again next time
-                if let library { self.bar.setLibrary(years: library.years, genres: library.genres) }
-                self.show(list)
-                if revealSelection, let first = self.table.selectedRowIndexes.first { self.table.scrollRowToVisible(first) }
-                if self.countsDirty { self.readCounts() }
+                guard let self else { return }
+                self.refreshing = false
+                if gen == self.generation {
+                    self.all = everything
+                    self.allSort = sort
+                    self.allPlayed = range
+                    self.shownPlays = rangePlays
+                    self.showPlayedHeader(range)
+                    if known == nil { self.readVersion = version }   // a change during the read: read again next time
+                    if let library { self.bar.setLibrary(years: library.years, genres: library.genres) }
+                    self.show(list)
+                    if revealSelection, let first = self.table.selectedRowIndexes.first { self.table.scrollRowToVisible(first) }
+                    if self.countsDirty { self.readCounts() }
+                }
+                // Asked again meanwhile (a slider dragged on): once more, with what's set now.
+                if self.refreshAgain {
+                    let reveal = self.revealAgain
+                    self.refreshAgain = false
+                    self.revealAgain = false
+                    self.refresh(revealSelection: reveal)
+                }
             }
         }
     }
 
     /// Tracks per year, and the genres (as the library spells them, most tracks first).
     nonisolated private static func facts(_ rows: [TrackRow]) -> (years: [Int: Int], genres: [(String, Int)]) {
-        var years: [Int: Int] = [:], counts: [String: Int] = [:], names: [String: String] = [:], split: [String: [String]] = [:]
+        var years: [Int: Int] = [:], counts: [String: Int] = [:], names: [String: String] = [:]
+        // Each genre string split and folded once (they repeat a lot).
+        var parts: [String: [(name: String, key: String)]] = [:]
         for r in rows {
             if let y = r.year { years[y, default: 0] += 1 }
             guard !r.genre.isEmpty else { continue }
-            let gs = split[r.genre] ?? { let g = CollectionDB.genres(r.genre); split[r.genre] = g; return g }()
-            for g in gs {
-                let k = Keys.fold(g)
+            let ps = parts[r.genre] ?? { let p = CollectionDB.genres(r.genre).map { ($0, Keys.fold($0)) }; parts[r.genre] = p; return p }()
+            for (g, k) in ps {
                 counts[k, default: 0] += 1
                 if names[k] == nil { names[k] = g }
             }
@@ -464,13 +493,19 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     /// Plays per song, in the background. Sorted by plays: sorted again; else just those columns redrawn.
     private func readCounts() {
         countsDirty = false
+        let known = countsFingerprint
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let c = (try? CollectionDB().playCounts()) ?? [:]
+            let db = try? CollectionDB()
+            // The history as it is (plays and the newest): the same as last time, nothing to read or redraw.
+            let fingerprint = (try? db?.playsFingerprint()) ?? ""
+            guard fingerprint != known || fingerprint.isEmpty else { return }
+            let c = (try? db?.playCounts()) ?? [:]
             // Plays per year over the whole history, for the filter's Played chart.
             var perYear: [Int: Int] = [:]
             for song in c.values { for (y, n) in song.byYear { perYear[y, default: 0] += n } }
             DispatchQueue.main.async { [weak self] in
-                guard let self, c != self.counts else { return }
+                guard let self else { return }
+                self.countsFingerprint = fingerprint
                 self.counts = c
                 self.bar.setPlays(years: perYear)
                 let sortsByPlays = self.sort.column == .plays || self.sort.column == .lastPlayed
@@ -727,8 +762,9 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             f.font = Dash.mono(11)
             f.textColor = Dash.text3
         case .plays:
-            let range = played
-            let n = counts[r.countKey]?.plays(in: range) ?? 0
+            // The range the rows were filtered with, and its plays per song (worked out with them, not per cell).
+            let range = allPlayed
+            let n = shownPlays.map { $0[r.countKey] ?? 0 } ?? counts[r.countKey]?.plays ?? 0
             f.stringValue = n > 0 ? n.formatted() : ""
             f.font = Dash.mono(11)
             // Counted by song: a live recording shows the studio one's plays too.

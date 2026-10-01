@@ -368,7 +368,8 @@ final class SegmentedPicker: NSControl {
     private func text(_ i: Int, _ color: NSColor) -> NSAttributedString {
         NSAttributedString(string: titles[i], attributes: [.font: Dash.font(11.5, .medium), .foregroundColor: color])
     }
-    private var widths: [CGFloat] { titles.indices.map { ceil(text($0, .white).size().width) + 2 * Self.pad } }
+    /// Measured once (the titles and the font don't change): mouse moves and draws read them.
+    private lazy var widths: [CGFloat] = titles.indices.map { ceil(text($0, .white).size().width) + 2 * Self.pad }
     override var intrinsicContentSize: NSSize { NSSize(width: widths.reduce(0, +), height: 22) }
 
     private func segment(at x: CGFloat) -> Int? {
@@ -468,7 +469,8 @@ final class FilterChip: NSControl {
     private var text: NSAttributedString {
         NSAttributedString(string: title, attributes: [.font: Dash.font(11.5, .medium), .foregroundColor: Dash.accent])
     }
-    override var intrinsicContentSize: NSSize { NSSize(width: text.size().width + 34, height: 22) }
+    private lazy var textWidth: CGFloat = text.size().width
+    override var intrinsicContentSize: NSSize { NSSize(width: textWidth + 34, height: 22) }
 
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 0.5, dy: 0.5)

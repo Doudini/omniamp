@@ -29,11 +29,9 @@ struct TrackFilter: Equatable, Sendable {
             }
         }
         func contains(_ k: ReleaseKind) -> Bool {
-            switch self {
-            case .albums: [.album, .single, .compilation].contains(k)
-            case .live: k == .live
-            case .shows: k == .show
-            case .demos: k == .unreleased
+            switch (self, k) {
+            case (.albums, .album), (.albums, .single), (.albums, .compilation), (.live, .live), (.shows, .show), (.demos, .unreleased): true
+            default: false
             }
         }
     }
@@ -73,14 +71,17 @@ struct TrackFilter: Equatable, Sendable {
         let genreKeys: Set<String>
         let startOfYear: Int, lastCut: Int?, addedCut: Double?
 
-        func matches(_ r: TrackRow, _ count: PlayCount?) -> Bool {
+        /// `rangePlays`: the song's plays in the played years (looked up from a map made once per pass); nil: worked
+        /// out here.
+        func matches(_ r: TrackRow, _ count: PlayCount?, rangePlays: Int? = nil) -> Bool {
             let f = filter
             if let y = f.years { guard let year = r.year, y.contains(year) else { return false } }
             if !f.kinds.isEmpty, !f.kinds.contains(where: { $0.contains(r.kind) }) { return false }
             if let a = f.artist, r.performerKey != a.key, r.artistKey != a.key { return false }
             if let a = f.album, r.track.albumKey != a.key { return false }
             if !genreKeys.isEmpty, !r.genreKeys.contains(where: genreKeys.contains) { return false }
-            let plays = count?.plays(in: f.playedYears) ?? 0, last = count?.last ?? 0
+            let plays = f.playedYears == nil ? count?.plays ?? 0 : rangePlays ?? count?.plays(in: f.playedYears) ?? 0
+            let last = count?.last ?? 0
             switch f.plays {
             case .any: if f.playedYears != nil, plays == 0 { return false }   // played in those years at all
             case .never: if plays > 0 { return false }

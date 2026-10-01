@@ -140,6 +140,11 @@ final class PlayHistoryTests: XCTestCase {
         XCTAssertEqual([blew.plays, blew.last], [3, 500])
         XCTAssertEqual(blew.byYear, [1970: 3], "plays per year (all in 1970 here)")
         XCTAssertEqual(c["nirvana\u{1}" + Keys.title("School")]?.plays, 1)
+        // The history's fingerprint moves with every play (the Tracks list reads counts again only then).
+        let before = try d.playsFingerprint()
+        XCTAssertEqual(try d.playsFingerprint(), before)
+        try d.addOwnPlay(play(900, title: "Sifting"), path: nil)
+        XCTAssertNotEqual(try d.playsFingerprint(), before)
         XCTAssertEqual(c.count, 2)
     }
 
