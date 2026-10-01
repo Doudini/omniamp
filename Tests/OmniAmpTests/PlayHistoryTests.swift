@@ -91,8 +91,8 @@ final class PlayHistoryTests: XCTestCase {
         let added = try d.addPlays([LastFM.Play(ts: 1000, artist: "Nirvana", album: "Bleach", title: "Blew (Remastered)", artistMBID: nil),
                                     LastFM.Play(ts: 500, artist: "Nirvana", album: "Bleach", title: "School", artistMBID: nil)])
         XCTAssertEqual(added, 2)
-        XCTAssertEqual(try d.playRange().count, 2)
-        XCTAssertEqual(try d.ownPlays().count, 1, "the taken-over play is last.fm's now")
+        XCTAssertEqual(try d.playRange().count, 2, "last.fm's history: both its plays")
+        XCTAssertEqual(try d.ownPlays().count, 2, "the taken-over play is still this Mac's too")
         XCTAssertEqual(try d.songPlays(artist: "nirvana", titleKey: Keys.title("Blew")).total, 1, "stored once")
         // Importing the same page again changes nothing.
         XCTAssertEqual(try d.addPlays([LastFM.Play(ts: 1000, artist: "Nirvana", album: "Bleach", title: "Blew (Remastered)", artistMBID: nil)]), 0)
@@ -101,16 +101,31 @@ final class PlayHistoryTests: XCTestCase {
     func testClearingIsSeparate() throws {
         let d = try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite"))
         try d.addOwnPlay(play(1000), path: "/m/blew.flac")
-        try d.addPlays([LastFM.Play(ts: 500, artist: "Nirvana", album: "Bleach", title: "School", artistMBID: nil)])
-        // Another last.fm account: its history goes, this Mac's plays stay.
+        try d.addOwnPlay(play(2000, title: "Love Buzz"), path: "/m/love buzz.flac")
+        // Last.fm has one of them, and one OmniAmp didn't count.
+        try d.addPlays([LastFM.Play(ts: 500, artist: "Nirvana", album: "Bleach", title: "School", artistMBID: nil),
+                        LastFM.Play(ts: 2000, artist: "Nirvana", album: "Bleach", title: "Love Buzz", artistMBID: nil)])
+        // Another last.fm account: its history goes, this Mac's plays stay (the one last.fm had too as well).
         try d.forgetPlays()
         XCTAssertEqual(try d.playRange().count, 0)
-        XCTAssertEqual(try d.ownPlays().count, 1)
-        // Clear in Settings: only this Mac's plays.
-        try d.addPlays([LastFM.Play(ts: 500, artist: "Nirvana", album: "Bleach", title: "School", artistMBID: nil)])
+        XCTAssertEqual(try d.ownPlays().count, 2)
+        // Clear in Settings: this Mac's plays go; one last.fm has too stays, as last.fm's.
+        try d.addPlays([LastFM.Play(ts: 500, artist: "Nirvana", album: "Bleach", title: "School", artistMBID: nil),
+                        LastFM.Play(ts: 2000, artist: "Nirvana", album: "Bleach", title: "Love Buzz", artistMBID: nil)])
         try d.forgetOwnPlays()
         XCTAssertEqual(try d.ownPlays().count, 0)
-        XCTAssertEqual(try d.playRange().count, 1)
+        XCTAssertEqual(try d.playRange().count, 2)
+        XCTAssertEqual(try d.songPlays(artist: "nirvana", titleKey: Keys.title("Blew")).total, 0)
+    }
+
+    func testCorrectedArtistIsStillTheSamePlay() throws {
+        // Last.fm corrected the artist (another key): the start time alone finds OmniAmp's play.
+        let d = try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite"))
+        try d.addOwnPlay(play(3000, title: "Purple Rain", artist: "Prince & The Revolution"), path: "/m/purple rain.flac")
+        XCTAssertEqual(try d.addPlays([LastFM.Play(ts: 3000, artist: "Prince", album: "Purple Rain", title: "Purple Rain", artistMBID: nil)]), 1)
+        XCTAssertEqual(try d.songPlays(artist: "prince", titleKey: Keys.title("Purple Rain")).total, 1)
+        XCTAssertEqual(try d.songPlays(artist: Keys.artist("Prince & The Revolution"), titleKey: Keys.title("Purple Rain")).total, 0)
+        XCTAssertEqual(try d.ownPlays().count, 1)
     }
 
     func testPlayCountsBySong() throws {
