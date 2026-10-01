@@ -1235,6 +1235,9 @@ final class Tickets {
         [a.key, a.artist, a.title, a.showDate ?? "", a.venue ?? "", a.year.map(String.init) ?? "", "\(Int(side * scale))"].joined(separator: "\u{1}")
     }
 
+    /// The library window closed: tickets are drawn again when needed (a few ms each).
+    func releaseMemory() { memory.removeAllObjects() }
+
     func cached(_ a: LibraryAlbum, side: CGFloat, scale: CGFloat) -> CGImage? {
         memory.object(forKey: Self.key(a, side: side, scale: scale) as NSString)?.image
     }

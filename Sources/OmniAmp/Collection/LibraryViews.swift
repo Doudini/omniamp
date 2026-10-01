@@ -73,6 +73,13 @@ final class LibraryArt {
     private static func key(_ a: LibraryAlbum, large: Bool) -> String { key(a) + (large ? "\u{2}L" : "") }
     private func memory(_ key: String) -> NSCache<NSString, Box> { key.hasSuffix("\u{2}L") ? largeMemory : memory }
 
+    /// The library window closed: the covers in memory go (they're kept on disk, read back in a moment when it opens
+    /// again), instead of a few hundred decoded images staying around while only the player is open.
+    func releaseMemory() {
+        memory.removeAllObjects()
+        largeMemory.removeAllObjects()
+    }
+
     func cached(_ album: LibraryAlbum, large: Bool = false) -> CGImage?? {
         let key = Self.key(album, large: large)
         return memory(key).object(forKey: key as NSString).map { $0.image }

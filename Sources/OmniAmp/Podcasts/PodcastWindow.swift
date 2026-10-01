@@ -1224,7 +1224,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func numberOfRows(in tableView: NSTableView) -> Int { tableView === showsTable ? shows.count : episodes.count }
 
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CardRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { tableView.reusableRowView("cardRow", CardRowView.init) }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let id = tableColumn?.identifier.rawValue else { return nil }

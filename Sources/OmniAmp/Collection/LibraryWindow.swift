@@ -189,6 +189,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func windowWillClose(_ notification: Notification) {
         Self.lastState = (section, filter, query, selectedEntry?.id, selectedAlbum?.key)
+        // Only the player stays open: the covers and tickets in memory go (on disk, or drawn again, when it opens).
+        LibraryArt.shared.releaseMemory()
+        Tickets.shared.releaseMemory()
         onClose?()
     }
 
@@ -1269,8 +1272,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        if tableView === albumTable, row < items.count, case .header = items[row] { return HeaderRowView() }
-        return CardRowView()
+        if tableView === albumTable, row < items.count, case .header = items[row] { return tableView.reusableRowView("headerRow", HeaderRowView.init) }
+        return tableView.reusableRowView("cardRow", CardRowView.init)
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {

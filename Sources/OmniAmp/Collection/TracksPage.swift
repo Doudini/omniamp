@@ -723,7 +723,7 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CardRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { tableView.reusableRowView("cardRow", CardRowView.init) }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard row < rows.count, let id = tableColumn?.identifier.rawValue, let c = TrackColumn(rawValue: id) else { return nil }

@@ -360,7 +360,7 @@ final class RadioWindowController: NSWindowController, NSWindowDelegate, NSTable
 
     func numberOfRows(in tableView: NSTableView) -> Int { stations.count }
 
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CardRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { tableView.reusableRowView("cardRow", CardRowView.init) }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let id = tableColumn?.identifier.rawValue, row < stations.count else { return nil }

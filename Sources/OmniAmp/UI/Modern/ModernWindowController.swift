@@ -563,7 +563,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
 extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { controller.rowCount }
 
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { PlaylistRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { tableView.reusableRowView("playlistRow", PlaylistRowView.init) }
 
     /// Clicking a row shows it in INFO; the playing track takes over again when playback moves on.
     func tableViewSelectionDidChange(_ notification: Notification) {

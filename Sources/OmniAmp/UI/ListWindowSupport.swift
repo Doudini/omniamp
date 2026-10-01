@@ -1,5 +1,18 @@
 import AppKit
 
+extension NSTableView {
+    /// A row view of this kind, one the table has spare when it can (by identifier, as cells are reused). A new one
+    /// every time isn't recycled: AppKit parks the old ones until the window is next drawn, and a window left in the
+    /// background with its lists refreshing (a night of playing) piled up thousands, with their layers.
+    func reusableRowView<T: NSTableRowView>(_ id: String, _ make: () -> T) -> T {
+        let identifier = NSUserInterfaceItemIdentifier(id)
+        if let v = makeView(withIdentifier: identifier, owner: nil) as? T { return v }
+        let v = make()
+        v.identifier = identifier
+        return v
+    }
+}
+
 /// What the Radio and Podcasts windows share: the look of their lists, their columns, typing to search.
 @MainActor
 enum ListLook {

@@ -248,7 +248,7 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { candidates.count }
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CardRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { tableView.reusableRowView("cardRow", CardRowView.init) }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let c = candidates[row]
