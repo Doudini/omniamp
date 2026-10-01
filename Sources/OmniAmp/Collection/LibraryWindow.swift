@@ -142,6 +142,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         observers.add(nc.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }
         })
+        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification] {
+            observers.add(nc.addObserver(forName: name, object: w, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.becameVisible() }
+            })
+        }
         library.start()
         // Test hook: OMNIAMP_LIBRARY=section[:entry] opens on a section and entry ("shows:Grateful Dead", "years:1997").
         var entry = Self.lastState?.entry
@@ -846,9 +851,31 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     @objc private func resumeDownloads() { LiveArchiveDownloads.shared.resumeAll() }
 
+    /// The window can be seen: open, not in the Dock, not covered by other windows.
+    private var onScreen: Bool {
+        guard let w = window else { return false }
+        return w.isVisible && !w.isMiniaturized && w.occlusionState.contains(.visible)
+    }
+
+    /// Library changes while the window couldn't be seen: one refresh when it's seen again.
+    private var refreshWhenSeen = false
+
+    /// Seen again (uncovered, back from the Dock): what changed meanwhile, now.
+    private func becameVisible() {
+        guard onScreen else { return }
+        if refreshWhenSeen {
+            refreshWhenSeen = false
+            libraryChanged()
+        }
+        tracksPage.becameVisible()
+    }
+
     /// Written during a scan: refresh at most every two seconds (the lists stay put under the mouse).
     private func libraryChanged() {
         tracksPage.libraryChanged()
+        // Behind other windows or in the Dock, nothing is re-read or redrawn (a background scan, hours of playing):
+        // the lists catch up once when the window is seen again.
+        guard onScreen else { refreshWhenSeen = true; return }
         // Genres, Stats, Needs Attention and Tracks go over the whole library: once the scan is done, not every 2 s of it.
         if library.progress.running, pages.isEmpty, [.genres, .stats, .attention, .tracks].contains(section), !searching || section == .tracks {
             refreshAfterScan = true

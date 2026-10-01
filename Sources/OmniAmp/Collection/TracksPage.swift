@@ -319,8 +319,9 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         observers.add(NotificationCenter.default.addObserver(forName: ListeningHistory.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                // Hidden (another section, the window closed): read when it's shown again, not on every import page.
-                if self.loaded, !self.isHidden, self.window?.isVisible == true { self.readCounts() } else { self.countsDirty = true }
+                // Hidden (another section, the window covered, in the Dock or closed): read when it's seen again, not on
+                // every import page or play.
+                if self.loaded, !self.isHidden, self.onScreen { self.readCounts() } else { self.countsDirty = true }
             }
         })
         let headerMenu = NSMenu()
@@ -365,6 +366,17 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     /// The library has new, changed or removed files: read it again the next time the list is shown.
     func libraryChanged() { libraryVersion += 1 }
+
+    private var onScreen: Bool {
+        guard let w = window else { return false }
+        return w.isVisible && !w.isMiniaturized && w.occlusionState.contains(.visible)
+    }
+
+    /// The window can be seen again: play counts that changed meanwhile, now (the list itself refreshes with the
+    /// window's own catch-up when the library changed).
+    func becameVisible() {
+        if loaded, !isHidden, countsDirty, onScreen { readCounts() }
+    }
 
     /// The list for this filter and search, the selection kept by track.
     func reload(filter: LibraryFilter, query: String, emptyText: String) {
