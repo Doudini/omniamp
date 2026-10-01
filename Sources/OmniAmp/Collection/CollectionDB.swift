@@ -733,7 +733,7 @@ final class CollectionDB {
     func trackRows() throws -> [TrackRow] {
         var out: [TrackRow] = []
         var discs: [String: Int] = [:]
-        var artists: [String: String] = [:], albums: [String: String] = [:], genres: [String: String] = [:]
+        var artists: [String: String] = [:], albums: [String: String] = [:], genres: [String: String] = [:], performers: [String: String] = [:]
         func key(_ s: String, _ cache: inout [String: String], _ make: (String) -> String) -> String {
             if let k = cache[s] { return k }
             let k = make(s)
@@ -749,7 +749,7 @@ final class CollectionDB {
             let keys = (key(t.artist, &artists) { TrackRow.sortKey(Keys.sortName($0)) }, key(t.album, &albums, TrackRow.sortKey),
                         key(genre, &genres, TrackRow.sortKey))
             var r = TrackRow(track: t, genre: genre, year: s.optInt(20), added: s.optDouble(21) ?? 0, artistKey: s.text(22),
-                             titleKey: s.optText(25) ?? Keys.title(t.title), keys: keys)
+                             titleKey: s.optText(25) ?? Keys.title(t.title), performerKey: key(t.artist, &performers, Keys.artist), keys: keys)
             r.official = s.int(23) <= ReleaseKind.live.rawValue
             r.lossless = s.int(24) == 1
             out.append(r)

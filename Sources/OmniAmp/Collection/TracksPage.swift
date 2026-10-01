@@ -24,9 +24,12 @@ struct TrackRow: Sendable {
     let year: Int?
     let added: Double
     let artistKey: String
-    /// The song's key (Keys.title): its plays are looked up by artist and song.
+    /// The song's key (Keys.title).
     let titleKey: String
-    var countKey: String { artistKey + "\u{1}" + titleKey }
+    /// Its plays are kept under who performs it (the track's artist, not the album's: a compilation's tracks are
+    /// "Various Artists" in the library but their own artist on last.fm) and the song. Worked out once (sorting by
+    /// plays looks it up in every comparison).
+    let countKey: String
     /// Its release: official (album, single, live album) or not, lossless (what the filters look at).
     var official = true
     var lossless = false
@@ -35,14 +38,16 @@ struct TrackRow: Sendable {
     let artistSort: String, albumSort: String, titleSort: String, genreSort: String
 
     /// `keys`: sort keys already worked out for this artist, album and genre (they repeat: each is folded once).
+    /// `performerKey`: Keys.artist of the track's own artist (worked out once per artist by the caller).
     init(track: LibraryTrack, genre: String, year: Int?, added: Double, artistKey: String, titleKey: String? = nil,
-         keys: (artist: String, album: String, genre: String)? = nil) {
+         performerKey: String? = nil, keys: (artist: String, album: String, genre: String)? = nil) {
         self.track = track
         self.genre = genre
         self.year = year
         self.added = added
         self.artistKey = artistKey
         self.titleKey = titleKey ?? Keys.title(track.title)
+        countKey = (performerKey ?? Keys.artist(track.artist)) + "\u{1}" + self.titleKey
         artistSort = keys?.artist ?? Self.sortKey(Keys.sortName(track.artist))
         albumSort = keys?.album ?? Self.sortKey(track.album)
         titleSort = Self.sortKey(track.title)
@@ -204,11 +209,15 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private let table = KeyTableView()
     private let scroll = NSScrollView()
     private let empty = EmptyNotice()
-    /// Every track, sorted; `rows` is what the filters and the search let through of it.
+    /// Every track, sorted by `allSort`; `rows` is what the filters and the search let through of it.
     private var all: [TrackRow] = []
+    private var allSort: TrackSort?
     private var rows: [TrackRow] = []
-    /// The library changed since `all` was read.
-    private var stale = true
+    /// How long `rows` play, worked out when they're set (the status line asks on every selection change).
+    private var rowsSeconds: Double = 0
+    /// Bumped by every library change; `all` was read at `readVersion` (stale while they differ).
+    private var libraryVersion = 0
+    private var readVersion = -1
     private var sort = TrackSort(pref: UserDefaults.standard.string(forKey: Pref.libraryTracksSort)) ?? TrackSort()
     private var filter = LibraryFilter()
     private var query = ""
@@ -217,7 +226,8 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     private var emptyText = ""
     /// Plays per song, read after the list is on screen (never holding it up), again when the history changes.
     private var counts: [String: PlayCount] = [:]
-    private var countsRead = false
+    /// Counts to read the next time the list is shown: never read yet, or the history changed while it was hidden.
+    private var countsDirty = true
     private let observers = Observers()
 
     override init(frame: NSRect) {
@@ -256,7 +266,11 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         rowMenu.delegate = self
         table.menu = rowMenu
         observers.add(NotificationCenter.default.addObserver(forName: ListeningHistory.changed, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { if self?.loaded == true { self?.readCounts() } }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Hidden (another section, the window closed): read when it's shown again, not on every import page.
+                if self.loaded, !self.isHidden, self.window?.isVisible == true { self.readCounts() } else { self.countsDirty = true }
+            }
         })
         let headerMenu = NSMenu()
         headerMenu.delegate = self
@@ -282,43 +296,58 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     // MARK: Loading
 
     /// The library has new, changed or removed files: read it again the next time the list is shown.
-    func libraryChanged() { stale = true }
+    func libraryChanged() { libraryVersion += 1 }
 
-    /// The list for this filter and search: in the background (the library read again only when it changed), the
-    /// selection kept by track.
+    /// The list for this filter and search, the selection kept by track.
     func reload(filter: LibraryFilter, query: String, emptyText: String) {
         self.emptyText = emptyText
         self.filter = filter
         self.query = query.trimmingCharacters(in: .whitespaces)
+        refresh()
+    }
+
+    /// The one way the list changes (filter, search, sort, new files, new counts): worked out in the background from
+    /// what's known (the library read again only when it changed, sorted again only when the order did), then shown.
+    /// A newer refresh replaces one still running and starts from the same state, so nothing asked for is lost.
+    private func refresh(revealSelection: Bool = false) {
         generation += 1
-        let gen = generation, sort = sort, q = self.query, counts = counts
-        let known = stale ? nil : all
-        stale = false
+        let gen = generation, sort = sort, q = query, filter = filter, counts = counts, version = libraryVersion
+        let known = readVersion == libraryVersion ? all : nil
+        let inOrder = known != nil && allSort == sort
         if !loaded { showEmpty("Loading…") }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let db = try? CollectionDB()
-            let everything = known ?? sort.sorted((try? db?.trackRows()) ?? [], counts: counts)
+            let db = known == nil || !q.isEmpty ? try? CollectionDB() : nil
+            let everything: [TrackRow]
+            if let known {
+                everything = inOrder ? known : sort.sorted(known, counts: counts)
+            } else {
+                everything = sort.sorted((try? db?.trackRows()) ?? [], counts: counts)
+            }
             let ids = q.isEmpty ? nil : ((try? db?.fileIDs(matching: q)) ?? [])
             let list = TrackRow.visible(everything, filter: filter, ids: ids)
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.generation else { return }
                 self.all = everything
+                self.allSort = sort
+                if known == nil { self.readVersion = version }   // a change during the read: read again next time
                 self.show(list)
-                if !self.countsRead { self.readCounts() }
+                if revealSelection, let first = self.table.selectedRowIndexes.first { self.table.scrollRowToVisible(first) }
+                if self.countsDirty { self.readCounts() }
             }
         }
     }
 
     /// Plays per song, in the background. Sorted by plays: sorted again; else just those columns redrawn.
     private func readCounts() {
-        countsRead = true
+        countsDirty = false
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let c = (try? CollectionDB().playCounts()) ?? [:]
             DispatchQueue.main.async { [weak self] in
                 guard let self, c != self.counts else { return }
                 self.counts = c
                 if self.sort.column == .plays || self.sort.column == .lastPlayed {
-                    self.resort(self.sort)
+                    self.allSort = nil
+                    self.refresh()
                 } else {
                     let cols = [TrackColumn.plays, .lastPlayed].map { self.table.column(withIdentifier: NSUserInterfaceItemIdentifier($0.rawValue)) }
                     self.table.reloadData(forRowIndexes: IndexSet(integersIn: 0..<self.rows.count), columnIndexes: IndexSet(cols.filter { $0 >= 0 }))
@@ -331,6 +360,7 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         let keep = Set(table.selectedRowIndexes.compactMap { $0 < rows.count ? rows[$0].track.id : nil })
         let first = !loaded
         rows = list
+        rowsSeconds = list.reduce(0) { $0 + ($1.track.duration ?? 0) }
         loaded = true
         table.reloadData()
         if first {
@@ -350,24 +380,12 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         empty.isHidden = text == nil || text!.isEmpty
     }
 
-    /// Sorted again (off the main thread), the selection kept and the first selected row in view.
+    /// Sorted another way (in the refresh, with the filter and search as they are), the first selected row in view.
     private func resort(_ s: TrackSort) {
         sort = s
         UserDefaults.standard.set(s.pref, forKey: Pref.libraryTracksSort)
         showSortIndicator()
-        generation += 1
-        let gen = generation, everything = all, shown = rows, whole = rows.count == all.count, counts = counts
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            // The whole library sorted (for the next filter or search), and what's listed now.
-            let sortedAll = s.sorted(everything, counts: counts)
-            let sorted = whole ? sortedAll : s.sorted(shown, counts: counts)
-            DispatchQueue.main.async { [weak self] in
-                guard let self, gen == self.generation else { return }
-                self.all = sortedAll
-                self.show(sorted)
-                if let first = self.table.selectedRowIndexes.first { self.table.scrollRowToVisible(first) }
-            }
-        }
+        refresh(revealSelection: true)
     }
 
     private func showSortIndicator() {
@@ -386,8 +404,7 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     var summary: String? {
         guard loaded else { return nil }
         let sel = table.selectedRowIndexes.filter { $0 < rows.count }
-        let counted = sel.count > 1 ? sel.map { rows[$0] } : rows
-        let seconds = counted.reduce(0) { $0 + ($1.track.duration ?? 0) }
+        let seconds = sel.count > 1 ? sel.reduce(0) { $0 + (rows[$1].track.duration ?? 0) } : rowsSeconds
         let time = seconds >= 86400 ? String(format: "%.1f days", seconds / 86400)
             : seconds >= 3600 ? String(format: "%.1f hours", seconds / 3600) : AlbumCell.length(seconds)
         let n = rows.count == 1 ? "1 track" : "\(rows.count.formatted()) tracks"

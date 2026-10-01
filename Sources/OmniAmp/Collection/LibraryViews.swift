@@ -376,6 +376,8 @@ final class AlbumCell: NSTableCellView {
     private var album: LibraryAlbum?
     private var token = -1
     private var ticketToken = -1
+    /// The scale the ticket was asked for at (cancelling needs the same key).
+    private var ticketScale: CGFloat = 2
     private static let ticketSide: CGFloat = 40
 
     init() {
@@ -420,7 +422,7 @@ final class AlbumCell: NSTableCellView {
 
     func show(_ a: LibraryAlbum, withArtist: Bool) {
         if let old = album, LibraryArt.key(old) != LibraryArt.key(a) { LibraryArt.shared.cancel(old, token: token) }
-        if let old = album { Tickets.shared.cancel(old, token: ticketToken, side: Self.ticketSide, scale: scale) }
+        if let old = album { Tickets.shared.cancel(old, token: ticketToken, side: Self.ticketSide, scale: ticketScale) }
         ticketToken = -1
         album = a
         stripe.layer?.backgroundColor = Theme.kind(a.kind).cgColor
@@ -458,7 +460,8 @@ final class AlbumCell: NSTableCellView {
     /// A show without a cover gets its ticket, small (the style, the stub and the year).
     private func ticket(_ a: LibraryAlbum) {
         guard a.kind == .show else { return }
-        ticketToken = Tickets.shared.load(a, side: Self.ticketSide, scale: scale) { [weak self] img in
+        ticketScale = scale
+        ticketToken = Tickets.shared.load(a, side: Self.ticketSide, scale: ticketScale) { [weak self] img in
             guard let self, let img, self.album?.key == a.key else { return }
             self.art.image = img
         }

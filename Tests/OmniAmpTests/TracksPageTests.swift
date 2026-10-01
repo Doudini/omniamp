@@ -67,6 +67,16 @@ final class TracksPageTests: XCTestCase {
         XCTAssertEqual(rows[2].countKey, "cure\u{1}" + Keys.title("Pictures of You"))
     }
 
+    func testPlaysCountUnderTheTracksOwnArtist() {
+        // A compilation's track is "Various Artists" in the library, its own artist on last.fm.
+        let t = LibraryTrack(id: 1, key: "k", path: "/m/va/1.flac", size: 1, mtime: 1, cueStart: nil, cueEnd: nil, cueNumber: nil,
+                             title: "Lazy Bones", artist: "Brant Bjork", album: "Desert Sessions", albumKey: "various artists\u{1}desert sessions",
+                             disc: nil, number: 1, duration: 200, format: "FLAC")
+        let r = TrackRow(track: t, genre: "", year: nil, added: 0, artistKey: "various artists")
+        XCTAssertEqual(r.countKey, "brant bjork\u{1}" + Keys.title("Lazy Bones"))
+        XCTAssertEqual(r.artistKey, "various artists", "the release's artist for its page")
+    }
+
     func testPrefRoundTrip() {
         XCTAssertEqual(TrackSort(pref: "year:desc"), TrackSort(column: .year, ascending: false))
         XCTAssertEqual(TrackSort(pref: TrackSort(column: .album).pref), TrackSort(column: .album))

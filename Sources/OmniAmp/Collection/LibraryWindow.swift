@@ -839,8 +839,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// Written during a scan: refresh at most every two seconds (the lists stay put under the mouse).
     private func libraryChanged() {
         tracksPage.libraryChanged()
-        // Genres, Stats and Needs Attention count over the whole library: once the scan is done, not every 2 s of it.
-        if library.progress.running, pages.isEmpty, !searching, [.genres, .stats, .attention].contains(section) {
+        // Genres, Stats, Needs Attention and Tracks go over the whole library: once the scan is done, not every 2 s of it.
+        if library.progress.running, pages.isEmpty, [.genres, .stats, .attention, .tracks].contains(section), !searching || section == .tracks {
             refreshAfterScan = true
             return
         }
