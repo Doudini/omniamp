@@ -47,7 +47,7 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
     var onClose: (() -> Void)?
     /// Right-click menu for the playlist (built by the app delegate).
     var playlistMenu: (() -> NSMenu)?
-    private static let rowType = NSPasteboard.PasteboardType("com.omniamp.rows")
+    private static let rowType = LibraryDrag.playerRowsType
 
     private static let colNum = NSUserInterfaceItemIdentifier("num")
     private static let colTitle = NSUserInterfaceItemIdentifier("title")
@@ -134,8 +134,9 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         table.onDelete = { [weak self] in self?.removeSelected() }
         table.onMove = { [weak self] d in self?.moveSelection(by: d) }
         table.contextMenu = { [weak self] in self?.playlistMenu?() }
-        table.registerForDraggedTypes([.fileURL, Self.rowType])
-        table.setDraggingSourceOperationMask(.move, forLocal: true)
+        table.registerForDraggedTypes([.fileURL, Self.rowType, LibraryDrag.tracksType])
+        // Move: reordering here; copy: onto a playlist in the library.
+        table.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
         table.draggingDestinationFeedbackStyle = .gap
 
         // Only the title column stretches with the window.
@@ -633,10 +634,11 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
         return cell
     }
 
-    // Drag source: rows carry their row number (reordering within the table).
+    // Drag source: rows carry their row number (reordering within the table), and the song itself (a playlist in the
+    // library takes it, radio and podcasts included).
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        guard controller.visible == nil else { return nil } // no reordering while filtered
-        let item = NSPasteboardItem()
+        guard controller.visible == nil, row < controller.tracks.count else { return nil } // no reordering while filtered
+        let item = LibraryDrag.item(for: controller.tracks[row])
         item.setString(String(row), forType: Self.rowType)
         return item
     }
@@ -665,9 +667,14 @@ extension ModernWindowController: NSTableViewDataSource, NSTableViewDelegate {
             tableView.selectRowIndexes(moved, byExtendingSelection: false)
             return true
         }
+        let at = row >= 0 && controller.visible == nil ? row : nil
+        // Songs from a playlist in the library: as they are (stations and episodes aren't files).
+        if let tracks = LibraryDrag.tracks(from: pb), !tracks.isEmpty {
+            controller.insertScanned(tracks, at: at ?? controller.tracks.count)
+            return true
+        }
         let urls = LibraryDrag.urls(from: pb)   // a library release sharing its folder: just its own files
         guard !urls.isEmpty else { return false }
-        let at = row >= 0 && controller.visible == nil ? row : nil
         if let open = onOpenFiles { open(urls, at) } else { controller.add(urls, at: at) }
         return true
     }

@@ -54,6 +54,7 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
 - **Browse** by artist, show, year or genre, see what's new, and search artists, albums, songs, venues, genres and folder names. Dates work in any spelling (1977-05-08, 8.5.77, 5/8/1977), "quotes" match exact words, and a typo gets a "Search for …" with the spelling your library uses.
 - **Stats:** your collection at a glance, from the newest addition to what's lossless.
 - **Listening:** connect [Last.fm](https://www.last.fm) to see your whole history: your most played artist, plays per year, your top artists through the years, and where your music comes from. What you play in OmniAmp is kept too, on your Mac (Settings → Play History), so it works without Last.fm; plays Last.fm has as well are counted once.
+- **Playlists:** your saved playlists in the sidebar, always in view. Drag songs, albums, folders or files onto one to add them (onto the PLAYLISTS title for a new one), or right-click songs anywhere: **Add to Playlist ▸**. Open one to reorder, remove or play its songs. Sort them into color-coded groups (+ → New Group; drag a playlist onto a group). They're ordinary `.m3u8` files, the same as File → Saved Playlists, and a group is a folder whose color is its Finder tag.
 - **Needs Attention:** finds files with missing tags, duplicates and artists spelled several ways, and helps you fix them.
 
 <p align="center">
@@ -88,10 +89,19 @@ Press **PODCASTS** (or ⌘3) to browse the top shows in your country, or search 
 - **Filter:** type to filter a show's episodes by title (⇧⌘F), or show only the ones you haven't played (UNPLAYED, ⇧⌘U).
 - **Downloads:** download episodes to play offline (⌘D). They're kept in a folder you choose in Settings; right-click → Show in Finder.
 - **OPML:** import your subscriptions from another podcast app, or export them as a backup (in the + FEED menu).
-- **Speed:** 1× to 2× (Controls → Podcast Speed), remembered per show, without changing the pitch.
+- **Speed:** 1× to 2× (Controls → Playback Speed), remembered per show, without changing the pitch.
 - **Playback:** episodes stream through the macOS player, so the EQ and visualizer don't apply to them.
 - **Any feed:** **+ FEED** subscribes to shows that aren't in the directory, including private or paid feeds with a personal link.
 - **Keyboard:** arrows move between shows and episodes, Return plays, ⌃Tab switches between top shows and subscriptions.
+
+### Books & Hörspiele
+
+Press **BOOKS** in the Podcasts window (or ⌥⌘3) for audiobooks and radio plays, with the same list, notes, resume, speed and downloads:
+- **ARD Audiothek:** the German public broadcasters' Hörspiele, Hörbücher and children's plays (Krimi-Klassiker, Große Geschichten, the ARD Hörspiel-Speicher and more). Some may only be streamed, and plays go offline after a year or two; the notes say until when, when ARD does.
+- **LibriVox:** public-domain audiobooks read by volunteers, in German, English and many other languages.
+- **archive.org:** any audio item there, one item as one book. Each one shows its licence, or "no licence stated": many uploads (old cassette rips of commercial series, for example) aren't licensed by whoever owns them, and they can disappear.
+- **BROWSE** lists ARD's categories, popular LibriVox books and archive.org's radio plays; search asks all three. **ADD TO SHELF** keeps a book or series under **MY SHELF**.
+- A book's parts are listed in order; playing one queues the parts after it. Downloaded parts go into a folder per book and stay until you remove them.
 
 ## Add URL
 
@@ -124,7 +134,7 @@ Press **PODCASTS** (or ⌘3) to browse the top shows in your country, or search 
 - **Editing:** drag to reorder, a play queue (Q), sorting, and removal of duplicates and missing files.
 - **Live playlist folders:** the playlist follows your music folders live. New files appear next to their folder-mates, deleted files disappear and edited files are re-tagged. Your folder structure is never touched.
 - **ADD menu:** Add Files…, Add Folder… and Add URL…, in both looks.
-- **Playlist files:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists.
+- **Playlist files:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists, which the Music Library's sidebar shows and edits.
 - **Jump to file (J):** type to search. Enter plays the result and clears the search; ⇧Enter keeps the results.
 - **Display options:** choose the playlist font (Hack, Hack Compact or the classic font) and toggle track numbers.
 

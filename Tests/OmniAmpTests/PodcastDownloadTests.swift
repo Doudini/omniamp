@@ -100,6 +100,21 @@ final class PodcastDownloadTests: XCTestCase {
         XCTAssertEqual(PodcastDownloads(directory: store).state(ep.url), .none, "removal is saved")
     }
 
+    /// Cancel, then download the same episode again at once: the cancelled one reporting in late doesn't
+    /// take the new one's place (whose file was then dropped).
+    func testCancelThenRetryStillFinishes() throws {
+        let source = dir.appendingPathComponent("retry.mp3")
+        try Data(repeating: 5, count: 200_000).write(to: source)
+        let ep = PodcastEpisode(title: "Retry", url: source.absoluteString, published: nil, duration: nil, summary: nil)
+        let d = PodcastDownloads(directory: dir.appendingPathComponent("store5"))
+        d.download(ep, show: show)
+        d.cancel(ep.url)
+        let done = expectation(forNotification: PodcastDownloads.changed, object: ep.url) { _ in MainActor.assumeIsolated { d.state(ep.url) == .done } }
+        d.download(ep, show: show)
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(d.localFile(ep.url))).count, 200_000)
+    }
+
     func testIndexSurvivesAnUnavailableFolder() throws {
         // An entry whose file lives on a drive that isn't mounted: listed, just not playable right now.
         let store = dir.appendingPathComponent("store3")

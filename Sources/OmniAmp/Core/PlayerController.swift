@@ -291,16 +291,17 @@ final class PlayerController {
         return store.tracks.count - 1
     }
 
-        /// Add a podcast episode (or find it if it's already in the playlist). Returns its index.
+    /// Add a podcast episode at `position` (nil: the end), or find it if it's already in the playlist. Returns its index.
     @discardableResult
-    func addEpisode(_ episode: Track) -> Int {
+    func addEpisode(_ episode: Track, at position: Int? = nil) -> Int {
         if let i = store.tracks.firstIndex(where: { $0.path == episode.path }) {
             store.updateEpisode(at: i, from: episode)   // e.g. added before episodes had their own covers
             scheduleSave()
             return i
         }
-        insertScanned([episode], at: store.tracks.count)
-        return store.tracks.count - 1
+        let at = min(max(0, position ?? store.tracks.count), store.tracks.count)
+        insertScanned([episode], at: at)
+        return at
     }
 
     /// Insert tracks that were already scanned (watched folders), keeping the current track.
@@ -443,7 +444,9 @@ final class PlayerController {
 
     // MARK: Playback
 
-    func play(index: Int, recordHistory: Bool = true) {
+    /// `fromStart`: an explicit restart (Previous, Play while playing) ignores the saved place of a long file.
+    /// The place is still saved first: until 30 s after the restart have played, Stop then Play goes back to it.
+    func play(index: Int, recordHistory: Bool = true, fromStart: Bool = false) {
         guard index >= 0, index < store.tracks.count else { return }
         let old = currentIndex
         rememberPosition()
@@ -472,7 +475,7 @@ final class PlayerController {
             let t = store.tracks[index]
             player.rate = speed(for: t)
             // Downloaded: play from disk (offline too). The track keeps its web address as its identity.
-            player.playEpisode(url: PodcastDownloads.shared.localFile(t.path) ?? t.url, from: resumePosition(for: t), duration: t.duration)
+            player.playEpisode(url: PodcastDownloads.shared.localFile(t.path) ?? t.url, from: fromStart ? 0 : resumePosition(for: t), duration: t.duration)
             PodcastLibrary.shared.noteListened(t.path, track: t)
             Scrobbler.shared.trackStarted(nil, duration: 0)   // podcasts aren't scrobbled
             ui?.currentTrackDidChange(old: old, new: index)
@@ -481,7 +484,7 @@ final class PlayerController {
         }
         // The row shows as playing at once; the file opens in the background (a network share can be slow).
         let t = store.tracks[index]
-        player.play(url: t.url, from: resumePosition(for: t), range: t.cueRange) { [weak self] ok in
+        player.play(url: t.url, from: fromStart ? 0 : resumePosition(for: t), range: t.cueRange) { [weak self] ok in
             self?.trackOpened(ok, index: index)
         }
         ui?.currentTrackDidChange(old: old, new: index)
@@ -537,7 +540,7 @@ final class PlayerController {
             player.resume()
             updateNowPlaying()
         case .playing:
-            if let c = currentIndex { play(index: c, recordHistory: false) }
+            if let c = currentIndex { play(index: c, recordHistory: false, fromStart: true) }
         case .stopped:
             if let s = ui?.selectedTrackIndex, s != currentIndex {
                 play(index: s)
@@ -565,7 +568,7 @@ final class PlayerController {
     func previous() {
         guard !store.tracks.isEmpty else { return }
         // Past 3 s, Previous restarts the track, but not a live station (that would just reconnect it).
-        if player.currentTime > 3, let c = currentIndex, !store.tracks[c].isStream { play(index: c, recordHistory: false); return }
+        if player.currentTime > 3, let c = currentIndex, !store.tracks[c].isStream { play(index: c, recordHistory: false, fromStart: true); return }
         while shuffle, let h = history.popLast() {
             if let i = store.index(ofID: h) { play(index: i, recordHistory: false); return }
         }
@@ -784,7 +787,10 @@ final class PlayerController {
         forgetPosition(currentTrack?.key)
         if let t = currentTrack, t.isEpisode {
             PodcastLibrary.shared.markPlayed(t.path)
-            PodcastDownloads.shared.remove(t.path)   // heard to the end: the download has done its job
+            // Heard to the end: a podcast's download has done its job. Books and radio plays are kept (heard
+            // again, and their source may take them offline).
+            let show = PodcastDownloads.shared.entries[t.path]?.show ?? PodcastLibrary.shared.lookup(t.path)?.show
+            if show?.isBook != true { PodcastDownloads.shared.remove(t.path) }
         }
         if stopAfterCurrent {
             stopAfterCurrent = false

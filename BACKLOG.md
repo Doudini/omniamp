@@ -7,7 +7,7 @@ Ideas we want but have deferred. Roughly ordered by value within each group.
 - **Synced lyrics**: show `.lrc` files that sit next to the tracks, scrolling in time with playback.
 - **Global hotkeys**: control playback from any app.
 - **Menu-bar mini player**: play/pause/next and the current track from the menu bar.
-- **Podcasts, next steps**: download episodes for offline listening, playback speed (1.25×/1.5×/2×), chapters.
+- **Podcasts and books, next steps**: chapters (podcast chapter tags, M4B audiobooks), playback speed for local files, Add URL for archive.org / LibriVox / ARD links.
 
 ## Music library
 - **Play history, next steps** (the basic history is in: every counted play is kept, Settings → Play History): import a ListenBrainz history like the last.fm one, export this Mac's plays (to last.fm/ListenBrainz or a file), and count plays per file where tags spell a song differently from last.fm.
@@ -15,7 +15,8 @@ Ideas we want but have deferred. Roughly ordered by value within each group.
 - **Background cover warm-up**: prepare the library's cover thumbnails for albums not scrolled to yet.
 - **Spoken tracks in play counts** (not decided yet): Tracks counts plays per song, so a bootleg's "Banter", "Intro", "Tuning", "Crowd" or "Applause" tracks all share one count (Sharon Van Etten's banter shows 2,028 plays on every one, topping the Plays sort). Count those per file, or leave them out of Plays.
 - **The playing song's history in the player** (not decided yet): the info panel shows the current track's plays and when it was last played ("played 388 times · last in 2008"), a click opening it in Tracks.
-- **Bookmarks**: a sidebar section for things kept: saved Tracks filters, saved playlists, maybe artists and shows. How it should look and behave is still open.
+- **Playlist colors**: a color for a single playlist too (like a group's, a Finder tag on its file), shown as its icon's color in the sidebar.
+- **Bookmarks**: a sidebar section for things kept: saved Tracks filters, maybe artists and shows (saved playlists have their own Playlists group in the sidebar now). How it should look and behave is still open.
 - **Save Ticket as Cover…**: an album-menu item for a show without a cover that writes its concert ticket (`TicketArt`) into the folder as `cover.jpg`, so other apps show it too. Only on request, never automatically: a written ticket can't be told apart from a real cover, doesn't follow later design changes, and writes to the NAS.
 
 ## Classic look

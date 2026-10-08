@@ -88,9 +88,16 @@ final class DropView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+    /// The playlist's own rows carry their files too: dropped beside the list, they'd be added a second time.
+    private static func isPlaylistRows(_ sender: NSDraggingInfo) -> Bool {
+        sender.draggingPasteboard.types?.contains(LibraryDrag.playerRowsType) == true
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { Self.isPlaylistRows(sender) ? [] : .copy }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { Self.isPlaylistRows(sender) ? [] : .copy }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard !Self.isPlaylistRows(sender) else { return false }
         let urls = LibraryDrag.urls(from: sender.draggingPasteboard)
         guard !urls.isEmpty else { return false }
         onDrop?(urls)

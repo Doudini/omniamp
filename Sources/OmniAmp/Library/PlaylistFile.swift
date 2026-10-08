@@ -42,10 +42,9 @@ enum PlaylistFile {
             var pendingTitle: String?, pendingHead: String?
             for line in text.components(separatedBy: .newlines) {
                 let t = line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\u{FEFF}", with: "")
-                if t.hasPrefix("#EXTINF:"), let comma = Self.titleComma(t) {
-                    let head = String(t[t.index(t.startIndex, offsetBy: 8)..<comma])
-                    pendingTitle = String(t[t.index(after: comma)...]).trimmingCharacters(in: .whitespaces)
-                    pendingHead = head
+                if let inf = extinf(t) {
+                    pendingTitle = inf.title
+                    pendingHead = inf.head
                     continue
                 }
                 guard !t.isEmpty, !t.hasPrefix("#") else { continue }
@@ -62,32 +61,56 @@ enum PlaylistFile {
         guard let data = try? Data(contentsOf: url) else { return [] }
         let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
         let base = url.deletingLastPathComponent()
-        return refs(text, pls: url.pathExtension.lowercased() == "pls").compactMap { ref, title, head in
-            let h = head ?? ""
-            if ref.hasPrefix("http://") || ref.hasPrefix("https://") {   // radio or podcast
-                return URL(string: ref).map {
-                    Entry(url: $0, title: title, logo: Self.attribute("tvg-logo", in: h), podcast: Self.attribute("omniamp-podcast", in: h),
-                          seconds: Sane.duration(Double(h.split(separator: " ").first ?? "")), web: Self.attribute("omniamp-web", in: h) != nil)
-                }
+        return refs(text, pls: url.pathExtension.lowercased() == "pls").compactMap { entry(ref: $0.ref, title: $0.title, head: $0.head, base: base) }
+    }
+
+    /// One playlist line read (relative paths against `base`, the playlist's folder); nil for what OmniAmp can't use.
+    static func entry(ref: String, title: String?, head: String?, base: URL) -> Entry? {
+        let h = head ?? ""
+        if ref.hasPrefix("http://") || ref.hasPrefix("https://") {   // radio or podcast
+            return URL(string: ref).map {
+                Entry(url: $0, title: title, logo: Self.attribute("tvg-logo", in: h), podcast: Self.attribute("omniamp-podcast", in: h),
+                      seconds: Sane.duration(Double(h.split(separator: " ").first ?? "")), web: Self.attribute("omniamp-web", in: h) != nil)
             }
-            let u: URL
-            if ref.hasPrefix("file://") {
-                guard let f = URL(string: ref) else { return nil }
-                u = f
-            } else {
-                if ref.contains("://") { return nil }
-                let path = ref.replacingOccurrences(of: "\\", with: "/")
-                u = URL(exactPath: path.hasPrefix("/") ? path : ((base.path as NSString).appendingPathComponent(path) as NSString).standardizingPath)
-            }
-            var e = Entry(url: u, title: title)
-            if let cue = Self.attribute("omniamp-cue", in: h) {
-                let f = cue.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-                e.cueStart = Sane.offset(f.first.flatMap(Double.init))
-                e.cueEnd = f.count > 1 ? Sane.offset(Double(f[1])) : nil
-                e.cueNumber = f.count > 2 ? Int(f[2]) : nil
-            }
-            return e
         }
+        let u: URL
+        if ref.hasPrefix("file://") {
+            guard let f = URL(string: ref) else { return nil }
+            u = f
+        } else {
+            if ref.contains("://") { return nil }
+            let path = ref.replacingOccurrences(of: "\\", with: "/")
+            u = URL(exactPath: path.hasPrefix("/") ? path : ((base.path as NSString).appendingPathComponent(path) as NSString).standardizingPath)
+        }
+        var e = Entry(url: u, title: title, seconds: Sane.duration(Double(h.split(separator: " ").first ?? "")))
+        if let cue = Self.attribute("omniamp-cue", in: h) {
+            let f = cue.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            e.cueStart = Sane.offset(f.first.flatMap(Double.init))
+            e.cueEnd = f.count > 1 ? Sane.offset(Double(f[1])) : nil
+            e.cueNumber = f.count > 2 ? Int(f[2]) : nil
+        }
+        return e
+    }
+
+    /// A web entry as the playlist has it: a web audio file, a podcast episode or a station. nil for a file.
+    static func remoteTrack(_ e: Entry) -> Track? {
+        let url = e.url
+        guard !url.isFileURL else { return nil }
+        if e.web { return .webFile(url.absoluteString, title: e.title ?? url.lastPathComponent) }
+        if let show = e.podcast {
+            // Saved as "Show - Episode": keep just the episode title.
+            var title = e.title ?? url.lastPathComponent
+            if title.hasPrefix(show + " - ") { title.removeFirst(show.count + 3) }
+            return .episode(url.absoluteString, title: title, show: show, artwork: e.logo, duration: e.seconds, published: nil, summary: nil)
+        }
+        return .stream(url.absoluteString, name: e.title, logo: e.logo)
+    }
+
+    /// An #EXTINF line's attributes (`head`, the length first) and title; nil for any other line.
+    static func extinf(_ line: String) -> (head: String, title: String)? {
+        guard line.hasPrefix("#EXTINF:"), let comma = titleComma(line) else { return nil }
+        return (String(line[line.index(line.startIndex, offsetBy: 8)..<comma]),
+                String(line[line.index(after: comma)...]).trimmingCharacters(in: .whitespaces))
     }
 
     /// The comma that starts the title in `#EXTINF:-1 tvg-logo="a,b",Title` (commas inside quotes don't count).
@@ -121,13 +144,19 @@ enum PlaylistFile {
         var out = "#EXTM3U\n"
         out.reserveCapacity(tracks.count * 120)
         for t in tracks {
-            let secs = Sane.duration(t.duration).map { Int($0.rounded()) } ?? -1
-            let logo = t.logo.map { " tvg-logo=\"\(attr($0))\"" } ?? ""
-            let show = t.isWebFile ? " omniamp-web=\"1\"" : t.podcast.flatMap { $0.isEmpty ? nil : " omniamp-podcast=\"\(attr($0))\"" } ?? ""
-            let cue = t.cueStart.map { " omniamp-cue=\"\($0),\(t.cueEnd.map { String($0) } ?? ""),\(t.cueNumber ?? 0)\"" } ?? ""
-            out += "#EXTINF:\(secs)\(logo)\(show)\(cue),\(oneLine(t.displayTitle))\n\(oneLine(t.path))\n"
+            let l = lines(for: t)
+            out += l.extinf + "\n" + l.ref + "\n"
         }
         try out.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// A track's two lines in an extended M3U: its #EXTINF (length, logo, show, CUE slice, title) and its path or URL.
+    static func lines(for t: Track) -> (extinf: String, ref: String) {
+        let secs = Sane.duration(t.duration).map { Int($0.rounded()) } ?? -1
+        let logo = t.logo.map { " tvg-logo=\"\(attr($0))\"" } ?? ""
+        let show = t.isWebFile ? " omniamp-web=\"1\"" : t.podcast.flatMap { $0.isEmpty ? nil : " omniamp-podcast=\"\(attr($0))\"" } ?? ""
+        let cue = t.cueStart.map { " omniamp-cue=\"\($0),\(t.cueEnd.map { String($0) } ?? ""),\(t.cueNumber ?? 0)\"" } ?? ""
+        return ("#EXTINF:\(secs)\(logo)\(show)\(cue),\(oneLine(t.displayTitle))", oneLine(t.path))
     }
 
     /// Folder for named playlists (Application Support/OmniAmp/Playlists).
@@ -135,11 +164,5 @@ enum PlaylistFile {
         let d = LibraryCache.fileURL.deletingLastPathComponent().appendingPathComponent("Playlists", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
-    }
-
-    static var saved: [URL] {
-        ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
-            .filter(isPlaylist)
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
 }

@@ -24,6 +24,10 @@ struct PodcastEpisode: Codable, Equatable {
     var links: [[String]]?
     /// The feed's own id for the episode: stays the same when the audio address changes (tracking prefixes, CDNs).
     var guid: String?
+    /// Books: false when the source only allows streaming (some ARD plays). nil: a podcast, downloadable.
+    var downloadable: Bool?
+    /// Books: when the source takes it offline (ARD), if it says.
+    var expires: Double?
 
     /// The episode's own image, else the show's.
     func artwork(show: PodcastShow) -> String? { image ?? show.artwork }
@@ -589,7 +593,7 @@ final class PodcastLibrary {
             subscriptions.append(show)
             subscriptions.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
             // Everything already out counts as seen; only later releases show up as new.
-            if let newest = cachedEpisodes(show).first?.published { seen[show.feedURL] = newest; save(seen, "seen.json") }
+            if let newest = Self.newest(cachedEpisodes(show)) { seen[show.feedURL] = newest; save(seen, "seen.json") }
         }
         save(subscriptions, "subscriptions.json")
     }
@@ -628,7 +632,7 @@ final class PodcastLibrary {
         dir.appendingPathComponent("feeds/" + Insecure.SHA1.hash(data: Data(feed.utf8)).map { String(format: "%02x", $0) }.joined() + ".json")
     }
 
-    /// Episodes from the last download (newest first), without touching the network.
+    /// Episodes from the last download (newest first; a book's parts in order), without touching the network.
     func cachedEpisodes(_ show: PodcastShow) -> [PodcastEpisode] {
         if let c = feeds[show.feedURL] { return c.episodes }
         guard let data = try? Data(contentsOf: feedFile(show.feedURL)), let c = try? JSONDecoder().decode(FeedCache.self, from: data) else { return [] }
@@ -641,6 +645,7 @@ final class PodcastLibrary {
     func episodes(_ show: PodcastShow, maxAge: Double = 600) async throws -> [PodcastEpisode] {
         knownShows[show.feedURL] = show
         _ = cachedEpisodes(show)   // loads the disk cache
+        let maxAge = show.isFixedBook && maxAge > 0 ? 7 * 86_400 : maxAge
         if let c = feeds[show.feedURL], Date().timeIntervalSince1970 - c.fetched < maxAge { return c.episodes }
         // Opening the window refreshes subscriptions while the show you click loads too: one download per feed.
         if let running = fetching[show.feedURL] { return try await running.value }
@@ -654,7 +659,11 @@ final class PodcastLibrary {
     /// Feed caches are written here, one after the other (tests wait on it with `writes.sync {}`).
     static let writes = DispatchQueue(label: "omniamp.podcast.writes", qos: .utility)
 
+    /// Where books and radio plays come from (tests use their own).
+    lazy var books = BookDirectory.shared
+
     private func fetch(_ show: PodcastShow, fresh: Bool) async throws -> [PodcastEpisode] {
+        if show.isBook { return try await fetchBook(show) }
         guard let url = URL(string: show.feedURL) else { return [] }
         var req = URLRequest(url: url)
         if fresh { req.cachePolicy = .reloadIgnoringLocalCacheData }   // Refresh Episodes: really ask the server
@@ -675,6 +684,22 @@ final class PodcastLibrary {
         if failed, saved.count > eps.count {
             throw PodcastFeedError.unreadable("the feed is damaged part-way through")
         }
+        store(eps, for: show, replacing: saved)
+        completeSubscription(show.feedURL, title: channel.title, author: channel.author, artwork: channel.artwork, newest: Self.newest(eps))
+        return eps
+    }
+
+    /// A book's parts come from its source's API instead of an RSS feed; the rest is the same.
+    private func fetchBook(_ show: PodcastShow) async throws -> [PodcastEpisode] {
+        let eps = try await books.episodes(for: show)
+        let saved = feeds[show.feedURL]?.episodes ?? []
+        if eps.isEmpty, !saved.isEmpty { throw PodcastFeedError.unreadable("nothing in it can be played now") }
+        store(eps, for: show, replacing: saved)
+        completeSubscription(show.feedURL, title: show.title, author: show.author, artwork: show.artwork, newest: Self.newest(eps))
+        return eps
+    }
+
+    private func store(_ eps: [PodcastEpisode], for show: PodcastShow, replacing saved: [PodcastEpisode]) {
         migrateMovedEpisodes(from: saved, to: eps)
         let c = FeedCache(fetched: Date().timeIntervalSince1970, episodes: eps)
         feeds[show.feedURL] = c
@@ -682,9 +707,10 @@ final class PodcastLibrary {
         Self.writes.async { try? JSONEncoder().encode(c).write(to: file, options: .atomic) }   // off the main thread, in order
         keepInMemory(show.feedURL)
         MemoryTrim.soon()   // parsing and saving a big feed leaves freed memory behind
-        completeSubscription(show.feedURL, title: channel.title, author: channel.author, artwork: channel.artwork, newest: eps.first?.published)
-        return eps
     }
+
+    /// The latest release in a list (books list their parts in story order, not newest first).
+    nonisolated static func newest(_ eps: [PodcastEpisode]) -> Double? { eps.compactMap(\.published).max() }
 
     // Played / new
 
@@ -775,7 +801,7 @@ final class PodcastLibrary {
     }
 
     func markSeen(_ show: PodcastShow) {
-        guard isSubscribed(show), let newest = cachedEpisodes(show).first?.published, seen[show.feedURL] != newest else { return }
+        guard isSubscribed(show), let newest = Self.newest(cachedEpisodes(show)), seen[show.feedURL] != newest else { return }
         seen[show.feedURL] = newest
         save(seen, "seen.json")
     }

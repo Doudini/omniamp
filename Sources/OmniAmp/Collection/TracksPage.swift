@@ -233,6 +233,9 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     var onPlayAlbum: ((TrackRow) -> Void)?
     var onAdd: (([LibraryTrack]) -> Void)?
     var onReplace: (([LibraryTrack]) -> Void)?
+    /// "Add to Playlist ▸": a saved playlist, or a new one.
+    var onAddToSaved: (([LibraryTrack], URL) -> Void)?
+    var onNewPlaylist: (([LibraryTrack]) -> Void)?
     var onShowAlbum: ((TrackRow) -> Void)?
     var onArtist: ((String) -> Void)?
     /// All recordings of a song: artist key, title key.
@@ -665,7 +668,8 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         window?.makeFirstResponder(table)
         func add(_ title: String, _ action: Selector) { menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self }
         add("Play", #selector(playSelected))
-        add("Add to Playlist", #selector(addSelected))
+        menu.addItem(SavedPlaylists.shared.addMenuItem(target: self, current: #selector(addSelected), saved: #selector(addToSaved(_:)),
+                                                       new: #selector(newPlaylist)))
         add("Replace Playlist and Play", #selector(replaceSelected))
         menu.addItem(.separator())
         if table.selectedRowIndexes.count == 1, let r = clicked {
@@ -711,6 +715,8 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     @objc private func playSelected() { play() }
     @objc private func addSelected() { onAdd?(selectedTracks) }
+    @objc private func addToSaved(_ sender: NSMenuItem) { if let u = sender.representedObject as? URL { onAddToSaved?(selectedTracks, u) } }
+    @objc private func newPlaylist() { onNewPlaylist?(selectedTracks) }
     @objc private func replaceSelected() { onReplace?(selectedTracks) }
     @objc private func showAlbum() { if let r = clicked { onShowAlbum?(r) } }
     @objc private func artistPage() { if let r = clicked { onArtist?(r.artistKey) } }
@@ -814,7 +820,9 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
 
     /// Dragging tracks out (to the playlist, or Finder): their files.
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        row < rows.count ? URL(exactPath: rows[row].track.path) as NSURL : nil
+        guard row < rows.count else { return nil }
+        let t = rows[row].track
+        return t.playable ? LibraryDrag.item(for: t.track) : URL(exactPath: t.path) as NSURL
     }
 }
 

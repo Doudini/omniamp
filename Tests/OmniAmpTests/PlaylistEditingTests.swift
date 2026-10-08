@@ -83,6 +83,16 @@ final class PlaylistEditingTests: XCTestCase {
         XCTAssertEqual(c.rowCount, 4)
     }
 
+    func testEpisodeGoesWhereItsAskedAndIsFoundIfThere() {
+        let c = PlayerController()
+        c.store.restore(["a", "b", "c"].map { track($0) })
+        XCTAssertEqual(c.addEpisode(.webFile("https://x/1.mp3", title: "Part 1"), at: 1), 1)
+        XCTAssertEqual(c.addEpisode(.webFile("https://x/2.mp3", title: "Part 2"), at: 2), 2)
+        XCTAssertEqual(c.tracks.map(\.title), ["a", "Part 1", "Part 2", "b", "c"], "a book's parts follow each other")
+        XCTAssertEqual(c.addEpisode(.webFile("https://x/1.mp3", title: "Part 1"), at: 4), 1, "already there: it stays")
+        XCTAssertEqual(c.addEpisode(.webFile("https://x/3.mp3", title: "Part 3")), 5, "no position: the end")
+    }
+
     func testQueueFollowsTracksThroughReorder() {
         let c = PlayerController()
         c.store.restore(["a", "b", "c", "d"].map { track($0) })
@@ -176,5 +186,59 @@ final class PausedSeekTests: XCTestCase {
         XCTAssertEqual(p.state, .playing)
         XCTAssertEqual(p.currentTime, 5, accuracy: 0.2, "resumes from the new place")
         p.stop()
+    }
+}
+
+/// Previous (past 3 s) and Play while playing restart a long file from the top, not from its saved place.
+@MainActor
+final class RestartLongTrackTests: XCTestCase {
+    func testPreviousRestartsALongTrack() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-restart-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        setenv("OMNIAMP_CACHE_DIR", dir.path, 1)
+        setenv("OMNIAMP_VOLUME", "0", 1)
+        defer { unsetenv("OMNIAMP_CACHE_DIR"); unsetenv("OMNIAMP_VOLUME"); try? FileManager.default.removeItem(at: dir) }
+        // 11 minutes of silence (long enough to resume), 8 kHz mono 16-bit.
+        let sr = 8_000, n = sr * 660
+        var wav = Data("RIFF".utf8)
+        func le32(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8((v >> 8) & 0xFF), UInt8((v >> 16) & 0xFF), UInt8((v >> 24) & 0xFF)] }
+        wav += le32(36 + n * 2) + Data("WAVEfmt ".utf8) + le32(16) + [1, 0, 1, 0] + le32(sr) + le32(sr * 2) + [2, 0, 16, 0]
+        wav += Data("data".utf8) + le32(n * 2) + Data(count: n * 2)
+        let file = dir.appendingPathComponent("long.wav")
+        try wav.write(to: file)
+
+        let c = PlayerController()
+        let resumeWas = c.resumeLongTracks
+        c.resumeLongTracks = true
+        defer { c.resumeLongTracks = resumeWas; c.player.stop() }
+        var t = Track(path: file.path, size: Int64(wav.count), mtime: 0)
+        t.duration = 660
+        t.tagsLoaded = true
+        c.store.restore([t])
+
+        func waitUntil(_ what: String, _ ok: () -> Bool) throws {
+            let end = Date().addingTimeInterval(5)
+            while !ok(), Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+            if !ok() { throw XCTSkip("no audio output here (\(what))") }
+        }
+        c.play(index: 0)
+        try waitUntil("open") { c.player.state == .playing && c.player.duration > 0 }
+        c.seek(to: 300)
+        XCTAssertEqual(c.player.currentTime, 300, accuracy: 1)
+        c.previous()
+        try waitUntil("restart") { c.player.state == .playing && c.player.duration > 0 }
+        XCTAssertLessThan(c.player.currentTime, 5, "restarted, not resumed at 4:57")
+
+        // Play while playing restarts too.
+        c.seek(to: 200)
+        c.playOrResume()
+        try waitUntil("restart") { c.player.state == .playing && c.player.duration > 0 }
+        XCTAssertLessThan(c.player.currentTime, 5)
+
+        // The place from before the restart is kept: Stop then Play goes back to it.
+        c.stop()
+        c.playOrResume()
+        try waitUntil("resume") { c.player.state == .playing && c.player.duration > 0 }
+        XCTAssertEqual(c.player.currentTime, 197, accuracy: 2)
     }
 }

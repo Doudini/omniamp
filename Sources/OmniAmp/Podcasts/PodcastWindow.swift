@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 /// Podcast browser in the modern look: top shows per country, search, subscriptions (with new-episode
 /// counts), and the selected show's episodes. Episodes play like any track and remember their position.
+/// Books mode shows audiobooks and radio plays (BookSources.swift) the same way: BROWSE lists, search, MY SHELF.
 final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
                                     NSSplitViewDelegate, NSMenuDelegate, NSSearchFieldDelegate {
     private let controller: PlayerController
@@ -12,6 +13,14 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var subscribeButton: Pill!
     private let search = DashSearchField()
     private let country = DashPopUp()
+    /// Books & Hörspiele instead of podcasts: the same window with other sources.
+    private(set) var books = UserDefaults.standard.bool(forKey: Pref.podcastBooksMode)
+    private var podcastsModeButton: Pill!
+    private var booksModeButton: Pill!
+    /// Books mode's BROWSE list (where podcasts have the country).
+    private let shelf = DashPopUp()
+    /// The other mode's place (list, search, open show) while this one is shown.
+    private var otherMode: (subscriptions: Bool, query: String, show: PodcastShow?)?
     private let showsTable = KeyTableView()
     private let showsScroll = NSScrollView()
     private let episodesTable = KeyTableView()
@@ -65,7 +74,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     init(controller: PlayerController) {
         self.controller = controller
-        showingSubscriptions = Self.lastState?.subscriptions ?? !PodcastLibrary.shared.subscriptions.isEmpty
+        let books = UserDefaults.standard.bool(forKey: Pref.podcastBooksMode)
+        showingSubscriptions = Self.lastState[books]?.subscriptions
+            ?? PodcastLibrary.shared.subscriptions.contains { $0.isBook == books }
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 580),
                          styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView], backing: .buffered, defer: false)
         w.title = "Podcasts"
@@ -98,18 +109,19 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             let path = n.object as? String
             MainActor.assumeIsolated { self?.downloadChanged(path) }
         })
-        if let st = Self.lastState {
+        if let st = Self.lastState[books] {
             // Reopened after being closed (the window is freed when closed): same view, search and show.
             search.stringValue = st.query
             if let s = st.show { open(s) }
         }
+        otherMode = Self.lastState[!books]
         load()
         refreshSubscriptions()
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    /// What to restore when the window is opened again (it is freed on close to give its memory back).
-    private static var lastState: (subscriptions: Bool, query: String, show: PodcastShow?)?
+    /// What to restore when the window is opened again (it is freed on close to give its memory back), per mode.
+    private static var lastState: [Bool: (subscriptions: Bool, query: String, show: PodcastShow?)] = [:]
     /// Closed: the app drops this controller.
     var onClose: (() -> Void)?
 
@@ -124,7 +136,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     func windowWillClose(_ notification: Notification) {
         progressTimer?.invalidate()
         progressTimer = nil
-        Self.lastState = (showingSubscriptions, search.stringValue, currentShow)
+        Self.lastState[books] = (showingSubscriptions, search.stringValue, currentShow)
+        if let o = otherMode { Self.lastState[!books] = o }
         loadTask?.cancel()
         episodesTask?.cancel()
         onClose?()
@@ -170,14 +183,22 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func build() {
         window?.backgroundColor = Dash.page
-        let title = Dash.label("Podcasts", Dash.font(12, .semibold), Dash.text2)
+        let title = Dash.label(books ? "Books & Hörspiele" : "Podcasts", Dash.font(12, .semibold), Dash.text2)
 
-        topButton = Pill("Top", glyph: Fonts.Icon.podcast, target: self, action: #selector(showTop))
-        subscribedButton = Pill("Subscribed", glyph: Fonts.Icon.rss, target: self, action: #selector(showSubscribed))
+        podcastsModeButton = Pill("Podcasts", target: self, action: #selector(podcastsMode))
+        booksModeButton = Pill("Books", glyph: Fonts.Icon.book, target: self, action: #selector(booksMode))
+        podcastsModeButton.isOn = !books
+        booksModeButton.isOn = books
+        podcastsModeButton.toolTip = "Podcasts: Apple's and fyyd's directories (⌘3)"
+        booksModeButton.toolTip = "Audiobooks and radio plays: ARD Audiothek, LibriVox and archive.org (⌥⌘3)"
+        topButton = books ? Pill("Browse", glyph: Fonts.Icon.book, target: self, action: #selector(showTop))
+                          : Pill("Top", glyph: Fonts.Icon.podcast, target: self, action: #selector(showTop))
+        subscribedButton = Pill(books ? "My Shelf" : "Subscribed", glyph: books ? Fonts.Icon.check : Fonts.Icon.rss,
+                                target: self, action: #selector(showSubscribed))
         topButton.isOn = !showingSubscriptions
         subscribedButton.isOn = showingSubscriptions
 
-        search.placeholderString = "Search podcasts…"
+        search.placeholderString = books ? "Search books & Hörspiele…" : "Search podcasts…"
         search.font = Dash.font(13)
         search.target = self
         search.action = #selector(searchChanged)
@@ -193,6 +214,18 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         country.target = self
         country.action = #selector(countryChanged)
         country.font = Dash.font(12)
+        if shelf.numberOfItems == 0 {
+            shelf.addItems(withTitles: BookDirectory.Shelf.allCases.map(\.title))
+            let saved = UserDefaults.standard.string(forKey: Pref.podcastBooksShelf).flatMap(BookDirectory.Shelf.init(rawValue:))
+            shelf.selectItem(at: BookDirectory.Shelf.allCases.firstIndex(of: saved ?? .ardRadioPlays) ?? 0)
+        }
+        shelf.highlightsChoice = false   // which list, not a filter: never lit
+        shelf.target = self
+        shelf.action = #selector(shelfChanged)
+        shelf.font = Dash.font(12)
+        shelf.toolTip = "What BROWSE lists"
+        country.isHidden = books
+        shelf.isHidden = !books
 
         if showsTable.tableColumns.isEmpty {
             showsTable.addTableColumn(column("show", 300, flexible: true))
@@ -239,8 +272,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         showInfo.textColor = Dash.text2
         showInfo.lineBreakMode = .byTruncatingTail
         showInfo.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        subscribeButton = Pill("Subscribe", glyph: Fonts.Icon.rss, target: self, action: #selector(subscribeTapped))
-        subscribeButton.toolTip = "Subscribe: new episodes show up under SUBSCRIBED"
+        subscribeButton = Pill("Subscribe", glyph: books ? Fonts.Icon.check : Fonts.Icon.rss, target: self, action: #selector(subscribeTapped))
+        subscribeButton.toolTip = books ? "Keep it under MY SHELF" : "Subscribe: new episodes show up under SUBSCRIBED"
 
         status.font = Dash.font(11.5)
         status.textColor = Dash.text2
@@ -261,8 +294,10 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
         let feedButton = Pill("Feed", glyph: Fonts.Icon.plus, target: self, action: #selector(feedMenu(_:)))
         feedButton.toolTip = "Add a podcast by its feed URL, or import / export your subscriptions (OPML)"
-        let top = NSStackView(views: [topButton, subscribedButton, search, country, feedButton])
+        feedButton.isHidden = books   // feeds and OPML are podcast things
+        let top = NSStackView(views: [podcastsModeButton, booksModeButton, topButton, subscribedButton, search, country, shelf, feedButton])
         top.spacing = 6
+        top.setCustomSpacing(16, after: booksModeButton)   // the mode switch, then what's in it
         folderButton = Pill("Folder", glyph: Fonts.Icon.folder, target: self, action: #selector(showDownloadFolder))
         folderButton.toolTip = "Open the downloads folder in Finder (change it in Settings)"
         episodeFilter.placeholderString = "Filter episodes"
@@ -301,7 +336,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             panes.addArrangedSubview(showsScroll)
             panes.addArrangedSubview(rightPane)
         }
-        for b in [topButton!, subscribedButton!, subscribeButton!, notesButton!, downloadButton!, playedButton, add, play] { b.heightAnchor.constraint(equalToConstant: 22).isActive = true }
+        for b in [podcastsModeButton!, booksModeButton!, topButton!, subscribedButton!, subscribeButton!, notesButton!, downloadButton!, playedButton, add, play] {
+            b.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        }
         search.setContentHuggingPriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
             title.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
@@ -483,6 +520,13 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     func toggleNotesFromMenu() { toggleNotes() }
     func toggleUnplayedFromMenu() { toggleUnplayed() }
 
+    /// Search for these words (the OMNIAMP_PODCASTS test hook).
+    func searchFor(_ words: String) {
+        showingSubscriptions = false
+        search.stringValue = words
+        load()
+    }
+
     /// ⌘F while this window is in front.
     func focusSearch() {
         window?.makeFirstResponder(search)
@@ -506,6 +550,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         var extra = [status].compactMap { $0 }
         if Self.isPinned(currentShow) { extra.insert(s.title, at: 0) }   // mixed shows: say which
+        if let until = e.expires { extra.append("Online until " + Date(timeIntervalSince1970: until).formatted(date: .abbreviated, time: .omitted)) }
+        if !Self.canDownload(e) { extra.append("Stream only") }
         switch downloads.state(e.url) {
         case .done: extra.append("Downloaded" + (downloads.entries[e.url].map { " · " + ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? ""))
         case .downloading(let p): extra.append("Downloading \(Int(p * 100))%")
@@ -547,16 +593,23 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         let q = search.stringValue.trimmingCharacters(in: .whitespaces)
         if showingSubscriptions {
             let lq = q.lowercased()
-            let subs = library.subscriptions.filter { lq.isEmpty || $0.title.lowercased().contains(lq) || $0.author.lowercased().contains(lq) }
+            let mine = library.subscriptions.filter(inMode)
+            let subs = mine.filter { lq.isEmpty || $0.title.lowercased().contains(lq) || $0.author.lowercased().contains(lq) }
             shows = (lq.isEmpty ? pinnedShows : []) + subs
             showsTable.reloadData()
             syncShowSelection()
             if !keepPlace { scrollToTop(showsScroll) }
-            status.stringValue = library.subscriptions.isEmpty ? "No subscriptions yet: pick a show and press SUBSCRIBE."
-                : (subs.isEmpty ? "No subscriptions match “\(q)”." : "\(subs.count) subscriptions")
+            if books {
+                status.stringValue = mine.isEmpty ? "Your shelf is empty: pick a book or radio play and press ADD TO SHELF."
+                    : (subs.isEmpty ? "Nothing on your shelf matches “\(q)”." : "\(subs.count) on your shelf")
+            } else {
+                status.stringValue = mine.isEmpty ? "No subscriptions yet: pick a show and press SUBSCRIBE."
+                    : (subs.isEmpty ? "No subscriptions match “\(q)”." : "\(subs.count) subscriptions")
+            }
             selectFirstShowIfNeeded()
             return
         }
+        if books { loadBooks(q); return }
         let cc = countryCode
         let dir = PodcastDirectory.shared
         // The last chart shows at once (a fresh one replaces it if it's old).
@@ -596,6 +649,95 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
                 status.stringValue = "Couldn't reach the podcast directory: \(error.localizedDescription)"
             }
         }
+    }
+
+    // MARK: Books mode
+
+    /// Shows of the mode on screen (subscriptions, Continue listening and Downloads hold both kinds).
+    private func inMode(_ s: PodcastShow) -> Bool { s.isBook == books }
+
+    private var currentShelf: BookDirectory.Shelf { BookDirectory.Shelf.allCases[max(0, shelf.indexOfSelectedItem)] }
+
+    /// BROWSE shows the chosen list; a search asks ARD (fast) and archive.org (with LibriVox) at once and shows
+    /// ARD's answer first.
+    private func loadBooks(_ q: String) {
+        let dir = BookDirectory.shared
+        let list = currentShelf
+        if q.isEmpty {
+            let cached = dir.cachedBrowse(list)
+            if let cached {
+                setShows(cached.shows, status: "\(cached.shows.count) · \(list.title)")
+                if cached.fresh { return }
+            } else {
+                status.stringValue = "Loading \(list.title)…"
+            }
+            loadTask = Task { @MainActor in
+                do {
+                    let found = try await dir.browse(list)
+                    guard !Task.isCancelled else { return }
+                    setShows(found, status: found.isEmpty ? "Nothing in \(list.title) right now." : "\(found.count) · \(list.title)",
+                             keepSelection: cached != nil)   // a background refresh: don't jump
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    status.stringValue = "Couldn't load \(list.title): \(error.localizedDescription)"
+                }
+            }
+            return
+        }
+        status.stringValue = "Searching…"
+        loadTask = Task { @MainActor in
+            async let fromArchive = dir.searchArchive(q)
+            var found: [PodcastShow] = [], failed: [String] = []
+            do {
+                found = try await dir.searchARD(q)
+                guard !Task.isCancelled else { return }
+                setShows(found, status: found.isEmpty ? "Searching archive.org…" : "\(found.count) found · searching archive.org…")
+            } catch {
+                failed.append("ARD")
+            }
+            do {
+                let more = try await fromArchive
+                guard !Task.isCancelled else { return }
+                found = PodcastDirectory.merge(failed.isEmpty ? shows : [], more)
+                setShows(found, status: "", keepSelection: failed.isEmpty)
+            } catch {
+                failed.append("archive.org")
+            }
+            guard !Task.isCancelled else { return }
+            let unreachable = failed.isEmpty ? "" : "couldn't reach " + failed.joined(separator: " or ")
+            status.stringValue = found.isEmpty ? (failed.isEmpty ? "Nothing found." : unreachable.prefix(1).uppercased() + unreachable.dropFirst() + ".")
+                : "\(found.count) found" + (failed.isEmpty ? "" : " (\(unreachable))")
+        }
+    }
+
+    @objc private func shelfChanged() {
+        UserDefaults.standard.set(currentShelf.rawValue, forKey: Pref.podcastBooksShelf)
+        if !showingSubscriptions { load() }
+    }
+
+    @objc private func podcastsMode() { setMode(books: false) }
+    @objc private func booksMode() { setMode(books: true) }
+
+    /// Switch between podcasts and books; each keeps its own list, search and open show.
+    func setMode(books b: Bool) {
+        guard b != books else { return }
+        let here = (subscriptions: showingSubscriptions, query: search.stringValue, show: currentShow)
+        let there = otherMode
+        otherMode = here
+        books = b
+        UserDefaults.standard.set(b, forKey: Pref.podcastBooksMode)
+        loadTask?.cancel()
+        episodesTask?.cancel()
+        showingSubscriptions = there?.subscriptions ?? library.subscriptions.contains(where: inMode)
+        search.stringValue = there?.query ?? ""
+        currentShow = nil
+        shows = []
+        showsTable.reloadData()
+        setEpisodes([])
+        build()
+        if let s = there?.show { open(s) }
+        load()
+        focusShows()
     }
 
     // MARK: Episode filter
@@ -754,15 +896,27 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     // MARK: Continue listening / Downloads
 
     private var pinnedShows: [PodcastShow] {
-        [(Self.continueShow, !startedEpisodes().isEmpty), (Self.downloadsShow, !downloads.entries.isEmpty || downloads.isBusy)]
+        [(Self.continueShow, !startedEpisodes().isEmpty), (Self.downloadsShow, !pinnedEpisodes(Self.downloadsShow).isEmpty)]
             .filter(\.1).map(\.0)
+    }
+
+    /// This mode's downloaded episodes or parts.
+    private var modeDownloads: [PodcastDownloads.Entry] { downloads.all.filter { inMode($0.show) } }
+
+    /// "12 episodes · 340 MB · 2 coming in" for the Downloads row and header.
+    private var downloadsSummary: String {
+        let done = modeDownloads, busy = downloads.pending.filter { inMode($0.show) }.count
+        let noun = books ? "part" : "episode"
+        return "\(done.count) \(noun)\(done.count == 1 ? "" : "s") · "
+            + ByteCountFormatter.string(fromByteCount: done.reduce(0) { $0 + $1.bytes }, countStyle: .file)
+            + (busy > 0 ? " · \(busy) coming in" : "")
     }
 
     /// Started, unfinished episodes, most recently heard first, each with its show.
     private func startedEpisodes() -> [(episode: PodcastEpisode, show: PodcastShow)] {
         var out: [(PodcastEpisode, PodcastShow, Double)] = []
         for url in controller.startedEpisodeURLs where !library.isPlayed(url) {
-            guard let (e, show) = resolve(url) else { continue }
+            guard let (e, show) = resolve(url), inMode(show) else { continue }
             out.append((e, show, library.lastListened(url) ?? e.published ?? 0))
         }
         return out.sorted { $0.2 > $1.2 }.map { ($0.0, $0.1) }
@@ -779,8 +933,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func pinnedEpisodes(_ s: PodcastShow) -> [(episode: PodcastEpisode, show: PodcastShow)] {
         if s == Self.continueShow { return startedEpisodes() }
-        let pending = downloads.pending
-        return pending + downloads.all.filter { e in !pending.contains { $0.episode.url == e.episode.url } }.map { ($0.episode, $0.show) }
+        let pending = downloads.pending.filter { inMode($0.show) }
+        return pending + modeDownloads.filter { e in !pending.contains { $0.episode.url == e.episode.url } }.map { ($0.episode, $0.show) }
     }
 
     private func openPinned(_ s: PodcastShow) {
@@ -789,6 +943,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         setEpisodes(list.map(\.episode))
         status.stringValue = s == Self.continueShow
             ? (episodes.isEmpty ? "Nothing started yet." : "Pick up where you left off.")
+            : books ? (episodes.isEmpty ? "No downloads: select parts and press DOWNLOAD." : "Downloaded parts play offline and stay until you remove them.")
             : (episodes.isEmpty ? "No downloads: select episodes and press DOWNLOAD." : "Downloaded episodes play offline and are deleted once you finish them.")
     }
 
@@ -856,7 +1011,9 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         add(eps.count == 1 ? "Add to Playlist" : "Add \(eps.count) to Playlist", #selector(addSelected))
         menu.addItem(.separator())
         let states = eps.map { downloads.state($0.url) }
-        if states.contains(.none) { add(eps.count == 1 ? "Download" : "Download \(states.filter { $0 == .none }.count)", #selector(menuDownload)) }
+        let downloadable = zip(eps, states).filter { Self.canDownload($0.0) && $0.1 == .none }.count
+        if downloadable > 0 { add(eps.count == 1 ? "Download" : "Download \(downloadable)", #selector(menuDownload)) }
+        else if states.contains(.none) { add("Stream Only", #selector(menuDownload), enabled: false) }
         if states.contains(where: { $0 != .none && $0 != .done }) { add("Cancel Download", #selector(menuCancel)) }
         if states.contains(.done) { add("Remove Download", #selector(menuRemove)) }
         add("Show in Finder…", #selector(menuReveal), enabled: states.contains(.done))
@@ -873,6 +1030,16 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         func add(_ title: String, _ action: Selector) { menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self }
         if s == Self.downloadsShow { add("Open Downloads Folder", #selector(showDownloadFolder)); return }
         if Self.isPinned(s) { return }
+        if s.isBook {
+            add(library.isSubscribed(s) ? "Remove from Shelf" : "Add to Shelf", #selector(menuToggleSubscription))
+            add("Refresh", #selector(menuRefresh))
+            add("Mark All as Played", #selector(menuMarkAllPlayed))
+            if s.isFixedBook {
+                menu.addItem(.separator())
+                add("Open on archive.org", #selector(menuOpenPage))
+            }
+            return
+        }
         add(library.isSubscribed(s) ? "Unsubscribe" : "Subscribe", #selector(menuToggleSubscription))
         add("Refresh Episodes", #selector(menuRefresh))
         add("Mark All as Played", #selector(menuMarkAllPlayed))
@@ -890,7 +1057,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
                 let eps = try await library.episodes(s, maxAge: 0)
                 if currentShow?.feedURL == s.feedURL { setEpisodes(eps) }
                 if let r = shows.firstIndex(of: s) { showsTable.reloadData(forRowIndexes: [r], columnIndexes: [0]) }
-                status.stringValue = "“\(s.title)”: \(eps.count) episodes."
+                status.stringValue = "“\(s.title)”: \(eps.count) \(noun(s))\(eps.count == 1 ? "" : "s")."
             } catch {
                 status.stringValue = "Couldn't refresh “\(s.title)”: \(error.localizedDescription)"
             }
@@ -907,8 +1074,14 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             library.markPlayed(urls)
             library.markSeen(s)
             if let r = shows.firstIndex(of: s) { showsTable.reloadData(forRowIndexes: [r], columnIndexes: [0]) }
-            status.stringValue = urls.isEmpty ? "Everything in “\(s.title)” was already played." : "Marked \(urls.count) episodes of “\(s.title)” as played."
+            status.stringValue = urls.isEmpty ? "Everything in “\(s.title)” was already played." : "Marked \(urls.count) \(noun(s))s of “\(s.title)” as played."
         }
+    }
+
+    @objc private func menuOpenPage() {
+        guard let s = menuShow, s.isFixedBook, let id = s.bookID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let u = URL(string: "https://archive.org/details/" + id) else { return }
+        NSWorkspace.shared.open(u)
     }
 
     @objc private func menuCopyFeed() {
@@ -918,10 +1091,22 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         status.stringValue = "Copied the feed address of “\(s.title)”."
     }
 
-    @objc private func menuDownload() {
+    @objc private func menuDownload() { downloadSelected() }
+
+    /// Some ARD plays may only be streamed.
+    private static func canDownload(_ e: PodcastEpisode) -> Bool { e.downloadable != false }
+
+    /// Start downloading what can be; says what happened.
+    private func startDownloads(_ eps: [PodcastEpisode]) {
         var n = 0
-        for e in selectedEpisodes where downloads.state(e.url) == .none { if let s = show(for: e) { downloads.download(e, show: s); n += 1 } }
-        if n > 0 { status.stringValue = "Downloading \(n == 1 ? "1 episode" : "\(n) episodes") to " + Self.shortPath(downloads.dir) + "…" }
+        let streamOnly = eps.filter { !Self.canDownload($0) }.count
+        for e in eps where Self.canDownload(e) && downloads.state(e.url) == .none { if let s = show(for: e) { downloads.download(e, show: s); n += 1 } }
+        let noun = books ? "part" : "episode"
+        var text = n == 0 ? (streamOnly > 0 ? "" : "Already downloaded.")
+            : "Downloading \(n == 1 ? "1 \(noun)" : "\(n) \(noun)s") to " + Self.shortPath(downloads.dir) + "…"
+        if streamOnly > 0 { text += (text.isEmpty ? "" : " ") + (streamOnly == 1 && eps.count == 1 ? "This one" : "\(streamOnly) of them")
+            + " may only be streamed (the broadcaster doesn't allow downloads)." }
+        status.stringValue = text
     }
 
     @objc private func menuCancel() { for e in selectedEpisodes { if downloads.state(e.url) != .done { downloads.cancel(e.url) } } }
@@ -953,16 +1138,14 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         let eps = selectedEpisodes
         guard !eps.isEmpty else { status.stringValue = "Select the episodes to download."; return }
         switch downloadButton.label {
-        case "REMOVE":
+        case "Remove":
             for e in eps { downloads.remove(e.url) }
             status.stringValue = eps.count == 1 ? "Removed the download of “\(eps[0].title)”." : "Removed \(eps.count) downloads."
-        case "CANCEL":
+        case "Cancel":
             for e in eps { downloads.cancel(e.url) }
             status.stringValue = "Stopped downloading."
         default:
-            var n = 0
-            for e in eps where downloads.state(e.url) == .none { if let s = show(for: e) { downloads.download(e, show: s); n += 1 } }
-            status.stringValue = n == 0 ? "Already downloaded." : (n == 1 ? "Downloading 1 episode" : "Downloading \(n) episodes") + " to " + Self.shortPath(downloads.dir) + "…"
+            startDownloads(eps)
         }
         updateDownloadButton()
     }
@@ -973,7 +1156,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard row >= 0, row < episodes.count, col == 3 else { return }
         let e = episodes[row]
         switch downloads.state(e.url) {
-        case .none: if let s = show(for: e) { downloads.download(e, show: s); status.stringValue = "Downloading to " + Self.shortPath(downloads.dir) + "…" }
+        case .none: startDownloads([e])
         case .queued, .downloading: downloads.cancel(e.url); status.stringValue = "Stopped downloading “\(e.title)”."
         case .done: if let f = downloads.localFile(e.url) { NSWorkspace.shared.activateFileViewerSelecting([f]) }
         }
@@ -994,6 +1177,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Show a podcast found by URL (Add URL or + FEED), subscribing to it if asked.
     func present(_ show: PodcastShow, subscribe: Bool) {
+        if show.isBook != books { setMode(books: show.isBook) }
         if subscribe, !library.isSubscribed(show) { library.toggleSubscription(show) }
         if library.isSubscribed(show) {
             showingSubscriptions = true
@@ -1015,7 +1199,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         m.addItem(withTitle: "Add by Feed URL…", action: #selector(addFeed), keyEquivalent: "").target = self
         m.addItem(.separator())
         m.addItem(withTitle: "Import Subscriptions (OPML)…", action: #selector(chooseOPML), keyEquivalent: "").target = self
-        let exp = m.addItem(withTitle: "Export Subscriptions (OPML)…", action: library.subscriptions.isEmpty ? nil : #selector(exportOPML),
+        let exp = m.addItem(withTitle: "Export Subscriptions (OPML)…", action: feedSubscriptions.isEmpty ? nil : #selector(exportOPML),
                             keyEquivalent: "")
         exp.target = self
         m.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
@@ -1061,17 +1245,22 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
     }
 
+    /// The podcasts subscribed to, without the books on the shelf: their addresses (ard:…, librivox:…) aren't feeds
+    /// another podcast app could read.
+    private var feedSubscriptions: [PodcastShow] { library.subscriptions.filter { !$0.isBook } }
+
     @objc private func exportOPML() {
         guard let w = window else { return }
+        let shows = feedSubscriptions
         let p = NSSavePanel()
         p.allowedContentTypes = [.init(filenameExtension: "opml") ?? .xml]
         p.nameFieldStringValue = "OmniAmp Podcasts.opml"
-        p.message = "Your \(library.subscriptions.count) subscriptions, for another podcast app or as a backup."
+        p.message = "Your \(shows.count) subscriptions, for another podcast app or as a backup."
         p.beginSheetModal(for: w) { [weak self] r in
             guard let self, r == .OK, let u = p.url else { return }
             do {
-                try PodcastOPML.write(self.library.subscriptions).write(to: u, options: .atomic)
-                self.status.stringValue = "Exported \(self.library.subscriptions.count) subscriptions to \(u.lastPathComponent)."
+                try PodcastOPML.write(shows).write(to: u, options: .atomic)
+                self.status.stringValue = "Exported \(shows.count) subscriptions to \(u.lastPathComponent)."
             } catch {
                 self.status.stringValue = "Couldn't save: \(error.localizedDescription)"
             }
@@ -1119,13 +1308,14 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         setEpisodes(library.cachedEpisodes(show))
         scrollToTop(episodesScroll)
         episodesTask?.cancel()
-        if allEpisodes.isEmpty { status.stringValue = "Loading episodes…" }
+        if allEpisodes.isEmpty { status.stringValue = show.isBook ? "Loading…" : "Loading episodes…" }
         episodesTask = Task { @MainActor in
             do {
                 let eps = try await library.episodes(show)
                 guard !Task.isCancelled, currentShow?.feedURL == show.feedURL else { return }
                 setEpisodes(eps)
-                status.stringValue = eps.isEmpty ? "This feed has no audio episodes." : "\(eps.count) episodes"
+                status.stringValue = eps.isEmpty ? (show.isBook ? "Nothing in it can be played." : "This feed has no audio episodes.")
+                    : "\(eps.count) \(noun(show))\(eps.count == 1 ? "" : "s")"
                 // Seen: the new-episode marks stay until the next visit. Only a show looked at for a second: arrowing
                 // past it (which cancels this) leaves its marks.
                 guard (try? await Task.sleep(for: .seconds(1))) != nil, !Task.isCancelled else { return }
@@ -1133,7 +1323,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
                 showsTable.reloadData(forRowIndexes: IndexSet(integersIn: 0..<shows.count), columnIndexes: [0])
             } catch {
                 guard !Task.isCancelled, currentShow?.feedURL == show.feedURL else { return }
-                status.stringValue = (allEpisodes.isEmpty ? "Couldn't load this feed: " : "Showing saved episodes (offline): ") + error.localizedDescription
+                status.stringValue = (allEpisodes.isEmpty ? (show.isBook ? "Couldn't load it: " : "Couldn't load this feed: ")
+                    : (show.isBook ? "Showing the saved list (offline): " : "Showing saved episodes (offline): ")) + error.localizedDescription
             }
         }
     }
@@ -1147,7 +1338,7 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private func updateHeader() {
         guard let s = currentShow else {
-            showTitle.stringValue = "Pick a podcast"
+            showTitle.stringValue = books ? "Pick a book or radio play" : "Pick a podcast"
             showInfo.stringValue = ""
             subscribeButton.isHidden = true
             folderButton.isHidden = true
@@ -1155,22 +1346,27 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         showTitle.stringValue = s.title
         if Self.isPinned(s) {
-            showInfo.stringValue = s == Self.continueShow
-                ? countText(singular: "started episode")
-                : "\(downloads.entries.count) episode\(downloads.entries.count == 1 ? "" : "s") · "
-                  + ByteCountFormatter.string(fromByteCount: downloads.totalBytes, countStyle: .file)
-                  + (downloads.isBusy ? " · \(downloads.pending.count) coming in" : "")
+            showInfo.stringValue = s == Self.continueShow ? countText(singular: books ? "started part" : "started episode") : downloadsSummary
             subscribeButton.isHidden = true
             folderButton.isHidden = s != Self.downloadsShow
             if s == Self.downloadsShow { showInfo.stringValue += " · in " + Self.shortPath(downloads.dir) }
             return
         }
         folderButton.isHidden = true
-        showInfo.stringValue = [s.author, s.genre ?? "", allEpisodes.isEmpty ? "" : countText(singular: "episode")]
+        let total = s.isFixedBook ? allEpisodes.compactMap(\.duration).reduce(0, +) : 0
+        showInfo.stringValue = [s.author, s.genre ?? "", allEpisodes.isEmpty ? "" : countText(singular: noun(s)),
+                                total > 0 ? TimeFormat.mmss(total) : ""]
             .filter { !$0.isEmpty }.joined(separator: " · ")
         subscribeButton.isHidden = false
         subscribeButton.isOn = library.isSubscribed(s)
-        subscribeButton.label = library.isSubscribed(s) ? "Subscribed" : "Subscribe"
+        subscribeButton.label = s.isBook ? (library.isSubscribed(s) ? "On Shelf" : "Add to Shelf")
+            : (library.isSubscribed(s) ? "Subscribed" : "Subscribe")
+    }
+
+    /// What a show's entries are called: a book has parts, a series episodes.
+    private func noun(_ s: PodcastShow?) -> String {
+        guard let s, !Self.isPinned(s) else { return books ? "part" : "episode" }
+        return s.isFixedBook ? "part" : "episode"
     }
 
     @objc private func subscribeTapped() {
@@ -1186,7 +1382,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         } else {
             showsTable.reloadData()
         }
-        status.stringValue = library.isSubscribed(s) ? "Subscribed to “\(s.title)”." : "Unsubscribed from “\(s.title)”."
+        status.stringValue = s.isBook ? (library.isSubscribed(s) ? "Added “\(s.title)” to your shelf." : "Took “\(s.title)” off your shelf.")
+            : (library.isSubscribed(s) ? "Subscribed to “\(s.title)”." : "Unsubscribed from “\(s.title)”.")
     }
 
     private var selectedEpisodes: [PodcastEpisode] {
@@ -1196,16 +1393,35 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
     @objc private func playSelected() {
         let row = episodesTable.clickedRow >= 0 ? episodesTable.clickedRow : episodesTable.selectedRow
         guard row >= 0, row < episodes.count, let s = show(for: episodes[row]) else { return }
-        let i = controller.addEpisode(episodes[row].track(show: s))
+        let e = episodes[row]
+        let i = controller.addEpisode(e.track(show: s))
+        // A book goes on: its unplayed parts after this one follow it in the playlist. Parts already in the playlist
+        // stay where they are; new ones go after the latest part placed, always after `i` so it stays valid.
+        let rest = s.isBook ? partsAfter(e, of: s) : []
+        var last = i
+        for p in rest { last = max(last, controller.addEpisode(p.track(show: s), at: last + 1)) }
         controller.play(index: i)
-        status.stringValue = "Playing “\(episodes[row].title)”."
+        status.stringValue = "Playing “\(e.title)”" + (rest.isEmpty ? "." : "; the next \(rest.count == 1 ? "part follows" : "\(rest.count) parts follow") in the playlist.")
+    }
+
+    /// The unplayed parts after `e`, when the book's list is in story order (every part numbered).
+    private func partsAfter(_ e: PodcastEpisode, of s: PodcastShow) -> [PodcastEpisode] {
+        let all = Self.isPinned(currentShow) ? library.cachedEpisodes(s) : allEpisodes
+        guard Self.inStoryOrder(all), let at = all.firstIndex(where: { $0.url == e.url }) else { return [] }
+        return all[(at + 1)...].filter { !library.isPlayed($0.url) }
+    }
+
+    /// A book's parts are listed first to last, numbered; a podcast's episodes newest first.
+    static func inStoryOrder(_ eps: [PodcastEpisode]) -> Bool {
+        let numbers = eps.compactMap(\.number)
+        return !eps.isEmpty && numbers.count == eps.count && zip(numbers, numbers.dropFirst()).allSatisfy { $0 < $1 }
     }
 
     @objc private func addSelected() {
         let eps = selectedEpisodes
         guard !eps.isEmpty else { return }
-        // Oldest first, so a show plays in order.
-        for e in eps.reversed() { if let s = show(for: e) { controller.addEpisode(e.track(show: s)) } }
+        // Oldest first, so a show plays in order (a book's parts are listed in order already).
+        for e in Self.inStoryOrder(eps) ? eps : eps.reversed() { if let s = show(for: e) { controller.addEpisode(e.track(show: s)) } }
         status.stringValue = eps.count == 1 ? "Added “\(eps[0].title)” to the playlist." : "Added \(eps.count) episodes to the playlist."
     }
 
@@ -1235,15 +1451,12 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             let s = shows[row]
             if s == Self.continueShow {
                 let n = startedEpisodes().count
-                v.showPinned(s, glyph: Fonts.Icon.play, subtitle: "\(n) started episode\(n == 1 ? "" : "s")")
+                v.showPinned(s, glyph: Fonts.Icon.play, subtitle: "\(n) started \(books ? "part" : "episode")\(n == 1 ? "" : "s")")
             } else if s == Self.downloadsShow {
-                let n = downloads.entries.count, busy = downloads.pending.count
-                v.showPinned(s, glyph: Fonts.Icon.download, subtitle: "\(n) episode\(n == 1 ? "" : "s") · "
-                             + ByteCountFormatter.string(fromByteCount: downloads.totalBytes, countStyle: .file)
-                             + (busy > 0 ? " · \(busy) coming in" : ""))
+                v.showPinned(s, glyph: Fonts.Icon.download, subtitle: downloadsSummary)
             } else {
-                // Subscriptions also say how fresh the show is.
-                let latest = showingSubscriptions ? library.cachedEpisodes(s).first?.published : nil
+                // Subscriptions also say how fresh the show is (a book on the shelf doesn't change).
+                let latest = showingSubscriptions && !s.isFixedBook ? PodcastLibrary.newest(library.cachedEpisodes(s)) : nil
                 v.show(s, newCount: library.newCount(s), subscribed: !showingSubscriptions && library.isSubscribed(s),
                        updated: latest.map { Self.relative($0) })
             }
@@ -1295,7 +1508,8 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
             cell.textColor = played ? Dash.text3 : Dash.text
             cell.toolTip = notes.isHidden ? e.summary : nil   // the notes pane shows them when open
         case "date":
-            cell.stringValue = e.published.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .omitted) } ?? ""
+            cell.stringValue = e.published.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .omitted) }
+                ?? e.number.map { "Part \($0)" } ?? ""
             cell.font = Dash.font(12)
             cell.textColor = Dash.text2
         default:
@@ -1366,16 +1580,19 @@ final class ShowCell: NSView {
     }
 
     func show(_ s: PodcastShow, newCount: Int, subscribed: Bool, updated: String? = nil) {
-        art.placeholder = Fonts.Icon.podcast
+        art.placeholder = s.isBook ? Fonts.Icon.book : Fonts.Icon.podcast
         title.stringValue = s.title
         title.font = Dash.font(13, .semibold)
         title.textColor = Dash.text
-        author.stringValue = [s.author, updated.map { "updated " + $0 }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        // A book also says where it's from (ARD, LibriVox, archive.org).
+        let source = s.sourceLabel == s.author ? nil : s.sourceLabel   // not "ARD · ARD"
+        author.stringValue = [s.author, source, updated.map { "updated " + $0 }].compactMap { $0 }.filter { !$0.isEmpty }
+            .joined(separator: " · ")
         author.font = Dash.font(11.5)
         author.textColor = Dash.text2
         badge.font = Dash.mono(10, bold: true)
         badge.textColor = Dash.accent
-        badge.stringValue = newCount > 0 ? "● \(newCount) new" : (subscribed ? Fonts.Icon.rss : "")
+        badge.stringValue = newCount > 0 ? "● \(newCount) new" : (subscribed ? (s.isBook ? Fonts.Icon.check : Fonts.Icon.rss) : "")
         if subscribed, newCount == 0 { badge.font = Theme.icon(10); badge.textColor = Dash.text3 }
         let want = LogoStore.thumbnail(s.artwork)   // small file, small decode: the list shows 36 pt covers
         artwork = want

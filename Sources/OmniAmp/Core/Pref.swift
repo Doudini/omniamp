@@ -47,6 +47,10 @@ enum Pref {
     static let libraryTracksSort = "libraryTracksSort"
     /// Tracks: the filter panel is open (closed until opened once).
     static let libraryTracksFiltersOpen = "libraryTracksFiltersOpen"
+    /// The sidebar's Playlists group is folded away.
+    static let libraryPlaylistsCollapsed = "libraryPlaylistsCollapsed"
+    /// The playlist groups folded away in the sidebar (their folder names).
+    static let libraryPlaylistGroupsCollapsed = "libraryPlaylistGroupsCollapsed"
     /// The library may look things up online in the background (artist countries from MusicBrainz).
     static let libraryOnlineLookups = "libraryOnlineLookups"
     /// Where Live Music Archive downloads go (a folder per artist inside).
@@ -56,6 +60,9 @@ enum Pref {
     // Podcasts
     static let podcastSpeeds = "podcastSpeeds"
     static let podcastUnplayedOnly = "podcastUnplayedOnly"
+    /// The Podcasts window shows audiobooks and radio plays (Books mode), and which BROWSE list.
+    static let podcastBooksMode = "podcastBooksMode"
+    static let podcastBooksShelf = "podcastBooksShelf"
     // Scrobbling (logins themselves are in the Keychain)
     static let lastfmUser = "lastfmUser"
     static let lastfmCustomKey = "lastfmCustomKey"

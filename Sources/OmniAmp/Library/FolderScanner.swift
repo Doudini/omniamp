@@ -157,19 +157,7 @@ enum FolderScanner {
                         looked = results.withLock { $0 }
                     }
                     let url = e.url
-                    if !url.isFileURL, e.web {   // a web audio file, not a station
-                        loose.append(.webFile(url.absoluteString, title: e.title ?? url.lastPathComponent))
-                        continue
-                    }
-                    if !url.isFileURL, let show = e.podcast {
-                        // Saved as "Show - Episode": keep just the episode title.
-                        var title = e.title ?? url.lastPathComponent
-                        if title.hasPrefix(show + " - ") { title.removeFirst(show.count + 3) }
-                        loose.append(.episode(url.absoluteString, title: title, show: show, artwork: e.logo, duration: e.seconds,
-                                              published: nil, summary: nil))
-                        continue
-                    }
-                    if !url.isFileURL { loose.append(.stream(url.absoluteString, name: e.title, logo: e.logo)); continue }
+                    if let remote = PlaylistFile.remoteTrack(e) { loose.append(remote); continue }
                     guard let f = looked[n % 256], audioExtensions.contains(url.pathExtension.lowercased()) else { continue }
                     let found = Track(path: url.path, size: f.size, mtime: f.mtime)
                     if let start = e.cueStart {

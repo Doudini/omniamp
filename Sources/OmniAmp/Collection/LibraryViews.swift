@@ -298,38 +298,159 @@ final class GlyphCell: NSView {
 }
 
 /// A sidebar entry: icon and name, each centred on the row (one label with both fonts sat high: the icon
-/// font's taller line box moved the baseline).
-final class SidebarCell: NSTableCellView {
+/// font's taller line box moved the baseline). A playlist's name can be edited in place.
+final class SidebarCell: NSTableCellView, NSTextFieldDelegate {
     private let icon = NSTextField(labelWithString: "")
     private let name = NSTextField(labelWithString: "")
+    /// A group's fold arrow, left of its color dot.
+    private let chevron = NSTextField(labelWithString: "")
+    private var iconLeading: NSLayoutConstraint!
+    /// Renaming ended: the new name, or nil when cancelled.
+    private var onRename: ((String?) -> Void)?
+    private var cancelled = false
+
     init() {
         super.init(frame: .zero)
         identifier = NSUserInterfaceItemIdentifier("sidebar")
-        for f in [icon, name] {
+        for f in [icon, name, chevron] {
             f.translatesAutoresizingMaskIntoConstraints = false
             f.lineBreakMode = .byTruncatingTail
             addSubview(f)
         }
         icon.alignment = .center
+        name.cell?.usesSingleLineMode = true
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        iconLeading = icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10)
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            chevron.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconLeading,
             icon.widthAnchor.constraint(equalToConstant: 18),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
             name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
-            name.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8),
+            name.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             name.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(glyph: String, title: String, selected: Bool) {
+    /// `indent`: where the icon starts; `folded`: a group's arrow (nil: no arrow); `glyphColor`: a group's color.
+    func show(glyph: String, title: String, selected: Bool, small: Bool = false, indent: CGFloat = 10, folded: Bool? = nil,
+              glyphColor: NSColor? = nil) {
+        endEditing()
         icon.stringValue = glyph
-        icon.font = Fonts.hack(13)
-        icon.textColor = selected ? Dash.accent : Dash.text2
+        icon.font = Fonts.hack(small ? 12 : 13)
+        icon.textColor = glyphColor ?? (selected ? Dash.accent : Dash.text2)
+        iconLeading.constant = indent
+        chevron.isHidden = folded == nil
+        chevron.stringValue = folded == true ? "\u{F054}" : Fonts.Icon.chevronDown   // nf-fa-chevron_right / down
+        chevron.font = Fonts.hack(8)
+        chevron.textColor = Dash.text3
         name.stringValue = title
-        name.font = Dash.font(13, selected ? .semibold : .regular)
+        name.font = Dash.font(small ? 12.5 : 13, selected ? .semibold : .regular)
         name.textColor = Dash.text
+        toolTip = small ? title : nil
     }
+
+    /// The name becomes a text field: Return keeps it, Esc (or nothing typed) leaves it as it was.
+    func beginRename(_ done: @escaping (String?) -> Void) {
+        onRename = done
+        cancelled = false
+        name.isEditable = true
+        name.isSelectable = true
+        name.drawsBackground = true
+        name.backgroundColor = Dash.cardRaised
+        name.focusRingType = .none
+        name.delegate = self
+        window?.makeFirstResponder(name)
+        name.currentEditor()?.selectAll(nil)
+    }
+
+    private func endEditing() {
+        onRename = nil
+        name.isEditable = false
+        name.isSelectable = false
+        name.drawsBackground = false
+        name.delegate = nil
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy sel: Selector) -> Bool {
+        guard sel == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        cancelled = true
+        window?.makeFirstResponder(enclosingScrollView?.documentView)
+        return true
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        let done = onRename, text = name.stringValue
+        let keep = !cancelled
+        endEditing()
+        done?(keep ? text : nil)
+    }
+}
+
+/// The sidebar's PLAYLISTS title: a chevron that folds the list away, and + for a new playlist.
+final class PlaylistsHeaderCell: NSTableCellView {
+    private let chevron = NSTextField(labelWithString: "")
+    private let label = NSTextField(labelWithString: "PLAYLISTS")
+    let add = NSButton(title: "", target: nil, action: nil)
+
+    init() {
+        super.init(frame: .zero)
+        identifier = NSUserInterfaceItemIdentifier("playlistsHeader")
+        add.isBordered = false
+        add.setButtonType(.momentaryChange)
+        add.toolTip = "New playlist (or drop songs here)"
+        for v in [chevron, label, add] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        NSLayoutConstraint.activate([
+            chevron.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            chevron.widthAnchor.constraint(equalToConstant: 12),
+            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: chevron.trailingAnchor, constant: 6),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            add.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            add.centerYAnchor.constraint(equalTo: centerYAnchor),
+            add.widthAnchor.constraint(equalToConstant: 22),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func show(collapsed: Bool, count: Int) {
+        chevron.stringValue = collapsed ? "\u{F054}" : Fonts.Icon.chevronDown   // nf-fa-chevron_right / down
+        chevron.font = Fonts.hack(8)
+        chevron.textColor = Dash.text3
+        label.stringValue = collapsed && count > 0 ? "PLAYLISTS · \(count)" : "PLAYLISTS"
+        label.font = Dash.mono(9.5, bold: true)
+        label.textColor = Dash.text2
+        add.attributedTitle = NSAttributedString(string: Fonts.Icon.plus, attributes: [.font: Fonts.hack(11), .foregroundColor: Dash.text2])
+        toolTip = collapsed ? "Show the playlists" : "Hide the playlists"
+    }
+}
+
+/// A sidebar row: the card look, and a highlight while songs are dragged over it (a playlist takes them).
+final class SidebarRowView: NSTableRowView {
+    override func drawSelection(in dirtyRect: NSRect) {
+        Dash.selection.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: 5, yRadius: 5).fill()
+    }
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+    override func drawDraggingDestinationFeedback(in dirtyRect: NSRect) {
+        let r = NSBezierPath(roundedRect: bounds.insetBy(dx: 4.5, dy: 1.5), xRadius: 5, yRadius: 5)
+        Dash.selection.setFill()
+        r.fill()
+        Dash.accent.setStroke()
+        r.lineWidth = 1
+        r.stroke()
+    }
+}
+
+/// The hairline between the sections and the playlists.
+final class SidebarDividerRowView: NSTableRowView {
+    override func drawBackground(in dirtyRect: NSRect) {
+        Dash.border.setFill()
+        NSRect(x: 10, y: (bounds.midY).rounded(.down), width: bounds.width - 20, height: 1).fill()
+    }
+    override func drawDraggingDestinationFeedback(in dirtyRect: NSRect) {}
 }
 
 /// Text colors in the library (see Dash): details grey, labels muted.

@@ -59,7 +59,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.controller.play(index: row - 1) }
         }
         if ProcessInfo.processInfo.environment["OMNIAMP_RADIO"] != nil { showRadio(nil) }
-        if ProcessInfo.processInfo.environment["OMNIAMP_PODCASTS"] != nil { showPodcasts(nil) }
+        // OMNIAMP_PODCASTS=books opens it in Books mode; books:<words> searches for them there.
+        if let p = ProcessInfo.processInfo.environment["OMNIAMP_PODCASTS"] {
+            if p.hasPrefix("books") {
+                showBooks(nil)
+                if p.hasPrefix("books:") { podcasts?.searchFor(String(p.dropFirst(6))) }
+            } else {
+                showPodcasts(nil)
+            }
+        }
         if ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY"] != nil { showLibrary(nil) }
         // The music library catches up in the background, once the playlist has loaded.
         if MusicCollection.hasFolders {
@@ -279,6 +287,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if !wasOpen { podcasts?.focusList() }   // already open: keep your place (search, episodes…)
     }
 
+    /// The Podcasts window in Books mode (audiobooks and radio plays).
+    @objc private func showBooks(_ sender: Any?) {
+        showPodcasts(nil)
+        podcasts?.setMode(books: true)
+    }
+
     /// ⌘D keeps the selected thing: a station as a favorite (Radio), an episode as a download (Podcasts).
     /// The menu item's title follows the window in front (validateMenuItem).
     @objc private func keepSelection(_ sender: Any?) {
@@ -291,8 +305,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if let w = radio?.window, w.isVisible, w.isKeyWindow { w.performClose(nil) } else { showRadio(nil) }
     }
 
-    @objc private func togglePodcasts(_ sender: Any?) {
-        if let w = podcasts?.window, w.isVisible, w.isKeyWindow { w.performClose(nil) } else { showPodcasts(nil) }
+    /// ⌘3 / ⌥⌘3: open the window in that mode, switch to it, or close the window when it's in front in that mode.
+    @objc private func togglePodcasts(_ sender: Any?) { toggleWindow(books: false) }
+    @objc private func toggleBooks(_ sender: Any?) { toggleWindow(books: true) }
+
+    private func toggleWindow(books: Bool) {
+        if let p = podcasts, let w = p.window, w.isVisible, w.isKeyWindow, p.books == books { w.performClose(nil); return }
+        showPodcasts(nil)
+        podcasts?.setMode(books: books)
     }
 
     /// ⌃Tab in Radio (POPULAR ⇄ FAVORITES) or Podcasts (TOP ⇄ SUBSCRIBED).
@@ -415,6 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         m.addItem(withTitle: "Jump to File…", action: #selector(find(_:)), keyEquivalent: "").target = self
         m.addItem(withTitle: "Internet Radio…", action: #selector(showRadio(_:)), keyEquivalent: "").target = self
         m.addItem(withTitle: "Podcasts…", action: #selector(showPodcasts(_:)), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Books & Hörspiele…", action: #selector(showBooks(_:)), keyEquivalent: "").target = self
         m.addItem(withTitle: "Music Library…", action: #selector(showLibrary(_:)), keyEquivalent: "").target = self
         m.addItem(.separator())
         addPlaylistItems(to: m)
@@ -658,6 +679,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         do { try controller.savePlaylist(to: u) } catch {
             NSAlert(error: error).runModal()
         }
+        SavedPlaylists.shared.refresh()   // the library's sidebar lists it at once
     }
 
     @objc private func loadSavedPlaylist(_ sender: NSMenuItem) {
@@ -672,6 +694,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func queueSelected(_ sender: Any?) { controller.toggleQueue(trackIndices: look?.selectedTrackIndices ?? []) }
     @objc private func clearQueue(_ sender: Any?) { controller.clearQueue() }
     @objc private func removeSelected(_ sender: Any?) { controller.remove(trackIndices: look?.selectedTrackIndices ?? []) }
+    private var selectedTracks: [Track] { (look?.selectedTrackIndices ?? []).filter { $0 < controller.tracks.count }.map { controller.tracks[$0] } }
+    @objc private func addSelectedToSaved(_ sender: NSMenuItem) {
+        guard let u = sender.representedObject as? URL else { return }
+        do { try SavedPlaylists.shared.append(selectedTracks, to: u) } catch { NSAlert(error: error).runModal() }
+    }
+    @objc private func newPlaylistFromSelected(_ sender: Any?) { SavedPlaylists.shared.promptNew(tracks: selectedTracks) }
     @objc private func reversePlaylist(_ sender: Any?) { controller.reverse() }
     @objc private func randomizePlaylist(_ sender: Any?) { controller.randomize() }
     @objc private func sortPlaylist(_ sender: NSMenuItem) {
@@ -751,6 +779,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let allQueued = !sel.isEmpty && sel.allSatisfy { controller.queuePosition(of: $0) != nil }
         item("Play", #selector(playSelectedTrack(_:)), m)
         item(allQueued ? "Unqueue  (Q)" : "Queue Next  (Q)", #selector(queueSelected(_:)), m)
+        if !sel.isEmpty {
+            m.addItem(SavedPlaylists.shared.addMenuItem(target: self, current: nil, saved: #selector(addSelectedToSaved(_:)),
+                                                        new: #selector(newPlaylistFromSelected(_:))))
+        }
         if !controller.playQueue.isEmpty { item("Clear Queue (\(controller.playQueue.count))", #selector(clearQueue(_:)), m) }
         item("Remove", #selector(removeSelected(_:)), m)
         item("Show in Finder", #selector(revealSelected(_:)), m, key: withKeys ? "r" : "")
@@ -940,6 +972,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
+        // Undo/Redo go to the key window's undo manager (a saved playlist's edits in the library, text being typed).
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
         editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
@@ -991,8 +1027,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         sleepItem.submenu = sleep
         ctlMenu.addItem(sleepItem)
         ctlMenu.addItem(withTitle: "Resume Long Tracks", action: #selector(toggleResume(_:)), keyEquivalent: "").target = self
-        let speedItem = NSMenuItem(title: "Podcast Speed", action: nil, keyEquivalent: "")
-        let speedMenu = NSMenu(title: "Podcast Speed")
+        let speedItem = NSMenuItem(title: "Playback Speed", action: nil, keyEquivalent: "")
+        let speedMenu = NSMenu(title: "Playback Speed")
         for sp in PlayerController.speeds {
             let it = speedMenu.addItem(withTitle: String(format: "%g×", sp), action: #selector(setSpeed(_:)), keyEquivalent: "")
             it.target = self
@@ -1021,6 +1057,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // ⌘2 / ⌘3 toggle: open the window, or close it when it's the one in front.
         winMenu.addItem(withTitle: "Internet Radio", action: #selector(toggleRadio(_:)), keyEquivalent: "2").target = self
         winMenu.addItem(withTitle: "Podcasts", action: #selector(togglePodcasts(_:)), keyEquivalent: "3").target = self
+        let booksItem = winMenu.addItem(withTitle: "Books & Hörspiele", action: #selector(toggleBooks(_:)), keyEquivalent: "3")
+        booksItem.keyEquivalentModifierMask = [.command, .option]
+        booksItem.target = self
         winMenu.addItem(withTitle: "Music Library", action: #selector(toggleLibrary(_:)), keyEquivalent: "4").target = self
         let switchView = winMenu.addItem(withTitle: "Switch View", action: #selector(switchView(_:)), keyEquivalent: "\t")
         switchView.keyEquivalentModifierMask = [.control]
@@ -1090,14 +1129,14 @@ extension AppDelegate: NSMenuDelegate {
         }
         guard menu.identifier == MenuID.savedPlaylists else { return }
         menu.removeAllItems()
-        let saved = PlaylistFile.saved
-        if saved.isEmpty {
+        if SavedPlaylists.shared.urls.isEmpty {
             menu.addItem(withTitle: "No saved playlists", action: nil, keyEquivalent: "").isEnabled = false
         }
-        for u in saved {
-            let it = menu.addItem(withTitle: u.deletingPathExtension().lastPathComponent, action: #selector(loadSavedPlaylist(_:)), keyEquivalent: "")
+        SavedPlaylists.shared.fill(menu) { u in
+            let it = NSMenuItem(title: SavedPlaylists.name(u), action: #selector(loadSavedPlaylist(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = u
+            return it
         }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Show in Finder", action: #selector(showPlaylistsFolder(_:)), keyEquivalent: "").target = self

@@ -43,6 +43,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
     }
 
+    /// A row in the sidebar: the sections, then the saved playlists under their title.
+    private enum SideRow: Equatable { case section(Section), divider, header, group(URL), playlist(URL) }
+
     /// A row in the albums pane.
     private enum Item: Equatable {
         case header(String, ReleaseKind?)
@@ -100,6 +103,14 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private let attentionPage = AttentionPage()
     private let gridPage = AlbumGridPage()
     private let tracksPage = TracksPage()
+    private let playlistPage = PlaylistPage()
+    private let playlists = SavedPlaylists.shared
+    private var sideRows: [SideRow] = []
+    /// The saved playlist shown (its sidebar row selected); nil: a section.
+    private var openPlaylist: URL?
+    private var playlistsCollapsed = UserDefaults.standard.bool(forKey: Pref.libraryPlaylistsCollapsed)
+    /// A rename in progress: the folder's change notice mustn't close the playlist under its old name.
+    private var renaming = false
     /// Pages over the lists, the one shown last: Back goes down the stack, then to the lists.
     private enum Page { case song(artist: String, title: String), artist(String) }
     private var pages: [Page] = []
@@ -121,6 +132,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         w.setFrameAutosaveName("OmniAmpLibrary")
         if let st = Self.lastState {
             section = st.section; filter = st.filter; query = st.query
+            openPlaylist = st.playlist
         }
         if let q = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_SEARCH"] { query = q }   // test hook
         // Test hook: OMNIAMP_LIBRARY_TYPING=1 puts the cursor in the search field (how it looks while typing).
@@ -136,6 +148,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         observers.add(nc.addObserver(forName: MusicCollection.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.libraryChanged() }
         })
+        observers.add(nc.addObserver(forName: SavedPlaylists.changed, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.playlistsChanged() }
+        })
         observers.add(nc.addObserver(forName: MusicCollection.progressChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }
         })
@@ -150,14 +165,24 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         library.start()
         // Test hook: OMNIAMP_LIBRARY=section[:entry] opens on a section and entry ("shows:Grateful Dead", "years:1997").
         var entry = Self.lastState?.entry
-        if let hook = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY"], let name = hook.split(separator: ":").first,
+        // "playlists:Road Trip" opens that saved playlist ("playlists": the first one).
+        if let hook = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY"], hook == "playlists" || hook.hasPrefix("playlists:") {
+            let name = hook.split(separator: ":", maxSplits: 1).dropFirst().first.map(String.init)
+            openPlaylist = playlists.urls.first { name == nil || SavedPlaylists.name($0) == name }
+            query = ""
+            search.stringValue = ""
+        } else if let hook = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY"], let name = hook.split(separator: ":").first,
            let s = Section.allCases.first(where: { String(describing: $0) == name }) {
             section = s
             entry = hook.split(separator: ":", maxSplits: 1).dropFirst().first.map { e in s == .artists || s == .shows ? Keys.artist(String(e)) : String(e) }
             if s == .attention { attentionHookGroup = entry }
             // "albums:year" groups the grid by year; "albums:Homogenic" opens that album.
             if s == .albums, let e = entry { DispatchQueue.main.async { [weak self] in self?.gridPage.applyHook(e) } }
+            openPlaylist = nil
         }
+        if let u = openPlaylist, !playlists.urls.contains(where: { SavedPlaylists.same($0, u) }) { openPlaylist = nil }
+        if let u = openPlaylist { reveal(u) }
+        if searching { openPlaylist = nil }
         reloadAll(keepEntry: entry, keepAlbum: Self.lastState?.album)
         // Test hook: OMNIAMP_LIBRARY_SONG="Artist|Title" opens that song's page.
         if let name = ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY_ARTIST"] {   // test hook: that artist's page
@@ -189,11 +214,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    private static var lastState: (section: Section, filter: LibraryFilter, query: String, entry: String?, album: String?)?
+    private static var lastState: (section: Section, filter: LibraryFilter, query: String, entry: String?, album: String?, playlist: URL?)?
     var onClose: (() -> Void)?
 
     func windowWillClose(_ notification: Notification) {
-        Self.lastState = (section, filter, query, selectedEntry?.id, selectedAlbum?.key)
+        Self.lastState = (section, filter, query, selectedEntry?.id, selectedAlbum?.key, openPlaylist)
         // Only the player stays open: the covers and tickets in memory go (on disk, or drawn again, when it opens).
         LibraryArt.shared.releaseMemory()
         Tickets.shared.releaseMemory()
@@ -248,6 +273,14 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             t.menu = menu
         }
         sidebar.action = #selector(sidebarClicked)
+        // Songs, albums, folders and files dropped on a playlist go into it; on the title, into a new one.
+        sidebar.registerForDraggedTypes([.fileURL, LibraryDrag.pathsType, LibraryDrag.tracksType, Self.sidebarPlaylistType])
+        sidebar.setDraggingSourceOperationMask([.move, .copy], forLocal: true)
+        sidebar.setDraggingSourceOperationMask(.copy, forLocal: false)
+        sidebar.draggingDestinationFeedbackStyle = .regular
+        let sideMenu = NSMenu()
+        sideMenu.delegate = self
+        sidebar.menu = sideMenu
         let artistMenu = NSMenu()
         artistMenu.delegate = self
         middle.menu = artistMenu
@@ -335,6 +368,24 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         tracksPage.onVersions = { [weak self] a, t in self?.showSong(artist: a, titleKey: t) }
         tracksPage.onKey = { [weak self] e in self?.gridKey(e) ?? false }
         tracksPage.onSummary = { [weak self] in self?.updateStatus() }
+        tracksPage.onAddToSaved = { [weak self] list, url in self?.addToSaved(list, url) }
+        tracksPage.onNewPlaylist = { [weak self] list in self?.newPlaylist(with: list) }
+        playlistPage.onPlay = { [weak self] list, start in self?.play(tracks: list, from: start) }
+        playlistPage.onAdd = { [weak self] list in self?.enqueue(tracks: list) }
+        playlistPage.onLoad = { [weak self] url in
+            guard let self else { return }
+            self.controller.loadPlaylist(url)
+            self.status.stringValue = "Loaded “\(SavedPlaylists.name(url))” into the player."
+        }
+        playlistPage.onShowAlbum = { [weak self] t in
+            self?.openRelease(artist: t.albumKey.components(separatedBy: "\u{1}").first ?? Keys.artist(t.artist), album: t.albumKey)
+        }
+        playlistPage.onRename = { [weak self] in if let u = self?.openPlaylist { self?.beginRename(u) } }
+        playlistPage.onTrash = { [weak self] in if let u = self?.openPlaylist { self?.trashPlaylist(u) } }
+        playlistPage.onAddToSaved = { [weak self] list, url in self?.addTracks(list, to: url) }
+        playlistPage.onNewPlaylist = { [weak self] list in self?.newPlaylist(tracks: list) }
+        playlistPage.onKey = { [weak self] e in self?.gridKey(e) ?? false }
+        playlistPage.onSummary = { [weak self] in self?.updateStatus() }
         // Filter words typed into the search became chips: they leave the field (no new search for that).
         tracksPage.onSearchText = { [weak self] text in
             guard let self else { return }
@@ -343,7 +394,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             self.query = text
         }
         for v in [title, top, scrolls[0], letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, bottom, statsPage, listeningPage,
-                  songPage, artistPage, attentionPage, gridPage, tracksPage] as [NSView] {
+                  songPage, artistPage, attentionPage, gridPage, tracksPage, playlistPage] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
         }
@@ -418,6 +469,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             tracksPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
             tracksPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap),
             tracksPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
+            playlistPage.topAnchor.constraint(equalTo: side.topAnchor),
+            playlistPage.bottomAnchor.constraint(equalTo: side.bottomAnchor),
+            playlistPage.leadingAnchor.constraint(equalTo: side.trailingAnchor, constant: gap + 4),
+            playlistPage.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
 
             bottom.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
             bottom.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
@@ -452,6 +507,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         if let v = window?.contentView { Dash.restyle(v) }
         [sidebar, middle, albumTable, trackTable].forEach { $0.reloadData() }
         tracksPage.restyle()
+        playlistPage.restyle()
     }
 
     // MARK: Loading
@@ -461,20 +517,21 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Everything again, keeping the selections where they still exist.
     private func reloadAll(keepEntry: String? = nil, keepAlbum: String? = nil) {
-        sidebar.reloadData()
-        sidebar.selectRowIndexes([searching ? searchSection.rawValue : section.rawValue], byExtendingSelection: false)
+        rebuildSidebar()
         loadEntries(keep: keepEntry ?? selectedEntry?.id, keepAlbum: keepAlbum ?? selectedAlbum?.key)
         updateStatus()
     }
 
     /// Stats and Listening replace the lists; everything else shows them.
-    private var showingStats: Bool { section == .stats && !searching }
-    private var showingListening: Bool { section == .listening && !searching }
-    private var showingAttention: Bool { section == .attention && !searching }
+    private var showingStats: Bool { section == .stats && !searching && openPlaylist == nil }
+    private var showingListening: Bool { section == .listening && !searching && openPlaylist == nil }
+    private var showingAttention: Bool { section == .attention && !searching && openPlaylist == nil }
     /// The album grid and the track list: searches show in them too.
-    private var showingAlbums: Bool { section == .albums }
-    private var showingTracks: Bool { section == .tracks }
-    private var showingPage: Bool { showingStats || showingListening || showingAttention || showingAlbums || showingTracks }
+    private var showingAlbums: Bool { section == .albums && openPlaylist == nil }
+    private var showingTracks: Bool { section == .tracks && openPlaylist == nil }
+    /// A saved playlist (a search closes it).
+    private var showingPlaylist: Bool { openPlaylist != nil && !searching }
+    private var showingPage: Bool { showingStats || showingListening || showingAttention || showingAlbums || showingTracks || showingPlaylist }
     /// Where a search shows its results (highlighted in the sidebar): the grid or the track list when one is open,
     /// else the artists.
     private var searchSection: Section { section == .albums || section == .tracks ? section : .artists }
@@ -509,7 +566,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func showTopPage() {
         guard let p = pages.last else { return }
         for v in [letters, scrolls[1], timeline, scrolls[2], scrolls[3], empty, statsPage, listeningPage, songPage, artistPage, attentionPage,
-                  gridPage, tracksPage] as [NSView] {
+                  gridPage, tracksPage, playlistPage] as [NSView] {
             v.isHidden = true
         }
         switch p {
@@ -567,6 +624,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func openRelease(artist: String, album: String?) {
         dropPages()
         section = .artists
+        openPlaylist = nil
         // A search or a filter could hide the release (the first search hit would be opened instead).
         if searching {
             NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(searchChanged), object: nil)
@@ -618,7 +676,21 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// no selection change, so it's handled here. It ends the search or closes the pages.
     @objc private func sidebarClicked() {
         let row = sidebar.clickedRow
-        guard row >= 0, row == sidebar.selectedRow, let s = Section(rawValue: row), searching || !pages.isEmpty else { return }
+        guard row >= 0 else { return }
+        switch sideRow(at: row) {
+        case .header:
+            if NSApp.currentEvent?.clickCount ?? 1 <= 1 { togglePlaylists() }   // a double click isn't two
+            return
+        case .group(let g):
+            if NSApp.currentEvent?.clickCount ?? 1 <= 1 { toggleGroup(g) }
+            return
+        case .playlist where row == sidebar.selectedRow && !pages.isEmpty:   // back from a page opened over it
+            dropPages()
+            loadEntries(keep: nil)
+            return
+        default: break
+        }
+        guard row == sidebar.selectedRow, case .section(let s) = sideRow(at: row), searching || !pages.isEmpty else { return }
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(searchChanged), object: nil)
         search.stringValue = ""
         query = ""
@@ -630,6 +702,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// From a chart: the library at that genre, year or artist.
     private func open(_ s: Section, _ entry: String) {
         section = s
+        openPlaylist = nil
         reloadAll(keepEntry: entry)
         window?.makeFirstResponder(middle)
     }
@@ -644,7 +717,14 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         attentionPage.isHidden = !showingAttention
         gridPage.isHidden = !showingAlbums
         tracksPage.isHidden = !showingTracks
+        playlistPage.isHidden = !showingPlaylist
         for v in [scrolls[1], scrolls[2], scrolls[3]] as [NSView] { v.isHidden = showingPage }
+        if showingPlaylist, let url = openPlaylist {
+            for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
+            // Refreshes (a scan, a filter) leave it as it is: it follows its file and the library by itself.
+            if !(playlistPage.url.map { SavedPlaylists.same($0, url) } ?? false) { playlistPage.show(url) }
+            return
+        }
         if !showingAttention { attentionOpen = false }
         if showingAttention {
             for v in [letters, timeline, empty] as [NSView] { v.isHidden = true }
@@ -890,6 +970,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             let entry = self.selectedEntry?.id, album = self.selectedAlbum?.key
             let topRow = self.middle.rows(in: self.middle.visibleRect).location
             self.loadEntries(keep: entry, keepAlbum: album)
+            self.playlistPage.libraryChanged()   // its songs' tags, files found or gone (at most every 2 s, like the lists)
             if entry == nil, topRow > 0 { self.middle.scrollRowToVisible(topRow) }
             self.updateStatus()
         }
@@ -909,6 +990,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             if p.toRead > 0 { s += " · reading tags \(p.read.formatted()) of \(p.toRead.formatted())" }
             status.stringValue = s
         } else if showingTracks, pages.isEmpty, let summary = tracksPage.summary {
+            status.stringValue = summary
+        } else if showingPlaylist, pages.isEmpty, let summary = playlistPage.summary {
             status.stringValue = summary
         } else if let sum = try? db?.summary(), sum.tracks > 0 {
             let days = sum.duration / 86400
@@ -947,8 +1030,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     @objc private func searchChanged() {
         guard search.stringValue != query else { return }
         query = search.stringValue
-        // Typing a search: its results replace an open page.
+        // Typing a search: its results replace an open page (and an open playlist).
         dropPages()
+        if searching { openPlaylist = nil }
         reloadAll(keepEntry: nil)
     }
 
@@ -981,6 +1065,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     func focusList() {
         if showingAlbums, pages.isEmpty { gridPage.focus() } else if showingTracks, pages.isEmpty { tracksPage.focus() }
+        else if showingPlaylist, pages.isEmpty { playlistPage.focus() }
         else { window?.makeFirstResponder(middle) }
     }
 
@@ -1080,8 +1165,14 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         return selectedAlbums.flatMap { (try? db.tracks(album: $0.key)) ?? [] }
     }
 
-    @objc private func playSelection() { play(chosenTracks()) }
-    @objc private func addSelection() { enqueue(chosenTracks()) }
+    @objc private func playSelection() {
+        if showingPlaylist, pages.isEmpty { playlistPage.playChosen(); return }
+        play(chosenTracks())
+    }
+    @objc private func addSelection() {
+        if showingPlaylist, pages.isEmpty { playlistPage.addChosen(); return }
+        enqueue(chosenTracks())
+    }
 
     /// Only what OmniAmp can play; says what was left out (WMA, SHN, protected M4P…). nil when nothing's left.
     private func playable(_ list: [LibraryTrack]) -> [LibraryTrack]? {
@@ -1103,7 +1194,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func play(_ all: [LibraryTrack], from start: Int = 0) {
         guard let list = playable(all), let first = list.first else { return }
         let startKey = all.indices.contains(start) ? all[start].key : first.key
-        let offset = list.firstIndex { $0.key == startKey } ?? 0
+        play(tracks: list.map(\.track), from: list.firstIndex { $0.key == startKey } ?? 0, announce: list.count == all.count)
+    }
+
+    private func play(tracks list: [Track], from offset: Int = 0, announce: Bool = true) {
+        guard let first = list.first else { NSSound.beep(); return }
         let keys = list.map(\.key)
         let current = controller.tracks.map(\.key)
         if let i = current.firstIndex(of: first.key), i + keys.count <= current.count, Array(current[i..<(i + keys.count)]) == keys {
@@ -1111,15 +1206,20 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             return
         }
         let at = controller.tracks.count
-        controller.insertScanned(list.map(\.track), at: at)
+        controller.insertScanned(list, at: at)
         controller.play(index: at + offset)
-        if list.count == all.count { status.stringValue = "Playing \(list.count == 1 ? "“\(first.title)”" : "\(list.count) tracks")." }
+        if announce { status.stringValue = "Playing \(list.count == 1 ? "“\(first.title ?? first.fileStem)”" : "\(list.count) tracks")." }
     }
 
     private func enqueue(_ all: [LibraryTrack]) {
         guard let list = playable(all) else { return }
-        controller.insertScanned(list.map(\.track), at: controller.tracks.count)
-        if list.count == all.count { status.stringValue = "Added \(list.count == 1 ? "“\(list[0].title)”" : "\(list.count) tracks") to the playlist." }
+        enqueue(tracks: list.map(\.track), announce: list.count == all.count)
+    }
+
+    private func enqueue(tracks list: [Track], announce: Bool = true) {
+        guard let first = list.first else { NSSound.beep(); return }
+        controller.insertScanned(list, at: controller.tracks.count)
+        if announce { status.stringValue = "Added \(list.count == 1 ? "“\(first.title ?? first.fileStem)”" : "\(list.count) tracks") to the playlist." }
     }
 
     @objc private func replaceAndPlay() { replace(with: chosenTracks()) }
@@ -1131,10 +1231,46 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         controller.play(index: 0)
     }
 
+    // MARK: Saved playlists
+
+    /// "Add to Playlist ▸ <a saved playlist>" on what's chosen.
+    @objc private func addSelectionToSaved(_ sender: NSMenuItem) {
+        if let url = sender.representedObject as? URL { addToSaved(chosenTracks(), url) }
+    }
+
+    @objc private func newPlaylistFromSelection() { newPlaylist(with: chosenTracks()) }
+
+    private func addToSaved(_ all: [LibraryTrack], _ url: URL) {
+        guard let list = playable(all) else { return }
+        addTracks(list.map(\.track), to: url, announce: list.count == all.count)
+    }
+
+    private func newPlaylist(with all: [LibraryTrack]) {
+        guard let list = playable(all) else { return }
+        newPlaylist(tracks: list.map(\.track))
+    }
+
+    private func addTracks(_ list: [Track], to url: URL, announce: Bool = true) {
+        guard !list.isEmpty else { NSSound.beep(); return }
+        do { try playlists.append(list, to: url) } catch { showError(error); return }
+        if announce { status.stringValue = "Added \(Self.songs(list)) to “\(SavedPlaylists.name(url))”." }
+    }
+
+    /// From a menu: asks for a name (the songs' album or artist suggested), and stays where it is.
+    private func newPlaylist(tracks list: [Track]) {
+        guard let url = playlists.promptNew(tracks: list) else { return }
+        status.stringValue = "Made “\(SavedPlaylists.name(url))” with \(Self.songs(list))."
+    }
+
+    private static func songs(_ list: [Track]) -> String {
+        list.count == 1 ? "“\(list[0].title ?? list[0].fileStem)”" : "\(list.count.formatted()) songs"
+    }
+
     @objc private func doubleClicked(_ sender: NSTableView) {
         guard sender.clickedRow >= 0 else { return }
         switch sender {
         case middle where section == .artists || section == .shows || searching: openArtistPage()
+        case sidebar where showingPlaylist: playlistPage.focus()
         case sidebar, middle: window?.makeFirstResponder(albumTable)
         case trackTable: play(trackTable.selectedRowIndexes.filter { $0 < tracks.count }.map { tracks[$0] })
         default:
@@ -1176,8 +1312,23 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private func tableKey(_ e: NSEvent, in t: KeyTableView) -> Bool {
         let mods = e.modifierFlags.intersection([.command, .control, .option, .shift])
         // From the sidebar into the album grid (the lists are hidden).
-        if t === sidebar, showingAlbums || showingTracks, pages.isEmpty, mods.isEmpty, [124, 48, 36, 76].contains(e.keyCode) {
-            if showingAlbums { gridPage.focus() } else { tracksPage.focus() }
+        if t === sidebar, showingAlbums || showingTracks || showingPlaylist, pages.isEmpty, mods.isEmpty, [124, 48, 36, 76].contains(e.keyCode) {
+            if showingAlbums { gridPage.focus() } else if showingTracks { tracksPage.focus() } else { playlistPage.focus() }
+            return true
+        }
+        // ↑/↓ in the sidebar step over the playlists' title and the line above it.
+        if t === sidebar, mods.isEmpty, e.keyCode == 125 || e.keyCode == 126 {
+            let step = e.keyCode == 125 ? 1 : -1
+            var r = sidebar.selectedRow + step
+            while r >= 0, r < sideRows.count, !selectable(sideRows[r]) { r += step }
+            if r >= 0, r < sideRows.count {
+                sidebar.selectRowIndexes([r], byExtendingSelection: false)
+                sidebar.scrollRowToVisible(r)
+            }
+            return true
+        }
+        if t === sidebar, mods.isEmpty, e.keyCode == 51 || e.keyCode == 117, case .playlist(let u) = sideRow(at: sidebar.selectedRow) {
+            trashPlaylist(u)
             return true
         }
         let order: [NSTableView] = [sidebar, middle, albumTable, trackTable]
@@ -1220,7 +1371,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         let menu = NSMenu()
         func add(_ title: String, _ action: Selector) { menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self }
         add("Play", #selector(playSelection))
-        add("Add to Playlist", #selector(addSelection))
+        menu.addItem(addToPlaylistItem())
         add("Replace Playlist and Play", #selector(replaceAndPlay))
         menu.addItem(.separator())
         add("Artist Page", #selector(gridArtistPage))
@@ -1269,9 +1420,12 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             menu.addItem(withTitle: "Artist Page", action: #selector(openArtistPage), keyEquivalent: "").target = self
             menu.addItem(.separator())
             menu.addItem(withTitle: "Play All", action: #selector(playSelection), keyEquivalent: "").target = self
-            menu.addItem(withTitle: "Add All to Playlist", action: #selector(addSelection), keyEquivalent: "").target = self
+            let addAll = addToPlaylistItem()
+            addAll.title = "Add All to Playlist"
+            menu.addItem(addAll)
             return
         }
+        if menu === sidebar.menu { fillSidebarMenu(menu); return }
         let t = menu === albumTable.menu ? albumTable : trackTable
         let row = t.clickedRow
         guard row >= 0 else { return }
@@ -1279,7 +1433,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         window?.makeFirstResponder(t)
         func add(_ title: String, _ action: Selector) { menu.addItem(withTitle: title, action: action, keyEquivalent: "").target = self }
         add("Play", #selector(playSelection))
-        add("Add to Playlist", #selector(addSelection))
+        menu.addItem(addToPlaylistItem())
         add("Replace Playlist and Play", #selector(replaceAndPlay))
         menu.addItem(.separator())
         if t === albumTable, selectedAlbums.count == 1 { add("Find Missing Info…", #selector(findInfo)) }
@@ -1287,11 +1441,354 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         add("Show in Finder", #selector(showInFinder))
     }
 
+    /// "Add to Playlist ▸": the player's, a saved one, or a new one.
+    private func addToPlaylistItem() -> NSMenuItem {
+        playlists.addMenuItem(target: self, current: #selector(addSelection), saved: #selector(addSelectionToSaved(_:)),
+                              new: #selector(newPlaylistFromSelection))
+    }
+
+    // MARK: Sidebar playlists
+
+    private func sideRow(at row: Int) -> SideRow? { row >= 0 && row < sideRows.count ? sideRows[row] : nil }
+
+    private func selectable(_ r: SideRow) -> Bool {
+        switch r {
+        case .section, .playlist: true
+        case .divider, .header, .group: false
+        }
+    }
+
+    /// The row of a playlist or group (by path: a folder's URL may or may not end in "/").
+    private func rowIndex(of r: SideRow) -> Int? {
+        switch r {
+        case .playlist(let u): sideRows.firstIndex { if case .playlist(let x) = $0 { SavedPlaylists.same(x, u) } else { false } }
+        case .group(let u): sideRows.firstIndex { if case .group(let x) = $0 { SavedPlaylists.same(x, u) } else { false } }
+        default: sideRows.firstIndex(of: r)
+        }
+    }
+
+    /// What the sidebar highlights: the open playlist, the section, or where a search shows its results.
+    private var currentSideRow: SideRow {
+        if searching { return .section(searchSection) }
+        return openPlaylist.map(SideRow.playlist) ?? .section(section)
+    }
+
+    /// The sections, the playlists' title, then (unless folded away) each group with its playlists (unless that group
+    /// is folded) and the playlists in no group; the current one highlighted.
+    private func rebuildSidebar() {
+        var rows = Section.allCases.map(SideRow.section) + [.divider, .header]
+        if !playlistsCollapsed {
+            for g in playlists.groups {
+                rows.append(.group(g.url))
+                if !collapsedGroups.contains(g.name) { rows += g.playlists.map(SideRow.playlist) }
+            }
+            rows += playlists.ungrouped.map(SideRow.playlist)
+        }
+        sideRows = rows
+        sidebar.reloadData()
+        if let r = rowIndex(of: currentSideRow) {
+            sidebar.selectRowIndexes([r], byExtendingSelection: false)
+        } else {
+            sidebar.deselectAll(nil)
+        }
+    }
+
+    /// The groups folded away (by folder name), as the user left them.
+    private var collapsedGroups = Set(UserDefaults.standard.stringArray(forKey: Pref.libraryPlaylistGroupsCollapsed) ?? [])
+
+    private func setGroup(_ name: String, folded: Bool) {
+        if folded { collapsedGroups.insert(name) } else { collapsedGroups.remove(name) }
+        UserDefaults.standard.set(collapsedGroups.sorted(), forKey: Pref.libraryPlaylistGroupsCollapsed)
+    }
+
+    private func toggleGroup(_ url: URL) {
+        let name = url.lastPathComponent
+        setGroup(name, folded: !collapsedGroups.contains(name))
+        rebuildSidebar()
+    }
+
+    /// The playlists folder changed: the list again; the open playlist gone (deleted or renamed outside), its section.
+    private func playlistsChanged() {
+        guard !renaming else { return }
+        if let u = openPlaylist, !playlists.urls.contains(where: { SavedPlaylists.same($0, u) }) {
+            openPlaylist = nil
+            dropPages()
+            rebuildSidebar()
+            loadEntries(keep: nil)
+            return
+        }
+        rebuildSidebar()
+    }
+
+    private func togglePlaylists() {
+        playlistsCollapsed.toggle()
+        UserDefaults.standard.set(playlistsCollapsed, forKey: Pref.libraryPlaylistsCollapsed)
+        rebuildSidebar()
+    }
+
+    /// Unfolds what hides a playlist: the Playlists title and its group.
+    private func reveal(_ url: URL) {
+        if playlistsCollapsed { playlistsCollapsed = false; UserDefaults.standard.set(false, forKey: Pref.libraryPlaylistsCollapsed) }
+        if let g = playlists.group(of: url) { setGroup(g.name, folded: false) }
+    }
+
+    /// Shows a saved playlist (from the sidebar, or one just made).
+    private func openSaved(_ url: URL) {
+        if searching {
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(searchChanged), object: nil)
+            search.stringValue = ""
+            query = ""
+        }
+        dropPages()
+        openPlaylist = url
+        reveal(url)
+        rebuildSidebar()
+        if let r = rowIndex(of: .playlist(url)) { sidebar.scrollRowToVisible(r) }
+        loadEntries(keep: nil)
+        updateStatus()
+    }
+
+    /// The + on the Playlists title: a playlist or a group.
+    @objc private func showNewMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "New Playlist", action: #selector(newEmptyPlaylist), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "New Group", action: #selector(newGroup), keyEquivalent: "").target = self
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 2), in: sender)
+    }
+
+    @objc private func newEmptyPlaylist() { createAndRename([]) }
+
+    /// A new playlist (empty, or the songs dropped on a title), in a group or in none, opened with its name ready to
+    /// type over.
+    private func createAndRename(_ tracks: [Track], in group: URL? = nil) {
+        let name = playlists.uniqueName(tracks.isEmpty ? "New Playlist" : SavedPlaylists.suggestedName(for: tracks), in: group)
+        let url: URL
+        do { url = try playlists.create(named: name, tracks: tracks, in: group) } catch { showError(error); return }
+        openSaved(url)
+        if !tracks.isEmpty { status.stringValue = "Made “\(name)” with \(Self.songs(tracks))." }
+        beginRename(url)
+    }
+
+    @objc private func newGroup() {
+        let url: URL
+        do { url = try playlists.createGroup(named: "New Group") } catch { showError(error); return }
+        if playlistsCollapsed { togglePlaylists() } else { rebuildSidebar() }
+        beginRename(group: url)
+    }
+
+    /// A row's name in the sidebar becomes editable; `commit` gets what was typed (changed and not empty).
+    private func beginRename(row: SideRow, current: String, commit: @escaping (String) -> Void) {
+        guard let r = rowIndex(of: row) else { return }
+        sidebar.scrollRowToVisible(r)
+        guard let cell = sidebar.view(atColumn: 0, row: r, makeIfNecessary: true) as? SidebarCell else { return }
+        cell.beginRename { [weak self] name in
+            guard let self else { return }
+            defer { self.window?.makeFirstResponder(self.sidebar) }
+            guard let name, let clean = SavedPlaylists.cleanName(name), clean != current else {
+                self.rebuildSidebar()
+                return
+            }
+            self.renaming = true
+            commit(name)
+            self.renaming = false
+            self.rebuildSidebar()
+        }
+    }
+
+    private func beginRename(_ url: URL) {
+        reveal(url)
+        rebuildSidebar()
+        beginRename(row: .playlist(url), current: SavedPlaylists.name(url)) { [weak self] name in
+            guard let self else { return }
+            do { self.playlistMoved(url, to: try self.playlists.rename(url, to: name)) } catch { self.showError(error) }
+        }
+    }
+
+    private func beginRename(group url: URL) {
+        beginRename(row: .group(url), current: url.lastPathComponent) { [weak self] name in
+            guard let self else { return }
+            do {
+                let new = try self.playlists.renameGroup(url, to: name)
+                if self.collapsedGroups.contains(url.lastPathComponent) {
+                    self.setGroup(url.lastPathComponent, folded: false)
+                    self.setGroup(new.lastPathComponent, folded: true)
+                }
+                // The open playlist was in it: same file name, new folder.
+                if let open = self.openPlaylist, SavedPlaylists.same(open.deletingLastPathComponent(), url) {
+                    self.playlistMoved(open, to: new.appendingExact(open.lastPathComponent))
+                }
+            } catch {
+                self.showError(error)
+            }
+        }
+    }
+
+    /// A playlist renamed or moved to another group: the page follows it.
+    private func playlistMoved(_ old: URL, to new: URL) {
+        guard let open = openPlaylist, SavedPlaylists.same(open, old) else { return }
+        openPlaylist = new
+        playlistPage.show(new)
+    }
+
+    /// Moves playlists in or out of a group (nil: out of any).
+    private func movePlaylist(_ url: URL, toGroup group: URL?) {
+        renaming = true
+        defer { renaming = false; rebuildSidebar() }
+        do {
+            let new = try playlists.move(url, toGroup: group)
+            playlistMoved(url, to: new)
+            if let group { setGroup(group.lastPathComponent, folded: false) }
+        } catch {
+            showError(error)
+        }
+    }
+
+    private func trashPlaylist(_ url: URL) {
+        guard let w = window else { return }
+        let a = NSAlert()
+        a.messageText = "Move “\(SavedPlaylists.name(url))” to the Trash?"
+        a.informativeText = "Only the playlist goes; its songs stay where they are."
+        a.addButton(withTitle: "Move to Trash")
+        a.addButton(withTitle: "Cancel")
+        a.beginSheetModal(for: w) { [weak self] r in
+            guard r == .alertFirstButtonReturn else { return }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                do { try self.playlists.trash(url) } catch { self.showError(error) }
+            }
+        }
+    }
+
+    private func deleteGroup(_ url: URL) {
+        guard let w = window else { return }
+        let n = playlists.groups.first { SavedPlaylists.same($0.url, url) }?.playlists.count ?? 0
+        let a = NSAlert()
+        a.messageText = "Delete the group “\(url.lastPathComponent)”?"
+        a.informativeText = n == 0 ? "It's empty." : "Its \(n == 1 ? "playlist stays" : "\(n) playlists stay"), outside any group."
+        a.addButton(withTitle: "Delete Group")
+        a.addButton(withTitle: "Cancel")
+        a.beginSheetModal(for: w) { [weak self] r in
+            guard r == .alertFirstButtonReturn else { return }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.renaming = true
+                defer { self.renaming = false; self.rebuildSidebar() }
+                do {
+                    for (old, new) in try self.playlists.deleteGroup(url) { self.playlistMoved(old, to: new) }
+                    self.setGroup(url.lastPathComponent, folded: false)
+                } catch {
+                    self.showError(error)
+                }
+            }
+        }
+    }
+
+    private func showError(_ error: Error) {
+        guard let w = window else { NSAlert(error: error).runModal(); return }
+        NSAlert(error: error).beginSheetModal(for: w)
+    }
+
+    /// The playlist or group a sidebar menu was opened on.
+    private var menuPlaylist: URL?
+    private var menuGroup: URL?
+
+    private func fillSidebarMenu(_ menu: NSMenu) {
+        func add(_ title: String, _ action: Selector, to m: NSMenu? = nil) -> NSMenuItem {
+            let it = (m ?? menu).addItem(withTitle: title, action: action, keyEquivalent: "")
+            it.target = self
+            return it
+        }
+        switch sideRow(at: sidebar.clickedRow) {
+        case .header, .divider:
+            _ = add("New Playlist", #selector(newEmptyPlaylist))
+            _ = add("New Group", #selector(newGroup))
+            menu.addItem(.separator())
+            _ = add(playlistsCollapsed ? "Show Playlists" : "Hide Playlists", #selector(togglePlaylistsMenu))
+        case .group(let g):
+            menuGroup = g
+            _ = add("New Playlist in Group", #selector(menuNewInGroup))
+            menu.addItem(.separator())
+            _ = add("Rename", #selector(menuRenameGroup))
+            let colors = NSMenu()
+            let current = playlists.groups.first { SavedPlaylists.same($0.url, g) }?.color
+            let none = add("None", #selector(menuColorGroup(_:)), to: colors)
+            none.tag = 0
+            none.state = current == nil ? .on : .off
+            colors.addItem(.separator())
+            for c in PlaylistColor.allCases {
+                let it = add(c.name, #selector(menuColorGroup(_:)), to: colors)
+                it.tag = c.rawValue
+                it.image = c.swatch
+                it.state = current == c ? .on : .off
+            }
+            let colorItem = menu.addItem(withTitle: "Color", action: nil, keyEquivalent: "")
+            colorItem.submenu = colors
+            _ = add("Show in Finder", #selector(menuRevealGroup))
+            menu.addItem(.separator())
+            _ = add("Delete Group…", #selector(menuDeleteGroup))
+        case .playlist(let u):
+            menuPlaylist = u
+            _ = add("Play", #selector(menuPlayPlaylist))
+            _ = add("Add to Current Playlist", #selector(menuAddPlaylist))
+            _ = add("Load into Player", #selector(menuLoadPlaylist))
+            menu.addItem(.separator())
+            if !SavedPlaylists.isReadOnly(u) { _ = add("Rename", #selector(menuRenamePlaylist)) }
+            if !playlists.groups.isEmpty {
+                // Into a group, or out of the one it's in.
+                let groups = NSMenu()
+                let inGroup = playlists.group(of: u)
+                let out = add("No Group", #selector(menuMovePlaylist(_:)), to: groups)
+                out.state = inGroup == nil ? .on : .off
+                groups.addItem(.separator())
+                for g in playlists.groups {
+                    let it = add(g.name, #selector(menuMovePlaylist(_:)), to: groups)
+                    it.representedObject = g.url
+                    it.image = g.color?.swatch
+                    it.state = inGroup?.url == g.url ? .on : .off
+                }
+                let moveItem = menu.addItem(withTitle: "Move to Group", action: nil, keyEquivalent: "")
+                moveItem.submenu = groups
+            }
+            _ = add("Show in Finder", #selector(menuRevealPlaylist))
+            menu.addItem(.separator())
+            _ = add("Move to Trash", #selector(menuTrashPlaylist))
+        default: break
+        }
+    }
+
+    @objc private func togglePlaylistsMenu() { togglePlaylists() }
+
+    /// The songs in a saved playlist that can be played, read as playing it would (the library's tags where it has them).
+    private func savedTracks(_ url: URL) -> [Track] {
+        let doc = playlists.document(url)
+        return PlaylistRow.resolve(doc, base: url.deletingLastPathComponent(), db: db, checkFiles: false).compactMap(\.track)
+    }
+
+    @objc private func menuPlayPlaylist() { if let u = menuPlaylist { play(tracks: savedTracks(u)) } }
+    @objc private func menuAddPlaylist() { if let u = menuPlaylist { enqueue(tracks: savedTracks(u)) } }
+    @objc private func menuLoadPlaylist() { if let u = menuPlaylist { playlistPage.onLoad?(u) } }
+    @objc private func menuRenamePlaylist() { if let u = menuPlaylist { beginRename(u) } }
+    @objc private func menuRevealPlaylist() { if let u = menuPlaylist { NSWorkspace.shared.activateFileViewerSelecting([u]) } }
+    @objc private func menuTrashPlaylist() { if let u = menuPlaylist { trashPlaylist(u) } }
+    @objc private func menuMovePlaylist(_ sender: NSMenuItem) { if let u = menuPlaylist { movePlaylist(u, toGroup: sender.representedObject as? URL) } }
+    @objc private func menuNewInGroup() {
+        guard let g = menuGroup else { return }
+        setGroup(g.lastPathComponent, folded: false)
+        createAndRename([], in: g)
+    }
+    @objc private func menuRenameGroup() { if let g = menuGroup { beginRename(group: g) } }
+    @objc private func menuRevealGroup() { if let g = menuGroup { NSWorkspace.shared.activateFileViewerSelecting([g]) } }
+    @objc private func menuDeleteGroup() { if let g = menuGroup { deleteGroup(g) } }
+    @objc private func menuColorGroup(_ sender: NSMenuItem) {
+        guard let g = menuGroup else { return }
+        do { try playlists.setColor(PlaylistColor(rawValue: sender.tag), of: g) } catch { showError(error) }
+    }
+
     // MARK: Tables
 
     func numberOfRows(in tableView: NSTableView) -> Int {
         switch tableView {
-        case sidebar: Section.allCases.count
+        case sidebar: sideRows.count
         case middle: entries.count
         case albumTable: items.count
         default: tracks.count
@@ -1299,16 +1796,30 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        if tableView === sidebar {
+            if case .divider = sideRow(at: row) { return tableView.reusableRowView("dividerRow", SidebarDividerRowView.init) }
+            return tableView.reusableRowView("sideRow", SidebarRowView.init)
+        }
         if tableView === albumTable, row < items.count, case .header = items[row] { return tableView.reusableRowView("headerRow", HeaderRowView.init) }
         return tableView.reusableRowView("cardRow", CardRowView.init)
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if tableView === sidebar {
+            switch sideRow(at: row) {
+            case .divider: return 11
+            case .header: return 26
+            case .group: return 28
+            case .playlist: return 28
+            default: return tableView.rowHeight
+            }
+        }
         if tableView === albumTable, row < items.count, case .header = items[row] { return 24 }
         return tableView.rowHeight
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        if tableView === sidebar { return sideRow(at: row).map(selectable) ?? false }
         if tableView === albumTable, row < items.count, case .header = items[row] { return false }
         return true
     }
@@ -1317,8 +1828,22 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         guard let t = n.object as? NSTableView else { return }
         switch t {
         case sidebar:
-            sidebar.reloadData(forRowIndexes: IndexSet(0..<Section.allCases.count), columnIndexes: [0])   // the selected one's look
-            guard let s = Section(rawValue: sidebar.selectedRow) else { return }
+            sidebar.reloadData(forRowIndexes: IndexSet(0..<sideRows.count), columnIndexes: [0])   // the selected one's look
+            if case .playlist(let u) = sideRow(at: sidebar.selectedRow) {
+                guard !(openPlaylist.map { SavedPlaylists.same($0, u) } ?? false) || searching else { return }
+                openSaved(u)
+                return
+            }
+            guard case .section(let s) = sideRow(at: sidebar.selectedRow) else { return }
+            // From a playlist to a section (the same one it was in too).
+            if openPlaylist != nil {
+                openPlaylist = nil
+                dropPages()
+                section = s
+                loadEntries(keep: nil)
+                updateStatus()
+                return
+            }
             // Searching highlights Artists (or Albums) itself (not a choice); a click on it ends the search in sidebarClicked.
             // Artists, Albums and Tracks all show search results: going from one to another keeps the search.
             if searching, s != searchSection, s == .artists || s == .albums || s == .tracks {
@@ -1360,10 +1885,34 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         switch tableView {
         case sidebar:
-            let s = Section(rawValue: row)!
-            let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("sidebar"), owner: nil) as? SidebarCell) ?? SidebarCell()
-            cell.show(glyph: s.glyph, title: s.title, selected: sidebar.selectedRow == row)
-            return cell
+            switch sideRow(at: row) {
+            case .section(let s):
+                let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("sidebar"), owner: nil) as? SidebarCell) ?? SidebarCell()
+                cell.show(glyph: s.glyph, title: s.title, selected: sidebar.selectedRow == row)
+                return cell
+            case .playlist(let u):
+                let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("sidebar"), owner: nil) as? SidebarCell) ?? SidebarCell()
+                // nf-md-playlist_music; a group's playlists sit under its name.
+                cell.show(glyph: "\u{F0CB8}", title: SavedPlaylists.name(u), selected: sidebar.selectedRow == row, small: true,
+                          indent: playlists.group(of: u) == nil ? 10 : 26)
+                return cell
+            case .group(let g):
+                let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("sidebar"), owner: nil) as? SidebarCell) ?? SidebarCell()
+                let color = playlists.groups.first { SavedPlaylists.same($0.url, g) }?.color
+                // A dot in the group's color; a ring for a group without one.
+                cell.show(glyph: color == nil ? "\u{25CB}" : "\u{25CF}", title: g.lastPathComponent, selected: false, small: true, indent: 24,
+                          folded: collapsedGroups.contains(g.lastPathComponent), glyphColor: color?.color ?? Dash.text3)
+                return cell
+            case .header:
+                let h = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("playlistsHeader"), owner: nil) as? PlaylistsHeaderCell)
+                    ?? PlaylistsHeaderCell()
+                h.show(collapsed: playlistsCollapsed, count: playlists.urls.count)
+                h.add.target = self
+                h.add.action = #selector(showNewMenu(_:))
+                return h
+            case .divider, nil:
+                return nil
+            }
         case middle:
             let cell = (tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("bucket"), owner: nil) as? BucketCell) ?? BucketCell()
             guard row < entries.count else { return cell }
@@ -1417,9 +1966,112 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
     }
 
-    /// Dragging releases or tracks out (to the playlist, or Finder): their files.
+    /// A playlist dragged in the sidebar (its path), to move it into or out of a group.
+    private static let sidebarPlaylistType = NSPasteboard.PasteboardType("com.microbot.omniamp.savedPlaylist")
+
+    /// A folded group the drag has been resting on, and since when: after a moment it unfolds.
+    private var dragHover: (group: URL, since: Date)?
+
+    /// Over the sidebar: songs go into a playlist, or into a new one on the Playlists title (or the space under the
+    /// last playlist) or on a group's name; a playlist moves into the group it's dropped on (or out of any, on the
+    /// title). Sections don't take drops.
+    func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int,
+                   proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
+        guard tableView === sidebar, let header = sideRows.firstIndex(of: .header) else { return [] }
+        // The row under the mouse (the proposed one is between rows as often as on one).
+        let r = sidebar.row(at: sidebar.convert(info.draggingLocation, from: nil))
+        let target = sideRow(at: r)
+        if case .group(let g) = target, collapsedGroups.contains(g.lastPathComponent) {
+            if let h = dragHover, SavedPlaylists.same(h.group, g) {
+                if Date().timeIntervalSince(h.since) > 0.7 {
+                    dragHover = nil
+                    toggleGroup(g)
+                }
+            } else {
+                dragHover = (g, Date())
+            }
+        } else {
+            dragHover = nil
+        }
+        if let moving = info.draggingPasteboard.string(forType: Self.sidebarPlaylistType).map({ URL(exactPath: $0) }) {
+            // Onto a group, or a playlist in one: that group; anywhere else in the playlists: out of any group.
+            let group: URL?
+            switch target {
+            case .section: return []
+            case .group(let g): group = g
+            case .playlist(let u): group = playlists.group(of: u)?.url
+            default: group = nil
+            }
+            if let group, let gr = rowIndex(of: .group(group)) { sidebar.setDropRow(gr, dropOperation: .on) } else { sidebar.setDropRow(header, dropOperation: .on) }
+            // Already there: nothing to do.
+            let from = playlists.group(of: moving)?.url
+            let same = switch (from, group) {
+            case (nil, nil): true
+            case (let a?, let b?): SavedPlaylists.same(a, b)
+            default: false
+            }
+            return same ? [] : .move
+        }
+        switch target {
+        case .playlist(let u):
+            // A playlist's own rows dropped on it would only add them again.
+            if SavedPlaylists.isReadOnly(u) || (openPlaylist.map { SavedPlaylists.same($0, u) } ?? false && (info.draggingSource as? NSView)?.isDescendant(of: playlistPage) == true) {
+                return []
+            }
+            sidebar.setDropRow(r, dropOperation: .on)
+        case .group: sidebar.setDropRow(r, dropOperation: .on)
+        case .section: return []
+        default: sidebar.setDropRow(header, dropOperation: .on)   // the title, the line, or below the last playlist
+        }
+        return .copy
+    }
+
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint,
+                   operation: NSDragOperation) {
+        dragHover = nil
+    }
+
+    func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
+        guard tableView === sidebar else { return false }
+        dragHover = nil
+        let target = sideRow(at: row)
+        let pb = info.draggingPasteboard
+        if let moving = pb.string(forType: Self.sidebarPlaylistType).map({ URL(exactPath: $0) }) {
+            if case .group(let g) = target { movePlaylist(moving, toGroup: g) } else { movePlaylist(moving, toGroup: nil) }
+            return true
+        }
+        if case .playlist(let u) = target {
+            LibraryDrag.droppedTracks(pb) { [weak self] tracks in self?.addTracks(tracks, to: u) }
+            return true
+        }
+        let group: URL?
+        switch target {
+        case .group(let g): group = g
+        case .header: group = nil
+        default: return false
+        }
+        status.stringValue = "Reading what was dropped…"
+        LibraryDrag.droppedTracks(pb) { [weak self] tracks in
+            guard let self else { return }
+            guard !tracks.isEmpty else { self.updateStatus(); NSSound.beep(); return }
+            if let group { self.setGroup(group.lastPathComponent, folded: false) }
+            self.createAndRename(tracks, in: group)
+        }
+        return true
+    }
+
+    /// Dragging releases or tracks out (to the playlist, a saved playlist, or Finder): their files (and, inside OmniAmp,
+    /// the songs with their tags).
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-        if tableView === trackTable, row < tracks.count { return URL(exactPath: tracks[row].path) as NSURL }
+        if tableView === sidebar {
+            // A playlist: moved between groups here; its file elsewhere (Finder copies it, the player plays it).
+            guard case .playlist(let u) = sideRow(at: row) else { return nil }
+            let item = NSPasteboardItem()
+            item.setString(u.absoluteString, forType: .fileURL)
+            item.setString(u.path, forType: Self.sidebarPlaylistType)
+            return item
+        }
+        if tableView === trackTable, row < tracks.count { return tracks[row].playable ? LibraryDrag.item(for: tracks[row].track) : URL(exactPath: tracks[row].path) as NSURL }
         if tableView === albumTable, row < items.count, case .album(let a) = items[row] { return LibraryDrag.writer(for: a, db: db) }
         return nil
     }

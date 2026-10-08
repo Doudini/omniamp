@@ -791,6 +791,23 @@ final class CollectionDB {
         return sorted.filter { hits.contains($0.id) }
     }
 
+    /// The library's tracks for these keys (a path, or path#start for a CUE track), by key; keys it doesn't have are left out.
+    func tracks(keys: [String]) throws -> [String: LibraryTrack] {
+        var out: [String: LibraryTrack] = [:]
+        var start = 0
+        while start < keys.count {
+            // SQLite allows a limited number of parameters per statement: a few hundred at a time.
+            let chunk = Array(keys[start..<min(start + 500, keys.count)])
+            let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            try db.query("SELECT \(Self.trackColumns) FROM files f WHERE f.key IN (\(marks))", chunk) { s in
+                let t = Self.track(s)
+                out[t.key] = t
+            }
+            start += 500
+        }
+        return out
+    }
+
     /// Every recording of one song by one artist (versions folded by title key), oldest first.
     func versions(artist: String, titleKey: String) throws -> [SongVersion] {
         var out: [SongVersion] = []

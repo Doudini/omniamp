@@ -1,8 +1,9 @@
 import Foundation
 
 /// Episodes saved for offline listening, as "Show - Episode.mp3" in a folder the user can pick in Settings
-/// (default ~/Music/OmniAmp Podcasts). Two download at a time, the rest wait their turn. A downloaded episode
-/// plays from disk (also from the playlist) and is deleted once it has been played to the end. Main-thread only.
+/// (default ~/Music/OmniAmp Podcasts); a book's parts as "Book/01 Part.mp3". Two download at a time, the rest
+/// wait their turn. A downloaded episode plays from disk (also from the playlist) and is deleted once it has been
+/// played to the end (book parts are kept). Main-thread only.
 @MainActor
 final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     static let shared = PodcastDownloads()
@@ -73,8 +74,9 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
             // must not wipe the list (localFile checks each file when it's played anyway).
             if FileManager.default.fileExists(atPath: dir.path) {
                 entries = e.filter { entry in
-                    let p = path(of: entry.value)
-                    return FileManager.default.fileExists(atPath: p.path) || !FileManager.default.fileExists(atPath: p.deletingLastPathComponent().path)
+                    // The downloads folder it's in (a book's part sits one folder deeper).
+                    let root = entry.value.folder ?? dir.path
+                    return FileManager.default.fileExists(atPath: path(of: entry.value).path) || !FileManager.default.fileExists(atPath: root)
                 }
             }
         }
@@ -145,7 +147,9 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
                     name = "\((file as NSString).deletingPathExtension) (\(n)).\((file as NSString).pathExtension)"
                     n += 1
                 }
-                if (try? fm.moveItem(at: src, to: new.appendingPathComponent(name))) != nil { moved[url] = name } else { failed.append(url) }
+                let to = new.appendingPathComponent(name)
+                try? fm.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)   // a book's folder
+                if (try? fm.moveItem(at: src, to: to)) != nil { moved[url] = name } else { failed.append(url) }
             }
             let result = (moved: moved, failed: failed)
             DispatchQueue.main.async {
@@ -227,7 +231,13 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     func remove(_ url: String) {
         cancel(url)
         guard let e = entries.removeValue(forKey: url) else { return }
-        try? FileManager.default.removeItem(at: path(of: e))
+        let file = path(of: e)
+        try? FileManager.default.removeItem(at: file)
+        // A book's folder goes with its last part.
+        let folder = file.deletingLastPathComponent()
+        if e.file.contains("/"), (try? FileManager.default.contentsOfDirectory(atPath: folder.path))?.allSatisfy({ $0 == ".DS_Store" }) == true {
+            try? FileManager.default.removeItem(at: folder)
+        }
         save()
         changed(url)
     }
@@ -250,7 +260,7 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
                     totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         MainActor.assumeIsolated {
-            guard let url = downloadTask.taskDescription, var a = active[url], totalBytesExpectedToWrite > 0 else { return }
+            guard let url = downloadTask.taskDescription, var a = active[url], a.task === downloadTask, totalBytesExpectedToWrite > 0 else { return }
             let p = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
             guard p - a.progress >= 0.01 || p >= 1 else { return }   // redraw every percent, not every packet
             a.progress = p
@@ -262,7 +272,7 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         MainActor.assumeIsolated {
             // The temporary file is gone after this returns: move it now.
-            guard let url = downloadTask.taskDescription, let a = active[url] else { return }
+            guard let url = downloadTask.taskDescription, let a = active[url], a.task === downloadTask else { return }
             if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 failures[url] = "the server answered \(http.statusCode)"
                 return
@@ -276,6 +286,7 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
             let name = uniqueName(Self.fileName(for: a.episode, show: a.show, ext: Self.fileExtension(for: url, response: downloadTask.response)))
             let dest = dir.appendingPathComponent(name)
             do {
+                try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)   // a book's folder
                 try FileManager.default.moveItem(at: location, to: dest)
             } catch {
                 failures[url] = error.localizedDescription
@@ -289,7 +300,10 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
 
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         MainActor.assumeIsolated {
-            guard let url = task.taskDescription, active.removeValue(forKey: url) != nil else { return }
+            // By task, not just address: a cancelled download reports in after a new one for the same episode
+            // has started, and must not take the new one's place (whose file would then be dropped).
+            guard let url = task.taskDescription, active[url]?.task === task else { return }
+            active.removeValue(forKey: url)
             activeOrder.removeAll { $0 == url }
             if let error, (error as? URLError)?.code != .cancelled {
                 failures[url] = AudioPlayer.friendly(error)
@@ -300,13 +314,22 @@ final class PodcastDownloads: NSObject, URLSessionDownloadDelegate {
         }
     }
 
-    /// "Show - Episode.ext", safe for any file system and not too long.
+    /// "Show - Episode.ext", safe for any file system and not too long. A book's parts go in a folder of their
+    /// own, numbered so Finder lists them in order: "Book/01 Part.ext".
     static func fileName(for e: PodcastEpisode, show: PodcastShow, ext: String) -> String {
-        var base = "\(show.title) - \(e.title)"
+        if show.isBook {
+            let part = e.number.map { String(format: "%02d ", $0) + e.title } ?? e.title
+            return safe(show.title, fallback: "Book") + "/" + safe(part, fallback: "Part") + "." + ext
+        }
+        return safe("\(show.title) - \(e.title)", fallback: "Episode") + "." + ext
+    }
+
+    private static func safe(_ name: String, fallback: String) -> String {
+        var base = name
             .replacingOccurrences(of: "[/:\\\\?%*|\"<>\\n\\r\\t]", with: "-", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".")))
         if base.count > 120 { base = String(base.prefix(120)).trimmingCharacters(in: .whitespaces) }
-        return (base.isEmpty ? "Episode" : base) + "." + ext
+        return base.isEmpty ? fallback : base
     }
 
     /// A name not taken in the folder yet: "Name (2).mp3" and so on.
