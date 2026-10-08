@@ -58,6 +58,13 @@ final class LogoStore {
 
     func cached(_ url: String?, size: Size = .regular) -> CGImage? { url.flatMap { memory[Self.key($0, size)] } }
 
+    /// Radio or Podcasts closed: the decoded logos go (they're on disk, read back when a list shows them again).
+    func releaseMemory() {
+        memory.removeAll()
+        order.removeAll()
+        memoryBytes = 0
+    }
+
     /// Calls back on the main queue with the logo (nil if there is none or it can't be loaded).
     func load(_ url: String?, size: Size = .regular, completion: @escaping @MainActor (CGImage?) -> Void) {
         guard let url, !url.isEmpty, let remote = URL(string: url), ["http", "https"].contains(remote.scheme?.lowercased() ?? ""),

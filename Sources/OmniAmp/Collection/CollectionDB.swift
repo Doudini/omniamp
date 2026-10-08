@@ -279,7 +279,14 @@ final class CollectionDB {
     /// Files OmniAmp rewrote without changing their size or date (tags written, the date kept): read again on the
     /// next scan of their folder.
     func markChanged(paths: [String]) throws {
-        try db.transaction { for p in paths { try db.run("UPDATE files SET mtime = -1 WHERE path = ?", [p]) } }
+        // One statement per few hundred files: `path` has no index (it would slow every insert of a big scan),
+        // so each statement is a pass over the table, not one per file.
+        try db.transaction {
+            for chunk in stride(from: 0, to: paths.count, by: 500).map({ Array(paths[$0..<min($0 + 500, paths.count)]) }) {
+                let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                try db.run("UPDATE files SET mtime = -1 WHERE path IN (\(marks))", chunk)
+            }
+        }
     }
 
     func known(under scope: String) throws -> [String: (size: Int64, mtime: Double)] {

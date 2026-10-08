@@ -281,7 +281,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             podcasts = PodcastWindowController(controller: controller)
             // Closing frees the window and its lists: they're rebuilt (from caches) when it opens again.
             podcasts?.onClose = { [weak self] in
-                DispatchQueue.main.async { self?.podcasts = nil; MemoryTrim.soon() }
+                DispatchQueue.main.async {
+                    self?.podcasts = nil
+                    LogoStore.shared.releaseMemory()
+                    PodcastLibrary.shared.releaseMemory()
+                    MemoryTrim.soon()
+                }
             }
         }
         podcasts?.showWindow(nil)
@@ -329,7 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if radio == nil {
             radio = RadioWindowController(controller: controller)
             radio?.onClose = { [weak self] in
-                DispatchQueue.main.async { self?.radio = nil; MemoryTrim.soon() }
+                DispatchQueue.main.async { self?.radio = nil; LogoStore.shared.releaseMemory(); MemoryTrim.soon() }
             }
         }
         radio?.showWindow(nil)

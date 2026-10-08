@@ -157,9 +157,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         observers.add(nc.addObserver(forName: LiveArchiveDownloads.changed, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }
         })
-        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification] {
+        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didDeminiaturizeNotification, NSWindow.didMiniaturizeNotification] {
             observers.add(nc.addObserver(forName: name, object: w, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.becameVisible() }
+                MainActor.assumeIsolated { self?.visibilityChanged() }
             })
         }
         library.start()
@@ -939,6 +939,29 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     /// Library changes while the window couldn't be seen: one refresh when it's seen again.
     private var refreshWhenSeen = false
+
+    /// Unseen for this long (in the Dock, behind other windows), the covers and tickets in memory are let go.
+    private static let releaseAfter: TimeInterval = 5 * 60
+    private var releaseWork: DispatchWorkItem?
+
+    private func visibilityChanged() {
+        releaseWork?.cancel()
+        releaseWork = nil
+        guard onScreen else {
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, !self.onScreen else { return }
+                    LibraryArt.shared.releaseMemory()
+                    Tickets.shared.releaseMemory()
+                    MemoryTrim.soon()
+                }
+            }
+            releaseWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.releaseAfter, execute: work)
+            return
+        }
+        becameVisible()
+    }
 
     /// Seen again (uncovered, back from the Dock): what changed meanwhile, now.
     private func becameVisible() {

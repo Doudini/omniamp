@@ -144,6 +144,8 @@ final class PlaylistPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         self.url = url
         titleLabel.stringValue = SavedPlaylists.name(url)
         titleLabel.toolTip = url.path
+        // Another playlist: the last one's undo steps (whole copies of it) go; they couldn't be applied from here.
+        if !same { window?.undoManager?.removeAllActions(withTarget: self) }
         let selected = same ? table.selectedRowIndexes : []
         let topRow = same ? table.rows(in: table.visibleRect).location : 0
         apply(SavedPlaylists.shared.document(url), resolve: true)
@@ -246,6 +248,8 @@ final class PlaylistPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
             return
         }
         guard let undo = window?.undoManager else { return }
+        // Each step holds a whole copy of the playlist: a few dozen are plenty.
+        if undo.levelsOfUndo == 0 { undo.levelsOfUndo = 50 }
         let written = newDoc.text()
         undo.registerUndo(withTarget: self) { page in
             MainActor.assumeIsolated {

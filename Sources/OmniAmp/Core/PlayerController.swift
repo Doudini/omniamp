@@ -957,16 +957,27 @@ final class PlayerController {
         return linear
     }
 
+    private var replayGainRead = 0
+
     private func applyReplayGain() {
-        guard var t = currentTrack else { player.replayGain = 1; return }
-        if replayGainMode != .off, !t.tagsLoaded {
-            // Tags not read yet (e.g. autoplay right after adding a folder): read this one file now (~ms),
-            // so the first second isn't played at the wrong level.
-            let i = TagReader.read(path: t.path, fileSize: t.size)
-            t.rgTrackGain = i.rgTrackGain; t.rgAlbumGain = i.rgAlbumGain
-            t.rgTrackPeak = i.rgTrackPeak; t.rgAlbumPeak = i.rgAlbumPeak
+        replayGainRead += 1
+        guard let t = currentTrack else { player.replayGain = 1; return }
+        guard replayGainMode != .off, !t.tagsLoaded else { player.replayGain = replayGainFactor(for: t); return }
+        // Tags not read yet (e.g. autoplay right after adding a folder): read this one file now, off the main
+        // thread (a slow share would freeze the window), and set the level when it's back, usually before the
+        // first audio is out. Meanwhile the previous track's level stays, likely the same album's.
+        let read = replayGainRead, path = t.path, size = t.size
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let i = TagReader.read(path: path, fileSize: size)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, read == self.replayGainRead, var t = self.currentTrack, t.path == path else { return }
+                    t.rgTrackGain = i.rgTrackGain; t.rgAlbumGain = i.rgAlbumGain
+                    t.rgTrackPeak = i.rgTrackPeak; t.rgAlbumPeak = i.rgAlbumPeak
+                    self.player.replayGain = self.replayGainFactor(for: t)
+                }
+            }
         }
-        player.replayGain = replayGainFactor(for: t)
     }
 
     // MARK: Duplicates

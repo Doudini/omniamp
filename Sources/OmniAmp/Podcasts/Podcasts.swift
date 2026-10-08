@@ -565,8 +565,10 @@ final class PodcastLibrary {
             }
         }
         guard disk else { return nil }
+        // Read one saved feed at a time and let it go: keeping them would hold every subscription's episodes for
+        // the rest of the session (the caller notes what it found in `started`).
         for s in subscriptions where feeds[s.feedURL] == nil {
-            if let e = cachedEpisodes(s).first(where: { $0.url == url }) { return (e, s) }
+            if let e = readFeed(s.feedURL)?.episodes.first(where: { $0.url == url }) { return (e, s) }
         }
         return nil
     }
@@ -635,9 +637,22 @@ final class PodcastLibrary {
     /// Episodes from the last download (newest first; a book's parts in order), without touching the network.
     func cachedEpisodes(_ show: PodcastShow) -> [PodcastEpisode] {
         if let c = feeds[show.feedURL] { return c.episodes }
-        guard let data = try? Data(contentsOf: feedFile(show.feedURL)), let c = try? JSONDecoder().decode(FeedCache.self, from: data) else { return [] }
+        guard let c = readFeed(show.feedURL) else { return [] }
         feeds[show.feedURL] = c
+        keepInMemory(show.feedURL)   // a show only browsed (or a book whose copy is fresh) doesn't stay forever
         return c.episodes
+    }
+
+    private func readFeed(_ feed: String) -> FeedCache? {
+        guard let data = try? Data(contentsOf: feedFile(feed)) else { return nil }
+        return try? JSONDecoder().decode(FeedCache.self, from: data)
+    }
+
+    /// The Podcasts window closed: the feeds read for it go (they're on disk; a feed being downloaded stays, its
+    /// refresh compares against it).
+    func releaseMemory() {
+        feeds = feeds.filter { fetching[$0.key] != nil }
+        recentFeeds.removeAll { feeds[$0] == nil }
     }
 
     /// Downloads the feed (unless it was fetched in the last `maxAge` seconds) and returns its episodes, newest first.

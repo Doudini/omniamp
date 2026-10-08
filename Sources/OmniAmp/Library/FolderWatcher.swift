@@ -46,6 +46,41 @@ final class FolderWatcher {
     deinit { stop() }
 }
 
+/// The file-system questions about watched folders that go to the disk or share: asked off the main thread, so a
+/// slow or unreachable NAS doesn't freeze the windows (each one can wait for the network timeout).
+enum WatchedRoots {
+    /// Event batches are worked out here one after the other, so they reach the main thread in order.
+    static let queue = DispatchQueue(label: "omniamp.watched-roots", qos: .utility)
+
+    /// What to read again for a batch of changed paths: under the roots, in their spelling, a file as its folder
+    /// (a .cue next to it may split it into tracks); everything when FSEvents asked for a full rescan.
+    static func scopes(for paths: [String], rescan: Bool, roots: [String]) -> [String] {
+        if rescan { return roots }
+        let canonical = FolderSync.canonicalizer(roots: roots)
+        var out: [String] = []
+        for p in paths.map(canonical) where roots.contains(where: { p == $0 || p.hasPrefix($0 + "/") }) {
+            guard !(p as NSString).lastPathComponent.hasPrefix(".") else { continue }   // .DS_Store, temp files
+            out.append(ExactPath.kind(p) == false ? (p as NSString).deletingLastPathComponent : p)
+        }
+        return out
+    }
+
+    /// Folders whose changes FSEvents keeps a history of: local internal disks. Network shares report no
+    /// events from other computers and external drives may keep no history: those are listed again.
+    static func historyKept(_ root: String) -> Bool {
+        let v = try? URL(exactPath: root, isDirectory: true).resourceValues(forKeys: [.volumeIsLocalKey, .volumeIsInternalKey])
+        return v?.volumeIsLocal == true && v?.volumeIsInternal == true
+    }
+
+    /// The roots without a history, handed to `then` on the main thread.
+    static func withoutHistory(_ roots: [String], then: @escaping @MainActor @Sendable ([String]) -> Void) {
+        queue.async {
+            let others = roots.filter { !historyKept($0) }
+            DispatchQueue.main.async { MainActor.assumeIsolated { then(others) } }
+        }
+    }
+}
+
 /// Keeps the playlist in sync with the user's watched folders.
 ///
 /// Playlist-based: watched folders feed the playlist but never own it. New files are added next to their
@@ -94,18 +129,12 @@ final class FolderSync {
         return id.uint64Value
     }
 
-    /// Folders whose changes FSEvents keeps a history of: local internal disks. Network shares report no
-    /// events from other computers and external drives may keep no history: those are read again.
-    private static func historyKept(_ root: String) -> Bool {
-        let v = try? URL(exactPath: root, isDirectory: true).resourceValues(forKeys: [.volumeIsLocalKey, .volumeIsInternalKey])
-        return v?.volumeIsLocal == true && v?.volumeIsInternal == true
-    }
-
     /// At launch: replay events where there's a history (started in init), read the rest again.
     func catchUp() {
         if Self.resumePoint(for: roots) == nil { rescanAll(); return }
-        let others = roots.filter { !Self.historyKept($0) }
-        if !others.isEmpty { rescan(others) }
+        WatchedRoots.withoutHistory(roots) { [weak self] others in
+            if !others.isEmpty { self?.rescan(others) }
+        }
     }
 
     /// Everything up to here is applied to the playlist (only moves forward).
@@ -205,18 +234,19 @@ final class FolderSync {
     private var receivedThrough: FSEventStreamEventId = 0
 
     private func received(_ paths: [String], rescan: Bool, through newest: FSEventStreamEventId) {
-        receivedThrough = max(receivedThrough, newest)
-        if rescan {
-            pending.formUnion(roots)
-        } else {
-            let canonical = Self.canonicalizer(roots: roots)
-            for p in paths.map(canonical) where root(of: p) != nil {
-                let name = (p as NSString).lastPathComponent
-                guard !name.hasPrefix(".") else { continue }  // .DS_Store, temp files
-                // A changed file is rescanned with its folder: a .cue there may split it into tracks.
-                pending.insert(ExactPath.kind(p) == false ? (p as NSString).deletingLastPathComponent : p)
+        let roots = self.roots
+        WatchedRoots.queue.async { [weak self] in
+            let scopes = WatchedRoots.scopes(for: paths, rescan: rescan, roots: roots)
+            DispatchQueue.main.async {
+                // The event ID moves on only with its paths: a resume point saved meanwhile mustn't skip them.
+                MainActor.assumeIsolated { self?.queue(scopes, through: newest) }
             }
         }
+    }
+
+    private func queue(_ scopes: [String], through newest: FSEventStreamEventId) {
+        receivedThrough = max(receivedThrough, newest)
+        pending.formUnion(scopes)
         // Coalesce bursts (copying an album fires one event per file).
         flushWork?.cancel()
         let w = DispatchWorkItem { [weak self] in

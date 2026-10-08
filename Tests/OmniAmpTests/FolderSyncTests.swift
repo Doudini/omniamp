@@ -27,6 +27,17 @@ final class FolderSyncTests: XCTestCase {
         XCTAssertEqual(FolderSync.canonical("/Volumes/Ext/x.mp3", roots: roots), "/Volumes/Ext/x.mp3")
     }
 
+    func testChangedPathsBecomeWhatToReadAgain() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-scopes-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: root + "/Album", withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        FileManager.default.createFile(atPath: root + "/Album/01.flac", contents: Data())
+        let scopes = WatchedRoots.scopes(for: [root + "/Album/01.flac", root + "/Album", root + "/Album/.DS_Store", "/elsewhere/x.mp3"],
+                                         rescan: false, roots: [root])
+        XCTAssertEqual(scopes, [root + "/Album", root + "/Album"], "a file as its folder (a .cue may split it); hidden files and other places left out")
+        XCTAssertEqual(WatchedRoots.scopes(for: [], rescan: true, roots: [root, "/other"]), [root, "/other"], "a full rescan: every root")
+    }
+
     func testMissingRootIsNotADeletion() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-sync-\(UUID().uuidString)").path
         try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)

@@ -27,7 +27,8 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
     private var coverData: Data?
     private var coverTask: Task<Void, Never>?
     /// The folder's own cover file, if it has one.
-    private let existingCover: String?
+    /// The cover file already in the folder, once its listing is back (nil until then, or none).
+    private var existingCover: String?
     /// No artist in the tags: guesses from the names, and the track titles to search for.
     private let unknownArtist: Bool
     private let guesses: [ReleaseGuess.Guess]
@@ -39,7 +40,6 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         self.album = album
         self.tracks = tracks
         self.currentGenre = genre
-        existingCover = DetailsReader.folderArtName(in: album.folder)
         unknownArtist = ["unknown artist", ""].contains(album.artistKey)
         guesses = unknownArtist ? ReleaseGuess.guesses(folder: album.folder, albumTitle: album.title,
                                                        fileNames: tracks.map { ($0.path as NSString).lastPathComponent },
@@ -49,8 +49,31 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         super.init(window: w)
         build()
         search()
+        // The folder is listed off the main thread (a slow share would hold up the sheet).
+        let folder = album.folder
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let name = DetailsReader.folderArtName(in: folder)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, let name else { return }
+                    self.existingCover = name
+                    self.updateSaveCover()
+                }
+            }
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    private func updateSaveCover() {
+        if album.sharedFolder {
+            // A cover.jpg would be every release's in that folder: this one's is kept in OmniAmp instead.
+            saveCover.title = "Use this cover for this release (its folder holds others, so no cover.jpg)"
+            saveCover.state = .on
+        } else {
+            saveCover.title = existingCover.map { "Replace \($0) with this cover" } ?? "Save the cover as cover.jpg in the folder"
+            saveCover.state = existingCover == nil ? .on : .off
+        }
+    }
 
     // MARK: Layout
 
@@ -116,14 +139,7 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         writeTags.title = files == 0 ? "No MP3 or FLAC files to write tags into" : "Write into the \(files) MP3/FLAC file\(files == 1 ? "" : "s")"
         writeTags.state = files > 0 ? .on : .off
         writeTags.isEnabled = files > 0
-        if album.sharedFolder {
-            // A cover.jpg would be every release's in that folder: this one's is kept in OmniAmp instead.
-            saveCover.title = "Use this cover for this release (its folder holds others, so no cover.jpg)"
-            saveCover.state = .on
-        } else {
-            saveCover.title = existingCover.map { "Replace \($0) with this cover" } ?? "Save the cover as cover.jpg in the folder"
-            saveCover.state = existingCover == nil ? .on : .off
-        }
+        updateSaveCover()
         for b in [writeTags, saveCover] {
             b.font = Dash.font(12)
         }

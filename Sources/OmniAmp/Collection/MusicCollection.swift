@@ -63,8 +63,9 @@ final class MusicCollection {
         processedThrough = resume ?? 0
         watcher.watch(roots, since: resume)
         if resume == nil || needsFullScan { rescan(roots) } else {
-            let others = roots.filter { !Self.historyKept($0) }
-            if !others.isEmpty { rescan(others) }
+            WatchedRoots.withoutHistory(roots) { [weak self] others in
+                if !others.isEmpty { self?.rescan(others) }
+            }
         }
         scheduleNetworkRecheck()
     }
@@ -107,16 +108,24 @@ final class MusicCollection {
 
     private func scheduleNetworkRecheck() {
         networkTimer?.invalidate()
-        guard roots.contains(where: { !Self.historyKept($0) }) else { networkTimer = nil; return }
-        let t = Timer(timeInterval: Self.networkRecheck, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, !self.progress.running else { return }
-                self.rescan(self.roots.filter { !Self.historyKept($0) })
+        networkTimer = nil
+        WatchedRoots.withoutHistory(roots) { [weak self] others in
+            guard let self else { return }
+            self.networkTimer?.invalidate()   // a second call's answer replaces the first's
+            self.networkTimer = nil
+            guard !others.isEmpty else { return }
+            let t = Timer(timeInterval: Self.networkRecheck, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, !self.progress.running else { return }
+                    WatchedRoots.withoutHistory(self.roots) { [weak self] others in
+                        if !others.isEmpty { self?.rescan(others) }
+                    }
+                }
             }
+            t.tolerance = 300
+            RunLoop.main.add(t, forMode: .common)
+            self.networkTimer = t
         }
-        t.tolerance = 300
-        RunLoop.main.add(t, forMode: .common)
-        networkTimer = t
     }
 
     // MARK: Scanning
@@ -128,12 +137,20 @@ final class MusicCollection {
         guard let scanner, !scopes.isEmpty else { return }
         scansRunning += 1
         let rootsNow = roots
-        scanner.scan(scopes.map(FolderSync.canonicalizer(roots: rootsNow)), roots: rootsNow) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.scansRunning -= 1
-                self.processedThrough = max(self.processedThrough, through)
-                self.saveResumePoint()
+        // Each root's spellings are resolved on the share: off the main thread.
+        WatchedRoots.queue.async { [weak self] in
+            let canonical = scopes.map(FolderSync.canonicalizer(roots: rootsNow))
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    scanner.scan(canonical, roots: rootsNow) {
+                        MainActor.assumeIsolated {
+                            self.scansRunning -= 1
+                            self.processedThrough = max(self.processedThrough, through)
+                            self.saveResumePoint()
+                        }
+                    }
+                }
             }
         }
     }
@@ -143,17 +160,19 @@ final class MusicCollection {
     private var receivedThrough: FSEventStreamEventId = 0
 
     private func received(_ paths: [String], rescan: Bool, through newest: FSEventStreamEventId) {
-        receivedThrough = max(receivedThrough, newest)
-        if rescan {
-            pending.formUnion(roots)
-        } else {
-            for p in paths.map(FolderSync.canonicalizer(roots: roots)) {
-                guard roots.contains(where: { p == $0 || p.hasPrefix($0 + "/") }) else { continue }
-                guard !(p as NSString).lastPathComponent.hasPrefix(".") else { continue }
-                // A file is rescanned with its folder (a .cue next to it may split it into tracks).
-                pending.insert(ExactPath.kind(p) == false ? (p as NSString).deletingLastPathComponent : p)
+        let roots = self.roots
+        WatchedRoots.queue.async { [weak self] in
+            let scopes = WatchedRoots.scopes(for: paths, rescan: rescan, roots: roots)
+            DispatchQueue.main.async {
+                // The event ID moves on only with its paths: a resume point saved meanwhile mustn't skip them.
+                MainActor.assumeIsolated { self?.queue(scopes, through: newest) }
             }
         }
+    }
+
+    private func queue(_ scopes: [String], through newest: FSEventStreamEventId) {
+        receivedThrough = max(receivedThrough, newest)
+        pending.formUnion(scopes)
         // Copying an album fires an event per file: wait until it settles.
         flushWork?.cancel()
         let w = DispatchWorkItem { [weak self] in
@@ -184,9 +203,4 @@ final class MusicCollection {
                                   forKey: Self.resumeKey)
     }
 
-    /// Local internal disks keep an FSEvents history; network shares and external drives are listed again.
-    static func historyKept(_ root: String) -> Bool {
-        let v = try? URL(exactPath: root, isDirectory: true).resourceValues(forKeys: [.volumeIsLocalKey, .volumeIsInternalKey])
-        return v?.volumeIsLocal == true && v?.volumeIsInternal == true
-    }
 }

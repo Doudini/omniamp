@@ -36,8 +36,11 @@ final class LibraryArt {
     }
 
     private init() {
+        // By size: a large cover is ~775 KB decoded, so a count alone let the grid's keep ~190 MB. 64 MB still
+        // holds a few screens of the largest tiles; the rest come back from the disk cache in a moment.
         memory.countLimit = 600
-        largeMemory.countLimit = 240   // ~190 MB at most, a few screens of the largest tiles
+        memory.totalCostLimit = 24 << 20
+        largeMemory.totalCostLimit = 64 << 20
         DispatchQueue.global(qos: .background).async { Self.prune() }
     }
 
@@ -73,11 +76,12 @@ final class LibraryArt {
     private static func key(_ a: LibraryAlbum, large: Bool) -> String { key(a) + (large ? "\u{2}L" : "") }
     private func memory(_ key: String) -> NSCache<NSString, Box> { key.hasSuffix("\u{2}L") ? largeMemory : memory }
 
-    /// The library window closed: the covers in memory go (they're kept on disk, read back in a moment when it opens
-    /// again), instead of a few hundred decoded images staying around while only the player is open.
+    /// The library window closed, or sat unseen for a while: the covers in memory go (they're kept on disk, read
+    /// back in a moment when it's seen again), instead of a few hundred decoded images staying around overnight.
     func releaseMemory() {
         memory.removeAllObjects()
         largeMemory.removeAllObjects()
+        keysByFolder.removeAll()
     }
 
     func cached(_ album: LibraryAlbum, large: Bool = false) -> CGImage?? {
@@ -153,7 +157,7 @@ final class LibraryArt {
 
     private func finish(_ key: String, _ img: CGImage?, stale: Bool = false) {
         // Read before a new cover was saved: not kept (whoever shows it asks again after the change).
-        if !stale { memory(key).setObject(Box(img), forKey: key as NSString) }
+        if !stale { memory(key).setObject(Box(img), forKey: key as NSString, cost: img.map { $0.bytesPerRow * $0.height } ?? 0) }
         operations[key] = nil
         let cbs = waiting.removeValue(forKey: key) ?? [:]
         cbs.values.forEach { $0(img) }

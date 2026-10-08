@@ -66,4 +66,15 @@ final class LibraryDragTests: XCTestCase {
         XCTAssertEqual(known["/m/Bleach/01 Blew.flac"]?.mtime, -1, "looks changed to the scanner")
         XCTAssertEqual(known["/m/Bleach/02 Floyd.flac"]?.mtime, 1)
     }
+
+    func testManyRewrittenFilesAreMarkedTogether() throws {
+        // Over one statement's worth of paths (500 at a time): every one is marked, the others aren't.
+        let d = try CollectionDB(url: tmp.appendingPathComponent("lib.sqlite"))
+        let paths = (0..<1_200).map { String(format: "/m/Big/%04d.flac", $0) }
+        try d.upsert(paths.map { file($0, artist: "A", album: "Big", title: $0, folder: "/m/Big") })
+        try d.markChanged(paths: Array(paths.prefix(1_100)) + ["/m/Elsewhere/none.flac"])
+        let known = try d.known(under: "/m/Big")
+        XCTAssertEqual(known.values.filter { $0.mtime == -1 }.count, 1_100)
+        XCTAssertEqual(known[paths[1_150]]?.mtime, 1)
+    }
 }
