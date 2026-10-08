@@ -408,6 +408,9 @@ final class AudioPlayer {
 
     private func isCurrentStream(_ connection: Int) -> Bool { stream != nil && streamConnection == connection }
 
+    /// Seconds of a radio stream that may be queued on the player ahead of what's playing.
+    static let streamQueueLimit: Double = 60
+
     private func openStream(_ url: URL) {
         stream?.stop()   // never two connections: an old one would keep downloading and decoding unseen
         let src = StreamSource(url: url)
@@ -450,7 +453,16 @@ final class AudioPlayer {
                 guard let self, self.isCurrentStream(connection), let f = self.streamFormat,
                       f.channelCount == buf.format.channelCount, f.sampleRate == buf.format.sampleRate else { return }
                 let frames = AVAudioFramePosition(buf.frameLength)
-                let total = bufferedFrames.withLock { $0 += frames; return $0 }
+                // At most a minute queued ahead (~21 MB at 44.1 kHz stereo). Normally it's the few seconds the
+                // station sends on connecting; it only fills up when nothing plays it while the download goes on
+                // (the output device unplugged, the engine restarting), and then grew by ~1.3 GB an hour. Past the
+                // limit new audio is dropped: a live broadcast just skips ahead.
+                let limit = AVAudioFramePosition(f.sampleRate * Self.streamQueueLimit)
+                guard let total = bufferedFrames.withLock({ queued -> AVAudioFramePosition? in
+                    guard queued < limit else { return nil }
+                    queued += frames
+                    return queued
+                }) else { return }
                 // Called on the render thread once the buffer has been played.
                 self.node.scheduleBuffer(buf) { @Sendable [weak self] in
                     let left = bufferedFrames.withLock { $0 -= frames; return $0 }
