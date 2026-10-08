@@ -135,6 +135,7 @@ Press **BOOKS** in the Podcasts window (or ⌥⌘3) for audiobooks and radio pla
 - **Live playlist folders:** the playlist follows your music folders live. New files appear next to their folder-mates, deleted files disappear and edited files are re-tagged. Your folder structure is never touched.
 - **ADD menu:** Add Files…, Add Folder… and Add URL…, in both looks.
 - **Playlist files:** open and save `.m3u`/`.m3u8`/`.pls` files, plus a list of saved playlists, which the Music Library's sidebar shows and edits.
+- **Drag to scroll:** hold the middle mouse button and drag any list, like on a touchscreen; flick to let it glide. Handy with a drawing tablet's pen too (set one of its buttons to middle click).
 - **Jump to file (J):** type to search. Enter plays the result and clears the search; ⇧Enter keeps the results.
 - **Display options:** choose the playlist font (Hack, Hack Compact or the classic font) and toggle track numbers.
 

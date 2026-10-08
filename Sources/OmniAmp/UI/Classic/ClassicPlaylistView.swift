@@ -1,7 +1,7 @@
 import AppKit
 
 /// Skinned playlist window (PLEDIT.BMP frame, PLEDIT.TXT colors). Sizes snap to 25×29 steps.
-final class ClassicPlaylistView: SkinCanvasView {
+final class ClassicPlaylistView: SkinCanvasView, DragScrollable {
     weak var controller: PlayerController?
     var onClose: (() -> Void)?
     var onResize: ((CGSize) -> Void)?
@@ -192,6 +192,19 @@ final class ClassicPlaylistView: SkinCanvasView {
         needsDisplay = true
     }
     private var accumulatedScroll: CGFloat = 0
+
+    /// Middle-button drag (DragScroll): whole rows, the rest carried over like the wheel's.
+    func dragScroll(by dy: CGFloat) -> Bool {
+        accumulatedScroll += dy / (rowHeight * scale)
+        let whole = Int(accumulatedScroll)
+        guard whole != 0 else { return true }
+        accumulatedScroll -= CGFloat(whole)
+        let before = scrollRow
+        scrollRow += whole
+        clampScroll()
+        needsDisplay = true
+        return scrollRow != before
+    }
 
     // MARK: Mouse
 

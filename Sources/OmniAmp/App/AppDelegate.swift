@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var controller: PlayerController!
     private var look: LookController?
     private var winampKeys: WinampKeys?
+    private var dragScroll: DragScroll?
     private var signalSources: [DispatchSourceSignal] = []
     private var viewMenu: NSMenu!
 
@@ -79,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         winampKeys = WinampKeys(controller: controller, look: { [weak self] in self?.look },
                                 queueSelected: { [weak self] in self?.queueSelected(nil) })
+        dragScroll = DragScroll()
         // Quit cleanly on SIGTERM/SIGINT too, so the audio device gets its sample rate and access back.
         for sig in [SIGTERM, SIGINT] {
             signal(sig, SIG_IGN)
