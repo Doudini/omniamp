@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Rebuilds the fallback Resources/AppIcon.icns from Resources/AppIcon.icon (edit icon.json / omniamp.svg, then run this).
+# Rebuilds the fallback Resources/AppIcon.icns from Resources/AppIcon.icon (edit icon.json / Assets/bolt.svg, then run this).
 # make-app.sh compiles the .icon itself when Xcode is installed; the .icns is for builds without Xcode.
 set -euo pipefail
 cd "$(dirname "$0")/.."
