@@ -146,6 +146,35 @@ final class TagWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: broken), before)
     }
 
+    /// An extended header whose size points past the tag: left alone, not rewritten with only the new fields.
+    func testDamagedExtendedHeaderIsNotRewritten() throws {
+        let frames = frame("TIT2", "Keep Me") + frame("TPE1", "Guest")
+        for (version, size) in [(UInt8(3), [UInt8(0x7F), 0xFF, 0xFF, 0xF0]), (UInt8(4), synchsafe(100_000))] {
+            let ext: [UInt8] = size + [0, 0]
+            let body = ext + frames
+            let url = tmp.appendingPathComponent("ext\(version).mp3")
+            try Data(Array("ID3".utf8) + [version, 0, 0x40] + synchsafe(body.count + 64) + body + [UInt8](repeating: 0, count: 64) + audio).write(to: url)
+            let before = try Data(contentsOf: url)
+            XCTAssertEqual(TagWriter.write(BasicTags(genre: "Rock"), to: url.path, backupDir: nil), .unsupported("ID3 tag it can't read safely"))
+            XCTAssertEqual(try Data(contentsOf: url), before, "v2.\(version) untouched")
+        }
+    }
+
+    /// A valid extended header is skipped and every frame after it kept.
+    func testExtendedHeaderKeepsFrames() throws {
+        let frames = frame("TIT2", "Keep Me") + frame("TPE1", "Guest")
+        let ext: [UInt8] = [0, 0, 0, 6, 0, 0, 0, 0, 0, 0]   // v2.3: size 6 (without itself), flags, padding size
+        let body = ext + frames
+        let url = tmp.appendingPathComponent("ext-ok.mp3")
+        try Data(Array("ID3".utf8) + [3, 0, 0x40] + synchsafe(body.count + 256) + body + [UInt8](repeating: 0, count: 256) + audio).write(to: url)
+        XCTAssertEqual(TagWriter.write(BasicTags(genre: "Rock"), to: url.path, backupDir: nil), .written)
+        let i = read(url)
+        XCTAssertEqual(i.title, "Keep Me")
+        XCTAssertEqual(i.artist, "Guest")
+        XCTAssertEqual(i.genre, "Rock")
+        try audioIntact(url)
+    }
+
     /// ID3v2.3's year frame holds a year: a full date is cut to it (v2.4 keeps the date).
     func testYearFrameHoldsFourDigits() throws {
         let url = try mp3([], padding: 256, version: 3)

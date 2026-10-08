@@ -182,6 +182,9 @@ enum TagWriter {
     /// The frames from `start`: nil unless each has a valid ID and a size that fits, and the walk ends exactly at
     /// the tag's end or its padding.
     static func frames(_ tag: [UInt8], from start: Int, synchsafe: Bool) -> [(id: String, raw: [UInt8])]? {
+        // A damaged extended header can point past the tag: that's no frames at all, not an empty tag
+        // (which would rewrite the file with only the new fields).
+        guard start <= tag.count else { return nil }
         var out: [(id: String, raw: [UInt8])] = [], p = start
         while p + 10 <= tag.count, tag[p] != 0 {
             let idBytes = tag[p..<(p + 4)]
