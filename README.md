@@ -70,8 +70,8 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
 ## Internet radio
 
 Press **RADIO** (or ⌘2) to browse and search thousands of stations from [radio-browser.info](https://www.radio-browser.info). Filter by genre and country, star your favorites, and add stations to the playlist like any other track. Stations are saved in `.m3u`/`.pls` files along with their logos.
-- **MP3/AAC/AAC+ (Icecast and SHOUTcast):** play through OmniAmp's own engine, so the EQ and visualizer work. The INFO drawer shows the song currently on air.
-- **HLS and Ogg/Opus:** play through the macOS player.
+- **MP3/AAC/AAC+ and FLAC (Icecast and SHOUTcast):** play through OmniAmp's own engine, so the EQ and visualizer work (AAC+ in full quality). The INFO drawer shows the song currently on air.
+- **HLS and Ogg/Opus:** play through the macOS player, as does any stream OmniAmp's engine can't decode.
 - **Your own stations:** **+ URL** adds any stream or `.pls`/`.m3u` link from a station's website to Favorites.
 
 <p align="center"><img src="docs/radio.png" alt="The Internet Radio window: popular stations with logos, genres, countries and formats" width="700"></p>

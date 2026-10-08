@@ -408,6 +408,18 @@ final class AudioPlayer {
 
     private func isCurrentStream(_ connection: Int) -> Bool { stream != nil && streamConnection == connection }
 
+    /// What the display says a stream handed to the system player is (nil: unknown, it says nothing).
+    nonisolated static func systemCodecLabel(_ type: String) -> String? {
+        let t = type.lowercased()
+        if t.contains("mpegurl") { return "HLS" }
+        if t.contains("opus") { return "OPUS" }
+        if t.contains("flac") { return "FLAC" }
+        if t.contains("ogg") || t.contains("vorbis") { return "OGG" }
+        if t.contains("aac") || t.contains("mp4") { return "AAC" }
+        if t.contains("mpeg") || t.contains("mp3") { return "MP3" }
+        return nil
+    }
+
     /// Seconds of a radio stream that may be queued on the player ahead of what's playing.
     static let streamQueueLimit: Double = 60
 
@@ -480,6 +492,7 @@ final class AudioPlayer {
                 // Start (or leave the stall) once 2 s are queued.
                 guard Double(total) >= f.sampleRate * 2, self.state == .playing else { return }
                 if !self.streamStarted {
+                    dlog("stream playing in the engine: \(self.mainStreamInfo.codec ?? "?") \(Int(f.sampleRate)) Hz")
                     self.streamStarted = true
                     self.startEngineIfNeeded()
                     guard self.playNode() else { return }
@@ -497,7 +510,7 @@ final class AudioPlayer {
             DispatchQueue.main.async { [self] in
                 guard let self, self.isCurrentStream(connection), let u = self.streamURL else { return }
                 NSLog("OmniAmp: %@ stream, using the system player", type)
-                self.openSystemStream(u, codec: type.contains("mpegurl") ? "HLS" : (type.contains("opus") ? "OPUS" : "OGG"))
+                self.openSystemStream(u, codec: Self.systemCodecLabel(type))
             }
         }
         src.onEnd = { [weak self] error in

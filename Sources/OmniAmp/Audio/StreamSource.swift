@@ -23,19 +23,25 @@ final class StreamSource: NSObject, URLSessionDataDelegate, @unchecked Sendable 
     var onInfo: (@Sendable (Info) -> Void)?
     /// Connection ended (error or server closed).
     var onEnd: (@Sendable (Error?) -> Void)?
-    /// The stream is a format this decoder doesn't handle (HLS playlist, Ogg/Opus/FLAC…): content type given.
+    /// The stream is a format this decoder doesn't handle (HLS playlist, Ogg/Opus/FLAC…, or audio it couldn't
+    /// make sense of): content type given.
     var onUnsupported: (@Sendable (String) -> Void)?
 
     /// Content types that go to the system player instead.
-    static func isSystemPlayerType(_ type: String) -> Bool {
+    /// `length`: what the server says the body is (-1: open-ended, a live stream).
+    static func isSystemPlayerType(_ type: String, length: Int64 = -1) -> Bool {
         let t = type.lowercased()
-        return t.contains("mpegurl") || t.contains("ogg") || t.contains("opus") || t.contains("flac") || t.contains("vorbis")
+        if t.contains("mpegurl") || t.contains("ogg") || t.contains("opus") || t.contains("vorbis") { return true }
+        // A live FLAC stream is read here (the system player waits forever on one). A FLAC of a given length is a
+        // file (Radio Paradise's "stations" are an hour-long file each): the system player plays it once, to its
+        // end, where a stream here would reconnect and start it over.
+        return t.contains("flac") && length > 0
     }
 
     /// URLs that are clearly HLS / Ogg / Opus, before connecting.
     static func isSystemPlayerURL(_ url: URL) -> Bool {
         let p = url.path.lowercased()
-        return p.hasSuffix(".m3u8") || p.hasSuffix(".opus") || p.hasSuffix(".ogg") || p.hasSuffix(".oga") || p.hasSuffix(".flac")
+        return p.hasSuffix(".m3u8") || p.hasSuffix(".opus") || p.hasSuffix(".ogg") || p.hasSuffix(".oga")
     }
 
     let url: URL
@@ -56,6 +62,12 @@ final class StreamSource: NSObject, URLSessionDataDelegate, @unchecked Sendable 
     private var inputFormat: AVAudioFormat?
     private var outputFormat: AVAudioFormat?
     private var pendingPackets: [(Data, AudioStreamPacketDescription?)] = []
+    private var contentType = ""
+    /// Bytes read while no format was found yet, and whether this connection was given up on.
+    private var undecodedBytes = 0
+    private var gaveUp = false
+    /// No MP3 or AAC frame in this much (a few seconds even at a high bitrate): it's something else.
+    static let formatSearchLimit = 128 * 1024
     private var packetQueue: [(Data, AudioStreamPacketDescription?)] = []
 
     init(url: URL) {
@@ -97,27 +109,46 @@ final class StreamSource: NSObject, URLSessionDataDelegate, @unchecked Sendable 
         info.name = header("icy-name")
         info.bitrate = Int((header("icy-br") ?? "").split(separator: ",").first ?? "")
         let type = (header("Content-Type") ?? response.mimeType ?? "").lowercased()
-        if Self.isSystemPlayerType(type) {
+        if Self.isSystemPlayerType(type, length: response.expectedContentLength) {
             completionHandler(.cancel)
             onUnsupported?(type)
             return
         }
-        let hint: AudioFileTypeID
-        if type.contains("aac") || type.contains("mp4") { hint = kAudioFileAAC_ADTSType; info.codec = "AAC" }
-        else { hint = kAudioFileMP3Type; info.codec = "MP3" }
         if let code = http?.statusCode, !(200..<300).contains(code) {
             completionHandler(.cancel)
             onEnd?(ScrobbleError.http(code, "Station unavailable"))
             return
         }
+        openParser(type: type)
+        onInfo?(info)
+        completionHandler(.allow)
+    }
+
+    private func openParser(type: String) {
+        contentType = type
+        let hint: AudioFileTypeID
+        if type.contains("aac") || type.contains("mp4") { hint = kAudioFileAAC_ADTSType; info.codec = "AAC" }
+        else if type.contains("flac") { hint = kAudioFileFLACType; info.codec = "FLAC" }
+        else { hint = kAudioFileMP3Type; info.codec = "MP3" }
         let me = Unmanaged.passUnretained(self).toOpaque()
         AudioFileStreamOpen(me, { ctx, stream, prop, _ in
             Unmanaged<StreamSource>.fromOpaque(ctx).takeUnretainedValue().property(stream, prop)
         }, { ctx, bytes, packets, data, descs in
             Unmanaged<StreamSource>.fromOpaque(ctx).takeUnretainedValue().packets(bytes, packets, data, descs)
         }, hint, &fileStream)
-        onInfo?(info)
-        completionHandler(.allow)
+    }
+
+    /// Test hook: start decoding as if the server had answered with this content type (no network).
+    func openForTesting(type: String) { openParser(type: type) }
+
+    /// This decoder can't play it: hand it on (the system player knows more formats) instead of "buffering" forever
+    /// while the download piles up undecoded.
+    private func giveUp(_ why: String) {
+        guard !gaveUp else { return }
+        gaveUp = true
+        packetQueue.removeAll()
+        NSLog("OmniAmp: stream not decodable here (%@, %@)", why, contentType.isEmpty ? "no content type" : contentType)
+        onUnsupported?(contentType.isEmpty ? "unknown" : contentType)
     }
 
     func urlSession(_ s: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -182,9 +213,13 @@ final class StreamSource: NSObject, URLSessionDataDelegate, @unchecked Sendable 
     // MARK: Parsing (AudioFileStream) and decoding (AVAudioConverter)
 
     private func parse(_ d: Data) {
-        guard let fs = fileStream, !d.isEmpty else { return }
+        guard let fs = fileStream, !d.isEmpty, !gaveUp else { return }
         d.withUnsafeBytes { p in
             _ = AudioFileStreamParseBytes(fs, UInt32(d.count), p.baseAddress, [])
+        }
+        if converter == nil, !gaveUp {
+            undecodedBytes += d.count
+            if undecodedBytes > Self.formatSearchLimit { giveUp("no MP3 or AAC audio found") }
         }
     }
 
@@ -193,9 +228,10 @@ final class StreamSource: NSObject, URLSessionDataDelegate, @unchecked Sendable 
         var asbd = AudioStreamBasicDescription()
         var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         AudioFileStreamGetProperty(stream, kAudioFileStreamProperty_DataFormat, &size, &asbd)
+        if let best = Self.bestFormat(stream) { asbd = best }
         guard let inFmt = AVAudioFormat(streamDescription: &asbd),
               let outFmt = AVAudioFormat(standardFormatWithSampleRate: asbd.mSampleRate, channels: max(1, asbd.mChannelsPerFrame)),
-              let conv = AVAudioConverter(from: inFmt, to: outFmt) else { return }
+              let conv = AVAudioConverter(from: inFmt, to: outFmt) else { giveUp("no decoder for its format"); return }
         // Magic cookie (AAC needs it).
         var cookieSize: UInt32 = 0
         if AudioFileStreamGetPropertyInfo(stream, kAudioFileStreamProperty_MagicCookieData, &cookieSize, nil) == noErr, cookieSize > 0 {
@@ -209,6 +245,22 @@ final class StreamSource: NSObject, URLSessionDataDelegate, @unchecked Sendable 
         info.sampleRate = asbd.mSampleRate
         info.channels = Int(asbd.mChannelsPerFrame)
         onInfo?(info)
+    }
+
+    /// The richest layer of the stream the decoder can play. An AAC+ (HE-AAC) station's data format is its 22 kHz
+    /// core; the format list also names the full one (the core plus the layer that rebuilds the treble, and for v2
+    /// the stereo), best first. Decoding only the core played those stations at half bandwidth, muffled.
+    private static func bestFormat(_ stream: AudioFileStreamID) -> AudioStreamBasicDescription? {
+        var listSize: UInt32 = 0
+        guard AudioFileStreamGetPropertyInfo(stream, kAudioFileStreamProperty_FormatList, &listSize, nil) == noErr, listSize > 0 else { return nil }
+        let count = Int(listSize) / MemoryLayout<AudioFormatListItem>.size
+        var list = [AudioFormatListItem](repeating: AudioFormatListItem(), count: count)
+        guard AudioFileStreamGetProperty(stream, kAudioFileStreamProperty_FormatList, &listSize, &list) == noErr else { return nil }
+        var index: UInt32 = 0
+        var indexSize = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioFormatGetProperty(kAudioFormatProperty_FirstPlayableFormatFromList, listSize, &list, &indexSize, &index) == noErr,
+              Int(index) < count else { return nil }
+        return list[Int(index)].mASBD
     }
 
     private func packets(_ bytes: UInt32, _ count: UInt32, _ data: UnsafeRawPointer,

@@ -1,3 +1,4 @@
+import AVFoundation
 import os
 import XCTest
 @testable import OmniAmp
@@ -37,6 +38,73 @@ final class RadioTests: XCTestCase {
         }
     }
 
+    /// Twenty seconds of noisy audio as an ADTS AAC stream (what an AAC station sends).
+    private func aacStream(format: AudioFormatID = kAudioFormatMPEG4AAC, bitRate: Int = 128_000, ext: String = "aac") throws -> Data {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("omniamp-radio-\(UUID().uuidString).\(ext)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let pcm = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
+        do {
+            var settings: [String: Any] = [AVFormatIDKey: format, AVSampleRateKey: 44100, AVNumberOfChannelsKey: 2]
+            if format != kAudioFormatFLAC { settings[AVEncoderBitRateKey] = bitRate }
+            let file = try AVAudioFile(forWriting: url, settings: settings)
+            let buf = AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: 44100 * 20)!
+            buf.frameLength = buf.frameCapacity
+            var seed: UInt32 = 1   // noise, so it doesn't compress to almost nothing
+            for c in 0..<2 {
+                for i in 0..<Int(buf.frameLength) {
+                    seed = seed &* 1_664_525 &+ 1_013_904_223
+                    buf.floatChannelData![c][i] = Float(Int32(bitPattern: seed)) / Float(Int32.max) * 0.3
+                }
+            }
+            try file.write(from: buf)
+        }
+        return try Data(contentsOf: url)
+    }
+
+    private func feed(_ type: String, _ data: Data) -> (unsupported: String?, buffers: Int, rate: Double) {
+        let src = StreamSource(url: URL(string: "http://example.com")!)
+        let unsupported = OSAllocatedUnfairLock<String?>(initialState: nil), buffers = OSAllocatedUnfairLock(initialState: 0)
+        let rate = OSAllocatedUnfairLock(initialState: 0.0)
+        src.onUnsupported = { t in unsupported.withLock { $0 = t } }
+        src.onBuffer = { b in
+            let r = b.format.sampleRate
+            buffers.withLock { $0 += 1 }
+            rate.withLock { $0 = r }
+        }
+        src.openForTesting(type: type)
+        var i = 0
+        while i < data.count { src.feedForTesting(data[i..<min(i + 4096, data.count)], metaInterval: 0); i += 4096 }
+        return (unsupported.withLock { $0 }, buffers.withLock { $0 }, rate.withLock { $0 })
+    }
+
+    func testAStationItCanDecodePlaysHere() throws {
+        let aac = try aacStream()
+        XCTAssertGreaterThan(aac.count, StreamSource.formatSearchLimit, "long enough to have passed the search limit")
+        let r = feed("audio/aacp", aac)
+        XCTAssertNil(r.unsupported)
+        XCTAssertGreaterThan(r.buffers, 10, "decoded to PCM")
+        XCTAssertEqual(r.rate, 44100)
+    }
+
+    func testAnAACPlusStationPlaysInFullNotJustItsCore() throws {
+        // HE-AAC: a 22 kHz core plus the layer that rebuilds the treble. Only the core came out before (muffled).
+        let r = feed("audio/aacp", try aacStream(format: kAudioFormatMPEG4AAC_HE, bitRate: 48_000))
+        XCTAssertNil(r.unsupported)
+        XCTAssertGreaterThan(r.buffers, 10)
+        XCTAssertEqual(r.rate, 44100, "the full format, not the 22,050 Hz core")
+    }
+
+    func testAudioItCantMakeSenseOfGoesToTheSystemPlayer() {
+        // Not MP3 or AAC (an odd codec, or a page instead of audio): handed on after the search limit, not "buffering" forever.
+        var noise = Data(count: StreamSource.formatSearchLimit + 10_000)
+        for i in noise.indices { noise[i] = UInt8(truncatingIfNeeded: i &* 2_654_435_761 >> 13) & 0x7F }   // no frame sync bytes
+        XCTAssertEqual(feed("audio/mpeg", noise).unsupported, "audio/mpeg")
+        XCTAssertNil(feed("audio/mpeg", noise.prefix(10_000)).unsupported, "still looking: too little read yet")
+        XCTAssertEqual(AudioPlayer.systemCodecLabel("audio/mpeg"), "MP3")
+        XCTAssertEqual(AudioPlayer.systemCodecLabel("application/vnd.apple.mpegurl"), "HLS")
+        XCTAssertNil(AudioPlayer.systemCodecLabel("unknown"))
+    }
+
     func testDirectoryKeepsWorkingStationsIncludingHLSAndOgg() {
         let json = """
         [{"stationuuid":"1","name":" Good MP3 ","url_resolved":"http://a/stream","codec":"MP3","bitrate":128,"hls":0,"lastcheckok":1,"tags":"jazz,smooth,lounge,chill","country":"France","countrycode":"FR","favicon":"https://a/logo.png"},
@@ -52,6 +120,20 @@ final class RadioTests: XCTestCase {
         XCTAssertEqual(s[0].favicon, "https://a/logo.png")
         XCTAssertNil(s[1].favicon)
         XCTAssertEqual(s[1].formatLabel, "HLS")
+    }
+
+    func testAFLACStreamIsDecodedHere() throws {
+        let r = feed("audio/flac", try aacStream(format: kAudioFormatFLAC, ext: "flac"))
+        XCTAssertNil(r.unsupported)
+        XCTAssertGreaterThan(r.buffers, 10)
+        XCTAssertEqual(r.rate, 44100)
+    }
+
+    func testALiveFLACStreamPlaysHereAFLACFileInTheSystemPlayer() {
+        XCTAssertFalse(StreamSource.isSystemPlayerType("audio/flac"), "open-ended: a live stream")
+        XCTAssertTrue(StreamSource.isSystemPlayerType("audio/flac", length: 114_938_890), "a file of a given length")
+        XCTAssertTrue(StreamSource.isSystemPlayerType("application/ogg"))
+        XCTAssertFalse(StreamSource.isSystemPlayerType("audio/mpeg", length: 5_000_000))
     }
 
     func testSystemPlayerDetection() {
