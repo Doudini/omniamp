@@ -86,7 +86,7 @@ final class PlaylistPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         Dash.applyList(table, in: scroll, rowHeight: 24)
         table.intercellSpacing = NSSize(width: 10, height: 0)
         table.headerView = DashHeaderView()
-        table.cornerView = nil
+        table.cornerView = DashHeaderCorner()
         scroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 6, right: 0)
         table.autosaveName = "OmniAmpLibraryPlaylist"
         table.autosaveTableColumns = true

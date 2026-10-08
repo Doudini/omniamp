@@ -32,8 +32,7 @@ enum ListLook {
         table.gridStyleMask = []
         table.backgroundColor = Theme.lcd
         scroll.documentView = table
-        scroll.hasVerticalScroller = true
-        scroll.scrollerStyle = .overlay
+        ThemedScroller.install(in: scroll, .lcd)
         scroll.automaticallyAdjustsContentInsets = false   // the transparent title bar mustn't push rows under the top edge
         scroll.contentInsets = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
         scroll.drawsBackground = true

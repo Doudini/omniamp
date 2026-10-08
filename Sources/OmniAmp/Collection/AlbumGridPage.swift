@@ -79,8 +79,7 @@ final class AlbumGridPage: NSView, NSCollectionViewDataSource, NSCollectionViewD
         collection.onKey = { [weak self] e in self?.key(e) ?? false }
         scroll.documentView = collection
         scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.scrollerStyle = .overlay
+        ThemedScroller.install(in: scroll, .dash)
         scroll.automaticallyAdjustsContentInsets = false
 
         empty.onSuggestion = { [weak self] s in self?.onSuggestion?(s) }

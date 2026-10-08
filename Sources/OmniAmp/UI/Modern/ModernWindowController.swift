@@ -146,14 +146,15 @@ final class ModernWindowController: NSWindowController, NSWindowDelegate, Player
         [cNum, cTitle, cTime].forEach(table.addTableColumn)
         table.columnAutoresizingStyle = .noColumnAutoresizing
         cTitle.minWidth = 60
-        observers.append(NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll, queue: .main) { [weak self] _ in
+        // The visible width, not the scroll view's: it also narrows when a mouse is attached and macOS swaps in a
+        // scroll bar that takes room beside the rows (the frame stays the same, the time column went under it).
+        observers.append(NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.fitColumns() }
         })
-        scroll.postsFrameChangedNotifications = true
+        scroll.contentView.postsFrameChangedNotifications = true
 
         scroll.documentView = table
-        scroll.hasVerticalScroller = true
-        scroll.scrollerStyle = .overlay
+        ThemedScroller.install(in: scroll, .lcd)
         scroll.drawsBackground = true
         scroll.backgroundColor = Theme.playlistBackground
         scroll.automaticallyAdjustsContentInsets = false

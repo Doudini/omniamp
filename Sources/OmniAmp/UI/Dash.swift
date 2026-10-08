@@ -82,8 +82,7 @@ enum Dash {
         table.gridStyleMask = []
         table.backgroundColor = card
         scroll.documentView = table
-        scroll.hasVerticalScroller = true
-        scroll.scrollerStyle = .overlay
+        ThemedScroller.install(in: scroll, .dash)
         scroll.automaticallyAdjustsContentInsets = false
         scroll.contentInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
         scroll.drawsBackground = true

@@ -768,8 +768,7 @@ class DashPage: NSScrollView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         drawsBackground = false
-        hasVerticalScroller = true
-        scrollerStyle = .overlay
+        ThemedScroller.install(in: self, .dash)
         automaticallyAdjustsContentInsets = false
         let doc = PageDocument()
         doc.translatesAutoresizingMaskIntoConstraints = false

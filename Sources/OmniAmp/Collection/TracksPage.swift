@@ -309,8 +309,10 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
         Dash.applyList(table, in: scroll, rowHeight: 24)
         table.intercellSpacing = NSSize(width: 10, height: 0)
         table.headerView = DashHeaderView()
-        table.cornerView = nil
-        scroll.hasHorizontalScroller = true
+        table.cornerView = DashHeaderCorner()
+        ThemedScroller.install(in: scroll, .dash, horizontal: true)
+        // Only while the columns are wider than the list: an always-shown pair leaves a grey square where they meet.
+        scroll.autohidesScrollers = true
         scroll.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 6, right: 0)
         // Widths, order and hidden columns, as the user left them (after the columns exist).
         table.autosaveName = "OmniAmpLibraryTracks"
@@ -836,6 +838,23 @@ private final class FilterBox: NSObject {
 
 /// The list's column header in the library's colors (the system one is a light bar): the card color, a hairline
 /// under it, the sorted column's arrow.
+/// The header's continuation above an always-shown scroll bar (left empty, macOS paints it grey).
+final class DashHeaderCorner: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 16, height: 24))
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        Dash.card.setFill()
+        bounds.fill()
+        Dash.border.setFill()
+        NSRect(x: 0, y: bounds.maxY - 1, width: bounds.width, height: 1).fill()
+    }
+}
+
 final class DashHeaderView: NSTableHeaderView {
     override init(frame: NSRect) {
         super.init(frame: frame)

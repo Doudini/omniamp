@@ -292,9 +292,8 @@ final class ModernInfoView: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
         modeLabel.translatesAutoresizingMaskIntoConstraints = false
         textScroll.drawsBackground = false
-        textScroll.hasVerticalScroller = true
+        ThemedScroller.install(in: textScroll, .lcd)
         textScroll.autohidesScrollers = true
-        textScroll.scrollerStyle = .overlay
         textScroll.borderType = .noBorder
         textScroll.translatesAutoresizingMaskIntoConstraints = false
         textDoc.translatesAutoresizingMaskIntoConstraints = false

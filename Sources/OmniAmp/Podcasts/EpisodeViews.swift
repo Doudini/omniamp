@@ -109,8 +109,7 @@ final class EpisodeNotesView: NSView {
         meta.lineBreakMode = .byTruncatingTail
         meta.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.scrollerStyle = .overlay
+        ThemedScroller.install(in: scroll, .dash)
         text.isEditable = false
         text.isSelectable = true
         text.drawsBackground = false
