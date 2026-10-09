@@ -895,7 +895,7 @@ final class AudioPlayer {
         prepared = nil
         preparing = url
         Self.opener.async { [weak self] in
-            let file = try? AVAudioFile(forReading: url)
+            let file = (try? DecodedFiles.playable(url)).flatMap { try? AVAudioFile(forReading: $0) }
             DispatchQueue.main.async { [self] in
                 guard let self, self.preparing == url else { return }
                 self.preparing = nil
@@ -940,7 +940,7 @@ final class AudioPlayer {
         Self.opener.async { [weak self] in
             guard wanted.withLock({ $0 }) == token else { return }   // another track (or stop) came since
             let file: AVAudioFile?
-            do { file = try AVAudioFile(forReading: url) } catch {
+            do { file = try AVAudioFile(forReading: DecodedFiles.playable(url)) } catch {
                 NSLog("OmniAmp: cannot open %@: %@", url.path, error.localizedDescription)
                 file = nil
             }
@@ -1042,7 +1042,7 @@ final class AudioPlayer {
         let wanted = wantedOpen
         Self.opener.async { [weak self] in
             guard wanted.withLock({ $0 }) == playing else { return }   // another track started meanwhile
-            let file = try? AVAudioFile(forReading: url)
+            let file = (try? DecodedFiles.playable(url)).flatMap { try? AVAudioFile(forReading: $0) }
             DispatchQueue.main.async { [self] in
                 guard let self, self.pendingNext == token, self.openToken == playing else { return }   // taken back meanwhile
                 self.pendingNext = nil

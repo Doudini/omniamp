@@ -101,7 +101,7 @@ enum TagReader {
         // Whatever a damaged or crafted file claims, only believable values leave the tag reader.
         info.duration = Sane.duration(info.duration)
         if let b = info.bitrate, !(0..<1_000_000).contains(b) { info.bitrate = nil }
-        if let r = info.sampleRate, !(1..<10_000_000).contains(r) { info.sampleRate = nil }
+        if let r = info.sampleRate, !(1..<50_000_000).contains(r) { info.sampleRate = nil }   // DSD512 is 22.6 MHz
         if let d = info.bitDepth, !(1...64).contains(d) { info.bitDepth = nil }
         info.artist = info.artist ?? info.albumArtist   // M4A with only an album artist: the playlist shows that
         return info
@@ -134,6 +134,9 @@ enum TagReader {
         }
         if head.starts(with: ContainerTags.asfHeader) {   // WMA: listed in the library, not playable
             return ContainerTags.asf(FileHandle(fileDescriptor: fd, closeOnDealloc: false), fileSize: fileSize)
+        }
+        if head.starts(with: Array("DSD ".utf8)) || head.starts(with: Array("FRM8".utf8)) {   // DSF / DSDIFF
+            return dsdTags(fd: fd, fileSize: fileSize)
         }
         if head.starts(with: [0x4F, 0x67, 0x67, 0x53]) {   // "OggS": Vorbis (Core Audio plays it)
             return parseOgg(reader, fileSize: fileSize)
@@ -404,6 +407,25 @@ enum TagReader {
             parseID3v2(b, version: ver, flags: flags, tagEnd: min(10 + size, b.count), into: &info)
         }
         parseMPEGAudio(b, from: audioStart, fileSize: fileSize, into: &info)
+        return info
+    }
+
+    /// DSD: the format from its header, tags from its ID3v2 (DSF's metadata, DSDIFF's "ID3 " chunk) or DSDIFF's
+    /// own artist and title. Its "sample rate" is the DSD rate (2,822,400 for DSD64), its bit depth 1.
+    static func dsdTags(fd: Int32, fileSize: Int64) -> TagInfo {
+        guard let dsd = DSD.info(fd: fd) else { return TagInfo() }
+        var info = TagInfo()
+        if let at = dsd.tagOffset, at < fileSize {
+            let size = Int(min(dsd.tagSize ?? (fileSize - at), fileSize - at, 4 << 20))
+            var tag = [UInt8](repeating: 0, count: max(size, 0))
+            if size > 10, tag.withUnsafeMutableBytes({ pread(fd, $0.baseAddress, size, off_t(at)) }) == size { info = parseID3Tag(tag) }
+        }
+        info.title = info.title ?? dsd.title
+        info.artist = info.artist ?? dsd.artist
+        info.duration = dsd.seconds
+        info.sampleRate = dsd.rate
+        info.bitDepth = 1
+        info.bitrate = dsd.rate * dsd.channels / 1000
         return info
     }
 

@@ -133,6 +133,6 @@ final class FormatTests: XCTestCase {
             XCTAssertEqual(audio.contains(ext), readable.contains(ext), ext)
             XCTAssertNotEqual(audio.contains(ext), FolderScanner.unplayableExtensions.contains(ext), ext)
         }
-        XCTAssertTrue(FolderScanner.unplayableExtensions.isSuperset(of: ["wma", "ape", "dsf"]))
+        XCTAssertTrue(FolderScanner.unplayableExtensions.isSuperset(of: ["wma", "ape", "wv"]))
     }
 }

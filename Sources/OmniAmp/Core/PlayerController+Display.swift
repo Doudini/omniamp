@@ -33,7 +33,8 @@ extension PlayerController {
     }
 
     var currentKHz: Int? {
-        let sr = currentTrack?.sampleRate ?? Int(player.sampleRate)
+        var sr = currentTrack?.sampleRate ?? Int(player.sampleRate)
+        if sr >= 1_000_000 { sr = Int(player.sampleRate) }   // DSD: the PCM it plays as, not its 2.8 MHz
         return sr > 0 ? Int((Double(sr) / 1000).rounded()) : nil
     }
 
@@ -79,10 +80,12 @@ extension PlayerController {
         case "aac", "adts": codec = "AAC"
         case "mp1", "mp2", "mpa", "m1a", "m2a": codec = ext == "mp1" ? "MP1" : "MP2"
         case "au", "snd": codec = "AU"
+        case "dsf", "dff": codec = t.sampleRate.map(DSD.label) ?? "DSD"
         default: codec = ext.uppercased()
         }
         let sr = t.sampleRate ?? (playing ? Int(player.sampleRate) : 0)
-        let khz = sr > 0 ? (sr % 1000 == 0 ? "\(sr / 1000) kHz" : String(format: "%.1f kHz", Double(sr) / 1000)) : ""
+        let khz = sr >= 1_000_000 ? String(format: "%.1f MHz", Double(sr) / 1_000_000)   // DSD: "2.8 MHz"
+            : sr > 0 ? (sr % 1000 == 0 ? "\(sr / 1000) kHz" : String(format: "%.1f kHz", Double(sr) / 1000)) : ""
         let channels = playing ? player.channelCount : 0
         let ch = channels == 1 ? "mono" : (channels == 2 ? "stereo" : (channels > 2 ? "\(channels) ch" : ""))
         let kbps = t.bitrate ?? Sane.kbps(bytes: t.size, seconds: t.duration)

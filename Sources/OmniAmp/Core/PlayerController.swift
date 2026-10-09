@@ -756,6 +756,8 @@ final class PlayerController {
         // Playback runs in stereo 32-bit float: other channel counts are mixed, and float holds up to 24 bits.
         let ch = player.channelCount
         if ch != 2 { return ("\(ch == 1 ? "MONO" : "\(ch) CH") → STEREO", false) }
+        // DSD is converted to PCM by OmniAmp (macOS can't play it): the PCM is what reaches the device untouched.
+        if DSD.extensions.contains((t.path as NSString).pathExtension.lowercased()) { return ("DSD→PCM \(k(player.sampleRate)) kHz", true) }
         if let bits = t.bitDepth {
             let device = AudioDevices.outputBitDepth(player.deviceID) ?? 24
             let limit = min(device, 24)

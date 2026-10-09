@@ -6,7 +6,8 @@ import os
 enum FolderScanner {
     /// What OmniAmp plays: every audio file type this Mac's macOS can read (asked once, so Ogg Vorbis and Opus
     /// count only where the system opens them), plus spellings it opens without listing them.
-    static let audioExtensions: Set<String> = readableBySystem().map { $0.union(["alac", "wave"]) } ?? fallbackExtensions
+    static let audioExtensions: Set<String> = (readableBySystem().map { $0.union(["alac", "wave"]) } ?? fallbackExtensions)
+        .union(DSD.extensions)   // converted by OmniAmp itself
     /// Music OmniAmp can't play (no decoder in macOS, or copy-protected): the library still lists it, marked,
     /// so nothing in a collection is silently missing. The playlist leaves it out.
     static let unplayableExtensions: Set<String> = Set(["wma", "shn", "ape", "wv", "mpc", "m4p", "ra", "rm", "tta", "dsf", "dff", "aa", "aax",

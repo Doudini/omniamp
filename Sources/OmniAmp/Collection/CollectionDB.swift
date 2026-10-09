@@ -488,7 +488,7 @@ final class CollectionDB {
 
     static func isLossless(_ path: String, bitDepth: Int?) -> Bool {
         switch (path as NSString).pathExtension.lowercased() {
-        case "flac", "wav", "wave", "aif", "aiff", "aifc", "w64": return true
+        case "flac", "wav", "wave", "aif", "aiff", "aifc", "w64", "dsf", "dff": return true
         case "m4a", "mp4", "caf", "au", "snd", "sd2": return bitDepth != nil   // ALAC and PCM report a bit depth, AAC doesn't
         default: return false
         }
@@ -875,6 +875,7 @@ final class CollectionDB {
     static func format(_ path: String, bitDepth: Int?, rate: Int?, kbps: Int?) -> String {
         var ext = (path as NSString).pathExtension.uppercased()
         if ext == "M4A" || ext == "MP4" { ext = bitDepth != nil ? "ALAC" : "AAC" }
+        if ext == "DSF" || ext == "DFF" { return rate.map(DSD.label) ?? "DSD" }
         if isLossless(path, bitDepth: bitDepth), let b = bitDepth, let r = rate {
             let k = Double(r) / 1000
             return "\(ext) \(b)/\(k == k.rounded() ? String(Int(k)) : String(format: "%.1f", k))"
