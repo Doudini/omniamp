@@ -113,7 +113,7 @@ Press **BOOKS** in the Podcasts window (or ⌥⌘3) for audiobooks and radio pla
 ## All features
 
 **Playback**
-- **Formats:** MP3, FLAC, ALAC/AAC (M4A), WAV (including RF64), AIFF and CAF, with built-in tag readers. The display shows exactly what's playing, e.g. "FLAC 24-bit / 96 kHz".
+- **Formats:** MP3, FLAC, ALAC/AAC (M4A), WAV (including RF64), AIFF and CAF, with built-in tag readers, plus whatever else your macOS can decode: Ogg Vorbis and Opus on recent versions, MPEG Layer 2, Wave64 and more. The display shows exactly what's playing, e.g. "FLAC 24-bit / 96 kHz".
 - **Gapless playback** between tracks that share a sample format.
 - **Bit-perfect mode** (Output menu):
   - Matches the output device to each file's sample rate.

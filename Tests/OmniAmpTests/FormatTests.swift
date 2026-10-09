@@ -120,4 +120,19 @@ final class FormatTests: XCTestCase {
         body += Array("LIST".utf8) + le(list.count, 4) + list
         return Data(Array("RIFF".utf8) + le(body.count, 4) + body)
     }
+
+    func testPlaysWhatMacOSCanRead() throws {
+        let readable = try XCTUnwrap(FolderScanner.readableBySystem(), "macOS lists the types it reads")
+        let audio = FolderScanner.audioExtensions
+        XCTAssertTrue(FolderScanner.fallbackExtensions.isSubset(of: audio), "the basics always play")
+        XCTAssertTrue(audio.isSuperset(of: ["mp2", "w64", "au"]), "and what macOS adds (MPEG Layer 2, Wave64, Sun audio)")
+        XCTAssertTrue(audio.isDisjoint(with: ["mov", "3gp", "mpeg"]), "video containers aren't music")
+        XCTAssertTrue(audio.isDisjoint(with: FolderScanner.unplayableExtensions), "nothing is both")
+        // Ogg and Opus are playable exactly where this macOS reads them (newer versions), "can't play" elsewhere.
+        for ext in ["ogg", "opus"] {
+            XCTAssertEqual(audio.contains(ext), readable.contains(ext), ext)
+            XCTAssertNotEqual(audio.contains(ext), FolderScanner.unplayableExtensions.contains(ext), ext)
+        }
+        XCTAssertTrue(FolderScanner.unplayableExtensions.isSuperset(of: ["wma", "ape", "dsf"]))
+    }
 }

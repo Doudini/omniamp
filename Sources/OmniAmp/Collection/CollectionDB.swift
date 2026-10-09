@@ -278,6 +278,13 @@ final class CollectionDB {
     /// Size and mtime of every file under `scope` (a folder), to tell new and changed files from known ones.
     /// Files OmniAmp rewrote without changing their size or date (tags written, the date kept): read again on the
     /// next scan of their folder.
+    /// Files kept as "can't play".
+    func unplayablePaths() throws -> [String] {
+        var out: [String] = []
+        try db.query("SELECT path FROM files WHERE playable = 0") { out.append($0.text(0)) }
+        return out
+    }
+
     func markChanged(paths: [String]) throws {
         // One statement per few hundred files: `path` has no index (it would slow every insert of a big scan),
         // so each statement is a pass over the table, not one per file.
@@ -481,8 +488,8 @@ final class CollectionDB {
 
     static func isLossless(_ path: String, bitDepth: Int?) -> Bool {
         switch (path as NSString).pathExtension.lowercased() {
-        case "flac", "wav", "wave", "aif", "aiff", "aifc": return true
-        case "m4a", "mp4", "caf": return bitDepth != nil   // ALAC reports a bit depth, AAC doesn't
+        case "flac", "wav", "wave", "aif", "aiff", "aifc", "w64": return true
+        case "m4a", "mp4", "caf", "au", "snd", "sd2": return bitDepth != nil   // ALAC and PCM report a bit depth, AAC doesn't
         default: return false
         }
     }

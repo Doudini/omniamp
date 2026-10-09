@@ -76,7 +76,9 @@ extension PlayerController {
         case "wav", "wave": codec = "WAV"
         case "aif", "aiff", "aifc": codec = "AIFF"
         case "m4a", "m4b", "mp4", "alac": codec = lossless ? "ALAC" : "AAC"
-        case "aac": codec = "AAC"
+        case "aac", "adts": codec = "AAC"
+        case "mp1", "mp2", "mpa", "m1a", "m2a": codec = ext == "mp1" ? "MP1" : "MP2"
+        case "au", "snd": codec = "AU"
         default: codec = ext.uppercased()
         }
         let sr = t.sampleRate ?? (playing ? Int(player.sampleRate) : 0)

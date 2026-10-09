@@ -68,6 +68,27 @@ final class MusicCollection {
             }
         }
         scheduleNetworkRecheck()
+        rereadNewlyPlayable()
+    }
+
+    /// Files kept as "can't play" in a format this Mac plays now (OmniAmp learned it, or macOS did: Opus): read
+    /// again, only those, so they show up as playable without a full rescan.
+    private func rereadNewlyPlayable() {
+        let playable = FolderScanner.audioExtensions
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let db = try? CollectionDB(), let paths = try? db.unplayablePaths() else { return }
+            let now = paths.filter { playable.contains(($0 as NSString).pathExtension.lowercased()) }
+            guard !now.isEmpty else { return }
+            let folders = Set(now.map { ($0 as NSString).deletingLastPathComponent })
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, let scanner = self.scanner else { return }
+                    NSLog("OmniAmp: library: %d files in formats that play now, reading them again", now.count)
+                    scanner.markChanged(paths: now)
+                    self.rescan(Array(folders))
+                }
+            }
+        }
     }
 
     // MARK: Folders

@@ -1,13 +1,40 @@
+import AudioToolbox
 import Foundation
 import os
 
 /// Stage 1: walk folders/files and produce bare tracks (no tag reading).
 enum FolderScanner {
-    static let audioExtensions: Set<String> = ["mp3", "flac", "m4a", "m4b", "mp4", "aac", "alac", "wav", "wave", "aif", "aiff", "aifc", "caf",
-                                               "ogg", "oga"]
+    /// What OmniAmp plays: every audio file type this Mac's macOS can read (asked once, so Ogg Vorbis and Opus
+    /// count only where the system opens them), plus spellings it opens without listing them.
+    static let audioExtensions: Set<String> = readableBySystem().map { $0.union(["alac", "wave"]) } ?? fallbackExtensions
     /// Music OmniAmp can't play (no decoder in macOS, or copy-protected): the library still lists it, marked,
     /// so nothing in a collection is silently missing. The playlist leaves it out.
-    static let unplayableExtensions: Set<String> = ["wma", "shn", "ape", "wv", "mpc", "m4p", "ra", "rm", "tta", "opus", "dsf", "dff", "aa", "aax"]
+    static let unplayableExtensions: Set<String> = Set(["wma", "shn", "ape", "wv", "mpc", "m4p", "ra", "rm", "tta", "dsf", "dff", "aa", "aax",
+                                                        "ogg", "oga", "opus"]).subtracting(audioExtensions)
+
+    /// If macOS can't be asked: the formats every supported version plays.
+    static let fallbackExtensions: Set<String> = ["mp3", "flac", "m4a", "m4b", "mp4", "aac", "alac", "wav", "wave", "aif", "aiff", "aifc", "caf"]
+    /// Types macOS reads that are video containers, or names that are mostly video files ("mpeg").
+    private static let notMusic: Set<String> = ["mov", "qt", "3gp", "3gpp", "3g2", "3gp2", "mpeg"]
+
+    /// The file name extensions of every type Core Audio can read here.
+    static func readableBySystem() -> Set<String>? {
+        var size: UInt32 = 0
+        guard AudioFileGetGlobalInfoSize(kAudioFileGlobalInfo_ReadableTypes, 0, nil, &size) == noErr, size > 0 else { return nil }
+        var types = [AudioFileTypeID](repeating: 0, count: Int(size) / MemoryLayout<AudioFileTypeID>.size)
+        guard AudioFileGetGlobalInfo(kAudioFileGlobalInfo_ReadableTypes, 0, nil, &size, &types) == noErr else { return nil }
+        var out = Set<String>()
+        for var type in types {
+            var list: Unmanaged<CFArray>?
+            var listSize = UInt32(MemoryLayout<Unmanaged<CFArray>?>.size)
+            guard AudioFileGetGlobalInfo(kAudioFileGlobalInfo_ExtensionsForType, UInt32(MemoryLayout<AudioFileTypeID>.size), &type,
+                                         &listSize, &list) == noErr, let exts = list?.takeRetainedValue() as? [String] else { continue }
+            out.formUnion(exts.map { $0.lowercased() })
+        }
+        out.subtract(notMusic)
+        // Something went wrong if even the basics are missing: keep to the known list.
+        return fallbackExtensions.subtracting(["alac", "wave"]).isSubset(of: out) ? out : nil
+    }
 
     static func scan(_ urls: [URL]) -> [Track] {
         var out: [Track] = []
