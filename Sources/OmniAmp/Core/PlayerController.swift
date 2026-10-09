@@ -41,6 +41,12 @@ final class PlayerController {
     private var preloaded: (index: Int, path: String)?   // path = Track.key
     /// A preload taken back after it may already have started: if it did, it's what plays now.
     private var droppedPreload: (index: Int, path: String)?
+    /// Shuffle's choice for the track after this one (its key), made once.
+    private var shufflePick: String?
+    /// How long before a track's end the next one is committed to the engine for gapless playback. It's opened
+    /// long before (`prepareNext`); committing late keeps the window short in which changing what comes next
+    /// has to take it back again (an audible cut).
+    static let gaplessLead: Double = 3
     private var preloadAttempted = false
     /// One-shot timer that fires ~8 s before the end of the track to preload the next one.
     private var preloadTimer: Timer?
@@ -105,8 +111,10 @@ final class PlayerController {
         preloadTimer?.invalidate()
         preloadTimer = nil
         guard player.state == .playing, !preloadAttempted, player.duration > 0 else { return }
-        let t = Timer(timeInterval: max(0.05, player.remaining - 7.5), repeats: false) { [weak self] _ in MainActor.assumeIsolated { self?.maybePreloadNext() } }
-        t.tolerance = 0.5
+        let t = Timer(timeInterval: max(0.05, player.remaining - Self.gaplessLead), repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.maybePreloadNext() }
+        }
+        t.tolerance = 0.25
         RunLoop.main.add(t, forMode: .common)
         preloadTimer = t
     }
@@ -456,6 +464,7 @@ final class PlayerController {
         preloaded = nil
         droppedPreload = nil
         preloadAttempted = false
+        shufflePick = nil
         applyReplayGain()
         if !store.tracks[index].isEpisode { player.rate = 1 }
         if store.tracks[index].isStream {
@@ -595,8 +604,12 @@ final class PlayerController {
         let order = playOrder()
         guard !order.isEmpty else { return nil }
         if shuffle, order.count > 1 {
+            // One pick per track, kept: the track opened ahead of time, the one queued for gapless and the one
+            // Next plays are the same (rolling again each time played another, with a gap, and cancelled queues).
+            if let k = shufflePick, let i = order.first(where: { store.tracks[$0].key == k }), i != currentIndex { return i }
             var r: Int
             repeat { r = order.randomElement()! } while r == currentIndex
+            shufflePick = store.tracks[r].key
             return r
         } else if let c = currentIndex, let pos = order.firstIndex(of: c) {
             return pos + 1 < order.count ? order[pos + 1] : (repeatAll ? order[0] : nil)
@@ -607,9 +620,9 @@ final class PlayerController {
     }
 
     /// Open the track Next would play in the background, so pressing it (or reaching the end) starts it at
-    /// once. Not in shuffle mode: the next pick is only made when it's needed.
+    /// once (in shuffle mode too: the pick is kept until it plays).
     private func prepareNext() {
-        guard !shuffle, player.state != .stopped, let n = nextTarget(), n != currentIndex, n < store.tracks.count,
+        guard player.state != .stopped, let n = nextTarget(), n != currentIndex, n < store.tracks.count,
               !store.tracks[n].isRemote else { player.prepare(nil); return }
         player.prepare(store.tracks[n].url)
     }
@@ -625,7 +638,7 @@ final class PlayerController {
         guard player.state == .playing, !preloadAttempted, !player.hasQueuedNext, !stopAfterCurrent, !player.isPlayingEpisode,
               player.duration > 0 else { return }
         // Early: the timer was set while the clock stood still (a rate switch settling). Set it again.
-        guard player.remaining < 8 else { schedulePreloadCheck(); return }
+        guard player.remaining < Self.gaplessLead + 0.5 else { schedulePreloadCheck(); return }
         preloadAttempted = true
         guard let t = nextTarget(), t != currentIndex, !store.tracks[t].isRemote else { return }
         let track = store.tracks[t]
@@ -653,6 +666,7 @@ final class PlayerController {
         }
         if let o = old, o != new { pushHistory(o) }
         currentIndex = new
+        shufflePick = nil
         if let n = new { dequeue(n) }
         if let o = old { forgetPosition(store.tracks.indices.contains(o) ? store.tracks[o].key : nil) }
         applyReplayGain()
@@ -664,8 +678,32 @@ final class PlayerController {
         updateNowPlaying()
     }
 
-    /// The preloaded track may no longer be the right one (order/filter/shuffle changed).
-    private func invalidatePreload() {
+    /// The preloaded track may no longer be the right one (order/filter/shuffle changed). When it still is, it
+    /// stays queued: taking it back re-starts the playing track where the clock says it is, an audible cut of
+    /// ~0.1 s (measured: 128 ms), so a playlist edit or a watched folder's sync near a track's end did that.
+    /// `force`: take it back anyway (stop after this track, a change of output mode).
+    /// Edits call this before they change the list, so the check runs once they're done (the next turn of the
+    /// main loop, once for a burst of edits).
+    private func invalidatePreload(force: Bool = false) {
+        if force { takeBackPreload(); return }
+        guard !preloadCheckPending else { return }
+        preloadCheckPending = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.preloadCheckPending = false
+                if self.player.hasQueuedNext, let q = self.preloaded, !self.stopAfterCurrent, let t = self.nextTarget(),
+                   t < self.store.tracks.count, self.store.tracks[t].key == q.path {
+                    self.preloaded = (t, q.path)   // still the next one, maybe at another row now
+                    return
+                }
+                self.takeBackPreload()
+            }
+        }
+    }
+    private var preloadCheckPending = false
+
+    private func takeBackPreload() {
         if player.hasQueuedNext { droppedPreload = preloaded; player.cancelQueuedNext() }
         preloaded = nil
         preloadAttempted = false
@@ -735,7 +773,7 @@ final class PlayerController {
 
     func setBitPerfect(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: Pref.bitPerfect)
-        invalidatePreload()
+        invalidatePreload(force: true)
         player.setBitPerfect(on, exclusive: player.exclusive)
         ui?.optionsDidChange()
     }
@@ -779,7 +817,7 @@ final class PlayerController {
     /// One-shot: stop when the current track ends (Winamp's Ctrl+V; here Shift+V).
     var stopAfterCurrent = false {
         didSet {
-            if stopAfterCurrent { invalidatePreload() } else { schedulePreloadCheck() }
+            if stopAfterCurrent { invalidatePreload(force: true) } else { schedulePreloadCheck() }
             ui?.optionsDidChange()
         }
     }
@@ -995,8 +1033,9 @@ final class PlayerController {
     }
 
     func toggleShuffle() {
-        invalidatePreload()
         shuffle.toggle()
+        shufflePick = nil
+        invalidatePreload()
         history.removeAll()
         ui?.optionsDidChange()
     }

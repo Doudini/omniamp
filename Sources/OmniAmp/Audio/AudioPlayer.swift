@@ -1039,35 +1039,50 @@ final class AudioPlayer {
         nextToken += 1
         let token = nextToken, playing = openToken
         pendingNext = token
+        // Opened ahead of time (`prepare`, usually when this track started): queued at once, no file access now.
+        if let p = prepared, p.url == url {
+            prepared = nil
+            queueOpened(p.file, url: url, range: range, tag: tag, token: token, playing: playing, queued: queued)
+            return
+        }
         let wanted = wantedOpen
         Self.opener.async { [weak self] in
             guard wanted.withLock({ $0 }) == playing else { return }   // another track started meanwhile
             let file = (try? DecodedFiles.playable(url)).flatMap { try? AVAudioFile(forReading: $0) }
             DispatchQueue.main.async { [self] in
-                guard let self, self.pendingNext == token, self.openToken == playing else { return }   // taken back meanwhile
-                self.pendingNext = nil
-                guard let file, let c = self.current, self.state != .stopped, !self.awaitingRateSettle else { queued(false); return }
-                let a = file.processingFormat, b = c.file.processingFormat
-                guard a.sampleRate == b.sampleRate, a.channelCount == b.channelCount, a.commonFormat == b.commonFormat else {
-                    // Another format: not behind this track, but the spare player gets ready for it (see `spare`).
-                    self.readySpare(for: a)
-                    queued(false)
-                    return
-                }
-                var item = Item(id: self.nextItemID, file: file, url: url, range: range, offset: 0)
-                item.tag = tag
-                self.nextItemID += 1
-                self.upcoming = item
-                self.schedule(item, gen: self.generation)
-                queued(true)
+                guard let self else { return }
+                self.queueOpened(file, url: url, range: range, tag: tag, token: token, playing: playing, queued: queued)
             }
         }
+    }
+
+    private func queueOpened(_ file: AVAudioFile?, url: URL, range: (start: Double, end: Double?)?, tag: String?, token: Int, playing: Int,
+                             queued: @escaping @Sendable @MainActor (Bool) -> Void) {
+        guard pendingNext == token, openToken == playing else { return }   // taken back meanwhile
+        pendingNext = nil
+        guard let file, let c = current, state != .stopped, !awaitingRateSettle else { queued(false); return }
+        let a = file.processingFormat, b = c.file.processingFormat
+        guard a.sampleRate == b.sampleRate, a.channelCount == b.channelCount, a.commonFormat == b.commonFormat else {
+            // Another format: not behind this track, but the spare player gets ready for it (see `spare`). The file
+            // stays opened for the start that follows.
+            prepared = (url, file)
+            readySpare(for: a)
+            queued(false)
+            return
+        }
+        var item = Item(id: nextItemID, file: file, url: url, range: range, offset: 0)
+        item.tag = tag
+        nextItemID += 1
+        upcoming = item
+        schedule(item, gen: generation)
+        queued(true)
     }
 
     /// Drop a queued track (e.g. the playlist order changed).
     func cancelQueuedNext() {
         pendingNext = nil   // still opening: it will never be queued
         guard upcoming != nil else { return }
+        dlog("queued track taken back: the playing one restarts at its place")
         let t = currentTime
         upcoming = nil
         if state != .stopped { seek(to: t) } // reschedules only the current track
