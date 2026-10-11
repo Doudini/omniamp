@@ -86,20 +86,14 @@ Press **PODCASTS** (or ⌘3) to browse the top shows in your country, or search 
 - **Downloads:** download episodes to play offline (⌘D). They're kept in a folder you choose in Settings; right-click → Show in Finder.
 - **OPML:** import your subscriptions from another podcast app, or export them as a backup (in the + FEED menu).
 - **Speed:** 1× to 2× (Controls → Playback Speed), remembered per show, without changing the pitch.
-- **Playback:** episodes stream through the macOS player, so the EQ and visualizer don't apply to them.
 - **Any feed:** **+ FEED** subscribes to shows that aren't in the directory, including private or paid feeds with a personal link.
 - **Keyboard:** arrows move between shows and episodes, Return plays, ⌃Tab switches between top shows and subscriptions.
 
 ### Books & Hörspiele
 
-Press **BOOKS** in the Podcasts window (or ⌥⌘3) for audiobooks and radio plays, with the same list, notes, resume, speed and downloads:
-<p align="center"><img src="docs/books.png" alt="Books & Hörspiele: My Shelf with Continue listening, downloads and radio-play series from archive.org" width="700"></p>
+Press **BOOKS** in the Podcasts window (or ⌥⌘3) to browse and search audiobooks and radio plays on [ARD Audiothek](https://www.ardaudiothek.de), [LibriVox](https://librivox.org) and [archive.org](https://archive.org), and keep them on your shelf.
 
-- **ARD Audiothek:** the German public broadcasters' Hörspiele, Hörbücher and children's plays (Krimi-Klassiker, Große Geschichten, the ARD Hörspiel-Speicher and more). Some may only be streamed, and plays go offline after a year or two; the notes say until when, when ARD does.
-- **LibriVox:** public-domain audiobooks read by volunteers, in German, English and many other languages.
-- **archive.org:** any audio item there, one item as one book. Each one shows its licence, or "no licence stated": many uploads (old cassette rips of commercial series, for example) aren't licensed by whoever owns them, and they can disappear.
-- **BROWSE** lists ARD's categories, popular LibriVox books and archive.org's radio plays; search asks all three. **ADD TO SHELF** keeps a book or series under **MY SHELF**.
-- A book's parts are listed in order; playing one queues the parts after it. Downloaded parts go into a folder per book and stay until you remove them.
+<p align="center"><img src="docs/books.png" alt="Books & Hörspiele: a radio-play series from archive.org on My Shelf, with its parts in order" width="700"></p>
 
 ## Add URL
 
