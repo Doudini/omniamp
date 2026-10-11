@@ -66,6 +66,7 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
   <img src="docs/library-listening.png" alt="Listening history from Last.fm: your most played artist and key figures, plays per year, how much of what you play you own, your top artists through the years" width="49%">
   <img src="docs/library-map.png" alt="Where the music you play comes from: a world map of your artists' countries, top countries and their artists" width="49%">
 </p>
+<p align="center"><img src="docs/library-playlists.png" alt="Saved playlists in the library sidebar, in color-coded groups, with one open" width="700"></p>
 
 ## Internet radio
 
@@ -97,6 +98,8 @@ Press **PODCASTS** (or ⌘3) to browse the top shows in your country, or search 
 ### Books & Hörspiele
 
 Press **BOOKS** in the Podcasts window (or ⌥⌘3) for audiobooks and radio plays, with the same list, notes, resume, speed and downloads:
+<p align="center"><img src="docs/books.png" alt="Books & Hörspiele: My Shelf with Continue listening, downloads and radio-play series from archive.org" width="700"></p>
+
 - **ARD Audiothek:** the German public broadcasters' Hörspiele, Hörbücher and children's plays (Krimi-Klassiker, Große Geschichten, the ARD Hörspiel-Speicher and more). Some may only be streamed, and plays go offline after a year or two; the notes say until when, when ARD does.
 - **LibriVox:** public-domain audiobooks read by volunteers, in German, English and many other languages.
 - **archive.org:** any audio item there, one item as one book. Each one shows its licence, or "no licence stated": many uploads (old cassette rips of commercial series, for example) aren't licensed by whoever owns them, and they can disappear.
