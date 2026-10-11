@@ -30,11 +30,6 @@ A small window with a playlist and controls, like Winamp. That's all it takes to
 
 For browsing your whole collection, the Music Library opens in its own window (**LIBRARY** or ⌘4). Anything you play there plays in the player. An album already in the playlist plays from there instead of being added twice.
 
-**View → Theme** sets the look:
-- **Color:** Green, Amber, Blue, Cyan/Teal or Monochrome.
-- **Finish:** Tinted, Hardware or Studio.
-- **Chart colors:** soft pixel-art palettes from [Lospec](https://lospec.com) for the library's graphs, with color-blind safe colors as an option.
-
 <p align="center"><img src="docs/themes.png" alt="Four themes: Green and Amber with the Tinted finish, Blue with Studio and Monochrome with Hardware, with the INFO and EQ drawers"></p>
 
 ## The classic look
@@ -66,7 +61,7 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
   <img src="docs/library-listening.png" alt="Listening history from Last.fm: your most played artist and key figures, plays per year, how much of what you play you own, your top artists through the years" width="49%">
   <img src="docs/library-map.png" alt="Where the music you play comes from: a world map of your artists' countries, top countries and their artists" width="49%">
 </p>
-<p align="center"><img src="docs/library-playlists.png" alt="Saved playlists in the library sidebar, in color-coded groups, with one open" width="700"></p>
+<p align="center"><img src="docs/library-albums.png" alt="Albums: your covers in a grid grouped by decade, live recordings marked LIVE" width="820"></p>
 
 ## Internet radio
 

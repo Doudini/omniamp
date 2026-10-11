@@ -68,6 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             } else {
                 showPodcasts(nil)
             }
+            // OMNIAMP_PODCASTS_ROW=<n> then opens the sidebar's nth row, once the shelf or subscriptions are listed.
+            if let row = ProcessInfo.processInfo.environment["OMNIAMP_PODCASTS_ROW"].flatMap(Int.init) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.podcasts?.selectSidebarRow(row) }
+            }
         }
         if ProcessInfo.processInfo.environment["OMNIAMP_LIBRARY"] != nil { showLibrary(nil) }
         // The music library catches up in the background, once the playlist has loaded.

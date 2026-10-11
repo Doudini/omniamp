@@ -527,6 +527,12 @@ final class PodcastWindowController: NSWindowController, NSWindowDelegate, NSTab
         load()
     }
 
+    /// Select this sidebar row, from 1 (the OMNIAMP_PODCASTS_ROW test hook, for screenshots of a show or book).
+    func selectSidebarRow(_ row: Int) {
+        guard row >= 1, row <= showsTable.numberOfRows else { return }
+        showsTable.selectRowIndexes([row - 1], byExtendingSelection: false)
+    }
+
     /// ⌘F while this window is in front.
     func focusSearch() {
         window?.makeFirstResponder(search)
