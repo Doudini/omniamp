@@ -56,7 +56,7 @@ Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4)
   <img src="docs/library-browse.png" alt="Browsing an artist: releases as a cover shelf by year, albums and tracks" width="49%">
   <img src="docs/library-shows.png" alt="Shows: an artist's live recordings by date and venue (Blue theme)" width="49%">
 </p>
-<p align="center"><img src="docs/library-stats.png" alt="Collection stats: the newest release and key figures, release years, kinds of recordings (Blue theme)" width="700"></p>
+<p align="center"><img src="docs/library-stats.png" alt="Collection stats: the newest release and key figures, release years, kinds of recordings, the collection over time, lossless or lossy" width="700"></p>
 <p align="center">
   <img src="docs/library-listening.png" alt="Listening history from Last.fm: your most played artist and key figures, plays per year, how much of what you play you own, your top artists through the years" width="49%">
   <img src="docs/library-map.png" alt="Where the music you play comes from: a world map of your artists' countries, top countries and their artists" width="49%">
