@@ -40,6 +40,7 @@ Real Winamp 2.x skins, pixel-exact at 1×–4×. OmniAmp ships with the original
 
 Add your music folders, on your Mac or on a NAS, and press **LIBRARY** (or ⌘4). OmniAmp turns them into a collection you can browse, even when it's big and loosely organized.
 
+<p align="center"><img src="docs/library-tracks.png" alt="Tracks: your whole library as one sortable list with plays, when each song was added and last played" width="820"></p>
 <p align="center"><img src="docs/library-artist.png" alt="An artist page: photo and bio, every release on a timeline above your own plays, your top songs" width="820"></p>
 
 - **Tracks:** your whole library as one sortable list, like Winamp's, with how often and when you last played each song. Filter by year, plays or genre, or see your top songs of any year you played.
