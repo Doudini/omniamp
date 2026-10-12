@@ -1,7 +1,7 @@
 import XCTest
 @testable import OmniAmp
 
-/// Middle-button drag scrolling, fed made-up events for a real (off-screen) window.
+/// Middle-button drag scrolling, fed made-up input for a real (off-screen) window.
 @MainActor
 final class DragScrollTests: XCTestCase {
     private var window: NSWindow!
@@ -26,17 +26,17 @@ final class DragScrollTests: XCTestCase {
         drag = nil
     }
 
-    private func event(_ type: NSEvent.EventType, y: CGFloat, at t: TimeInterval, button: Int = 2) -> NSEvent {
-        let e = NSEvent.mouseEvent(with: type, location: NSPoint(x: 150, y: y), modifierFlags: [], timestamp: t,
-                                   windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
-        // mouseEvent makes left-button events; the button number comes from a CGEvent copy.
-        let cg = e.cgEvent!
-        cg.setIntegerValueField(.mouseEventButtonNumber, value: Int64(button))
-        return NSEvent(cgEvent: cg)!
+    /// A made-up event's parts (a synthesized NSEvent loses its window on a headless CI runner).
+    private struct Input { var type: NSEvent.EventType, y: CGFloat, t: TimeInterval, button: Int }
+
+    private func event(_ type: NSEvent.EventType, y: CGFloat, at t: TimeInterval, button: Int = 2) -> Input {
+        Input(type: type, y: y, t: t, button: button)
     }
 
     @discardableResult
-    private func handle(_ e: NSEvent) -> Bool { drag.handle(e, in: window) }
+    private func handle(_ e: Input) -> Bool {
+        drag.handle(e.type, button: e.button, at: NSPoint(x: 150, y: e.y), time: e.t, in: window)
+    }
 
     private var top: CGFloat { scroll.contentView.bounds.origin.y }
 

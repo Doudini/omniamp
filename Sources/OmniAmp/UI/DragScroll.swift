@@ -34,32 +34,38 @@ final class DragScroll {
         }
     }
 
+    private func handle(_ ev: NSEvent) -> Bool {
+        handle(ev.type, button: ev.buttonNumber, at: ev.locationInWindow, time: ev.timestamp, in: ev.window)
+    }
+
+    /// The event's parts, so tests can feed made-up input: events synthesized on a headless CI runner
+    /// don't keep their window or location.
     @discardableResult
-    func handle(_ ev: NSEvent, in window: NSWindow? = nil) -> Bool {   // internal for tests
-        switch ev.type {
+    func handle(_ type: NSEvent.EventType, button: Int, at point: NSPoint, time: TimeInterval, in window: NSWindow?) -> Bool {
+        switch type {
         case .otherMouseDown:
-            guard ev.buttonNumber == 2, let t = target(at: ev, in: window ?? ev.window) else { return false }
+            guard button == 2, let t = target(at: point, in: window) else { return false }
             stopGlide()
             target = t
-            last = ev.locationInWindow
+            last = point
             samples = []
             NSCursor.closedHand.push()
             return true
         case .otherMouseDragged:
             guard target != nil else { return false }
-            let p = ev.locationInWindow
+            let p = point
             let dx = p.x - last.x, dy = p.y - last.y
             last = p
-            samples.append((ev.timestamp, dx, dy))
-            samples.removeAll { ev.timestamp - $0.t > 0.08 }
+            samples.append((time, dx, dy))
+            samples.removeAll { time - $0.t > 0.08 }
             move(dx: dx, dy: dy)
             return true
         case .otherMouseUp:
             guard target != nil else { return false }
             NSCursor.pop()
             // Only a move in the last moments before letting go flicks: stopping first, then releasing, doesn't.
-            if let first = samples.first, ev.timestamp - first.t < 0.08 {
-                let dt = max(ev.timestamp - first.t, 1.0 / 120)
+            if let first = samples.first, time - first.t < 0.08 {
+                let dt = max(time - first.t, 1.0 / 120)
                 velocity = CGVector(dx: samples.reduce(0) { $0 + $1.dx } / dt, dy: samples.reduce(0) { $0 + $1.dy } / dt)
                 if hypot(velocity.dx, velocity.dy) > 300 { startGlide(); return true }
             }
@@ -74,10 +80,9 @@ final class DragScroll {
 
     /// The innermost list under the pointer that has something to scroll (a list in a page that fits whole
     /// leaves it to the page).
-    // The window is passed in by tests: a window never shown on a headless CI runner has no number, so ev.window is nil.
-    private func target(at ev: NSEvent, in window: NSWindow?) -> Target? {
+    private func target(at point: NSPoint, in window: NSWindow?) -> Target? {
         guard let content = window?.contentView, let frame = content.superview else { return nil }
-        var view = content.hitTest(frame.convert(ev.locationInWindow, from: nil))
+        var view = content.hitTest(frame.convert(point, from: nil))
         while let v = view {
             if let custom = v as? DragScrollable { return .custom(custom) }
             if let scroll = v as? NSScrollView, Self.canScroll(scroll) { return .scroll(scroll) }
