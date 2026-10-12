@@ -289,7 +289,10 @@ enum DSD {
                 offset += Int64(blocks * block * ch)   // a part read is read again next time
                 for c in 0..<ch {
                     out[c].reserveCapacity(blocks * block)
-                    for b in 0..<blocks { out[c] += raw[(b * ch + c) * block..<(b * ch + c + 1) * block] }
+                    for b in 0..<blocks {
+                        let start: Int = (b * ch + c) * block
+                        out[c] += raw[start..<(start + block)]
+                    }
                 }
             } else {
                 let frames = got / ch
