@@ -417,7 +417,8 @@ final class CollectionDBTests: XCTestCase {
             let r = try f()
             let ms = Date().timeIntervalSince(t) * 1000
             NSLog("library: %@ %.1f ms", name, ms)
-            XCTAssertLessThan(ms, 150, name)   // debug build; release is several times faster
+            // Debug build; release is several times faster. Shared CI runners are slower and noisier than a Mac.
+            XCTAssertLessThan(ms, ProcessInfo.processInfo.environment["CI"] == nil ? 150 : 400, name)
             return r
         }
         let artists = try timed("artists") { try d.artists(LibraryFilter()) }

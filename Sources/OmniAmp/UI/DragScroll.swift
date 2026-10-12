@@ -35,10 +35,10 @@ final class DragScroll {
     }
 
     @discardableResult
-    func handle(_ ev: NSEvent) -> Bool {   // internal for tests
+    func handle(_ ev: NSEvent, in window: NSWindow? = nil) -> Bool {   // internal for tests
         switch ev.type {
         case .otherMouseDown:
-            guard ev.buttonNumber == 2, let t = target(at: ev) else { return false }
+            guard ev.buttonNumber == 2, let t = target(at: ev, in: window ?? ev.window) else { return false }
             stopGlide()
             target = t
             last = ev.locationInWindow
@@ -74,8 +74,9 @@ final class DragScroll {
 
     /// The innermost list under the pointer that has something to scroll (a list in a page that fits whole
     /// leaves it to the page).
-    private func target(at ev: NSEvent) -> Target? {
-        guard let content = ev.window?.contentView, let frame = content.superview else { return nil }
+    // The window is passed in by tests: a window never shown on a headless CI runner has no number, so ev.window is nil.
+    private func target(at ev: NSEvent, in window: NSWindow?) -> Target? {
+        guard let content = window?.contentView, let frame = content.superview else { return nil }
         var view = content.hitTest(frame.convert(ev.locationInWindow, from: nil))
         while let v = view {
             if let custom = v as? DragScrollable { return .custom(custom) }

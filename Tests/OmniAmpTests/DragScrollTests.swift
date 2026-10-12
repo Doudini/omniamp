@@ -35,36 +35,39 @@ final class DragScrollTests: XCTestCase {
         return NSEvent(cgEvent: cg)!
     }
 
+    @discardableResult
+    private func handle(_ e: NSEvent) -> Bool { drag.handle(e, in: window) }
+
     private var top: CGFloat { scroll.contentView.bounds.origin.y }
 
     func testContentFollowsThePointer() {
-        XCTAssertTrue(drag.handle(event(.otherMouseDown, y: 100, at: 1)), "swallowed: the list doesn't see it")
-        XCTAssertTrue(drag.handle(event(.otherMouseDragged, y: 180, at: 1.1)))
+        XCTAssertTrue(handle(event(.otherMouseDown, y: 100, at: 1)), "swallowed: the list doesn't see it")
+        XCTAssertTrue(handle(event(.otherMouseDragged, y: 180, at: 1.1)))
         XCTAssertEqual(top, 80, accuracy: 0.5, "pointer up 80 pt: the content moved up with it")
-        drag.handle(event(.otherMouseDragged, y: 150, at: 1.2))
+        handle(event(.otherMouseDragged, y: 150, at: 1.2))
         XCTAssertEqual(top, 50, accuracy: 0.5, "and back down")
-        drag.handle(event(.otherMouseDragged, y: -900, at: 1.3))
+        handle(event(.otherMouseDragged, y: -900, at: 1.3))
         XCTAssertEqual(top, 0, accuracy: 0.5, "stops at the top")
         // Released well after the last move: no flick.
-        XCTAssertTrue(drag.handle(event(.otherMouseUp, y: -900, at: 2)))
-        XCTAssertFalse(drag.handle(event(.otherMouseDragged, y: 0, at: 2.1)), "over: drags are the app's again")
+        XCTAssertTrue(handle(event(.otherMouseUp, y: -900, at: 2)))
+        XCTAssertFalse(handle(event(.otherMouseDragged, y: 0, at: 2.1)), "over: drags are the app's again")
     }
 
     func testOtherButtonsAndPlacesWithNothingToScrollAreLeftAlone() {
-        XCTAssertFalse(drag.handle(event(.otherMouseDown, y: 100, at: 1, button: 3)), "only the middle button")
+        XCTAssertFalse(handle(event(.otherMouseDown, y: 100, at: 1, button: 3)), "only the middle button")
         scroll.documentView?.frame.size.height = 200
-        XCTAssertFalse(drag.handle(event(.otherMouseDown, y: 100, at: 1)), "everything fits: a middle click stays a click")
+        XCTAssertFalse(handle(event(.otherMouseDown, y: 100, at: 1)), "everything fits: a middle click stays a click")
     }
 
     func testAFlickGlidesOnAndAClickStopsIt() async throws {
-        drag.handle(event(.otherMouseDown, y: 100, at: 1))
-        drag.handle(event(.otherMouseDragged, y: 120, at: 1.02))
-        drag.handle(event(.otherMouseDragged, y: 160, at: 1.04))
-        drag.handle(event(.otherMouseUp, y: 160, at: 1.05))
+        handle(event(.otherMouseDown, y: 100, at: 1))
+        handle(event(.otherMouseDragged, y: 120, at: 1.02))
+        handle(event(.otherMouseDragged, y: 160, at: 1.04))
+        handle(event(.otherMouseUp, y: 160, at: 1.05))
         let released = top
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertGreaterThan(top, released + 20, "it kept going after letting go")
-        XCTAssertFalse(drag.handle(event(.leftMouseDown, y: 100, at: 2, button: 0)), "the click itself goes on")
+        XCTAssertFalse(handle(event(.leftMouseDown, y: 100, at: 2, button: 0)), "the click itself goes on")
         let stopped = top
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(top, stopped, "and the glide stopped")
