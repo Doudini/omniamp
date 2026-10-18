@@ -1304,6 +1304,12 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
 
     private var infoSheet: FindInfoSheet?
 
+    /// The selected album's Wikipedia article (found through MusicBrainz), else Wikipedia's search for it.
+    @objc private func albumWikipedia() {
+        guard let a = selectedAlbum else { return }
+        Task { NSWorkspace.shared.open(await MetadataLookup.shared.albumWikipedia(releaseGroup: nil, artist: a.artist, title: a.title)) }
+    }
+
     /// Look the selected release up online; write what's chosen into its files and folder.
     @objc private func findInfo() {
         guard let a = selectedAlbum, let db, let w = window, infoSheet == nil else { return }
@@ -1459,7 +1465,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         menu.addItem(addToPlaylistItem())
         add("Replace Playlist and Play", #selector(replaceAndPlay))
         menu.addItem(.separator())
-        if t === albumTable, selectedAlbums.count == 1 { add("Find Missing Info…", #selector(findInfo)) }
+        if t === albumTable, selectedAlbums.count == 1 {
+            add("Find Missing Info…", #selector(findInfo))
+            if selectedAlbum?.kind != .show { add("Wikipedia ↗", #selector(albumWikipedia)) }
+        }
         if t === trackTable, trackTable.selectedRowIndexes.count == 1 { add("Show All Versions", #selector(showVersions)) }
         add("Show in Finder", #selector(showInFinder))
     }

@@ -314,6 +314,60 @@ final class MetadataLookup: @unchecked Sendable {
         return (nil, false)
     }
 
+    // MARK: Links out (looked up when asked for, not kept)
+
+    /// The user's languages, then English.
+    private static var languages: [String] {
+        Array(NSOrderedSet(array: Locale.preferredLanguages.compactMap { $0.split(separator: "-").first.map(String.init) } + ["en"]))
+            .compactMap { $0 as? String }
+    }
+
+    /// An entity's Wikipedia article from MusicBrainz's url relations: a direct Wikipedia link, else Wikidata's
+    /// sitelink in the user's language (else English).
+    private func wikipedia(relations: [[String: Any]]) async -> URL? {
+        func resource(_ type: String) -> String? {
+            relations.first { ($0["type"] as? String) == type }.flatMap { ($0["url"] as? [String: Any])?["resource"] as? String }
+        }
+        if let q = resource("wikidata")?.components(separatedBy: "/").last,
+           let e = await get(URL(string: "https://www.wikidata.org/wiki/Special:EntityData/\(q).json")!) as? [String: Any],
+           let entity = (e["entities"] as? [String: Any])?.values.first as? [String: Any] {
+            let links = entity["sitelinks"] as? [String: Any] ?? [:]
+            for lang in Self.languages {
+                if let url = (links["\(lang)wiki"] as? [String: Any])?["url"] as? String { return URL(string: url) }
+            }
+        }
+        return resource("wikipedia").flatMap(URL.init(string:))
+    }
+
+    /// An album's Wikipedia article: by its MusicBrainz release group, or looked up by artist and title. Without
+    /// one, Wikipedia's search for it (so the menu item always leads somewhere).
+    func albumWikipedia(releaseGroup: String?, artist: String, title: String) async -> URL {
+        var id = releaseGroup
+        if id == nil, let json = await get(Self.url("https://musicbrainz.org/ws/2/release-group/", [
+            "query": "releasegroup:\(Self.lucene(title)) AND artist:\(Self.lucene(artist))", "fmt": "json", "limit": "1"]),
+                                           musicBrainz: true) as? [String: Any],
+           let g = (json["release-groups"] as? [[String: Any]])?.first, ((g["score"] as? Int) ?? 0) >= 90 {
+            id = g["id"] as? String
+        }
+        if let id, let g = await get(URL(string: "https://musicbrainz.org/ws/2/release-group/\(id)?inc=url-rels&fmt=json")!,
+                                     musicBrainz: true) as? [String: Any],
+           let url = await wikipedia(relations: (g["relations"] as? [[String: Any]]) ?? []) {
+            return url
+        }
+        return Self.url("https://\(Self.languages[0]).wikipedia.org/w/index.php", ["search": "\(title) \(artist) album"])
+    }
+
+    /// The artist's subreddit when MusicBrainz lists one, else Reddit's community search for the name (a guessed
+    /// r/name is too often someone else).
+    func subreddit(artist: String, mbid: String?) async -> URL {
+        if let mbid, let a = await get(URL(string: "https://musicbrainz.org/ws/2/artist/\(mbid)?inc=url-rels&fmt=json")!,
+                                       musicBrainz: true) as? [String: Any] {
+            let urls = ((a["relations"] as? [[String: Any]]) ?? []).compactMap { ($0["url"] as? [String: Any])?["resource"] as? String }
+            if let r = urls.first(where: { $0.contains("reddit.com/r/") }), let url = URL(string: r) { return url }
+        }
+        return Self.url("https://www.reddit.com/search/", ["q": artist, "type": "communities"])
+    }
+
     static func isMusic(_ description: String?) -> Bool {
         guard let d = description?.lowercased() else { return false }
         return ["band", "singer", "musician", "rapper", "songwriter", "group", "duo", "composer", "guitarist", "drummer", "dj", "producer",

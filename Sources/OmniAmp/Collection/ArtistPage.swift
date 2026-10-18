@@ -329,6 +329,30 @@ final class ArtistPage: DashPage {
         if let u = info?.pageURL { NSWorkspace.shared.open(u) }
     }
 
+    @objc private func openReddit() {
+        let name = dash.name, mbid = discography?.mbid
+        Task { NSWorkspace.shared.open(await MetadataLookup.shared.subreddit(artist: name, mbid: mbid)) }
+    }
+
+    /// A discography release: open it here when you have it, or read about it on Wikipedia or MusicBrainz.
+    private func releaseMenu(_ r: ArtistDiscography.Release, owned: LibraryAlbum?, in view: NSView) {
+        let menu = NSMenu()
+        func item(_ title: String, _ run: @escaping () -> Void) {
+            let i = NSMenuItem(title: title, action: #selector(MenuAction.run(_:)), keyEquivalent: "")
+            let target = MenuAction(run)
+            i.target = target
+            i.representedObject = target   // keeps it alive with the menu
+            menu.addItem(i)
+        }
+        if let owned { item("Open in Library") { [weak self] in self?.onRelease?(owned) } }
+        let artist = dash.name
+        item("Wikipedia ↗") {
+            Task { NSWorkspace.shared.open(await MetadataLookup.shared.albumWikipedia(releaseGroup: r.id, artist: artist, title: r.title)) }
+        }
+        item("MusicBrainz ↗") { NSWorkspace.shared.open(r.url) }
+        if let e = NSApp.currentEvent { NSMenu.popUpContextMenu(menu, with: e, for: view) }
+    }
+
     // MARK: Discography and bootlegs (MusicBrainz)
 
     private var discography: ArtistDiscography?
@@ -380,8 +404,9 @@ final class ArtistPage: DashPage {
             let kind = r.isLive ? "Live" : r.isCompilation ? "Compilation" : r.type
             return .init(lead: r.year.map(String.init) ?? "–", main: r.title, detail: kind + (o == nil ? " · missing" : ""),
                          color: o.map { Theme.kind($0.kind) } ?? Dash.text3,
-                         tip: o == nil ? "Not in your library · click to see it on MusicBrainz" : "In your library · click to open it",
-                         action: { [weak self] in if let o { self?.onRelease?(o) } else { open(r.url) } }, hollow: o == nil)
+                         tip: o == nil ? "Not in your library · click for Wikipedia or MusicBrainz" : "In your library · click to open it or read about it",
+                         action: { [weak self, weak official] in if let self, let official { self.releaseMenu(r, owned: o, in: official) } },
+                         hollow: o == nil)
         }
         official.empty = "MusicBrainz lists no albums for them."
         let have = listed.filter { $0.owned != nil }.count
@@ -400,7 +425,8 @@ final class ArtistPage: DashPage {
         let boots = RowListChart()
         boots.rows = shown.map { r in
             .init(lead: r.showDate ?? r.year.map(String.init) ?? "–", main: ArtistDiscography.withoutDate(r.title, r.showDate), detail: "",
-                  color: Dash.text3, tip: "Not in your library · click to see it on MusicBrainz", action: { open(r.url) }, hollow: true)
+                  color: Dash.text3, tip: "Not in your library · click for Wikipedia or MusicBrainz",
+                  action: { [weak self, weak boots] in if let self, let boots { self.releaseMenu(r, owned: nil, in: boots) } }, hollow: true)
         }
         if missing.count > shown.count {
             boots.rows.append(.init(lead: "", main: "All \(d.bootlegTotal.formatted()) on MusicBrainz ↗", detail: "\((missing.count - shown.count).formatted()) more you don't have",
@@ -633,6 +659,7 @@ final class ArtistPage: DashPage {
         let wiki = button("", "Wikipedia ↗", #selector(openWikipedia), tip: "Read more on Wikipedia")
         wikiButton = wiki
         actionRow.addArrangedSubview(wiki)
+        actionRow.addArrangedSubview(button("", "Reddit ↗", #selector(openReddit), tip: "Talk about them with other listeners on Reddit"))
         let text = NSStackView(views: [top] + lines + [about, bio, actionRow])
         text.orientation = .vertical
         text.alignment = .leading
