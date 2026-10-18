@@ -897,7 +897,7 @@ final class AlbumPanelView: NSView {
     @objc private func showArtist() { if let a = album { onArtist?(a.artistKey) } }
     @objc private func openWikipedia() {
         guard let a = album else { return }
-        Task { NSWorkspace.shared.open(await MetadataLookup.shared.albumWikipedia(releaseGroup: nil, artist: a.artist, title: a.title)) }
+        LookedUpLinks.albumWikipedia(releaseGroup: nil, artist: a.artist, title: a.title) { [weak self] busy in self?.wiki.isEnabled = !busy }
     }
 }
 

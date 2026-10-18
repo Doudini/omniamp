@@ -1309,7 +1309,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     /// The selected album's Wikipedia article (found through MusicBrainz), else Wikipedia's search for it.
     @objc private func albumWikipedia() {
         guard let a = selectedAlbum else { return }
-        Task { NSWorkspace.shared.open(await MetadataLookup.shared.albumWikipedia(releaseGroup: nil, artist: a.artist, title: a.title)) }
+        let looking = "“\(a.title)”: looking it up on Wikipedia…"
+        LookedUpLinks.albumWikipedia(releaseGroup: nil, artist: a.artist, title: a.title) { [weak self] busy in
+            guard let self else { return }
+            if busy { self.status.stringValue = looking } else if self.status.stringValue == looking { self.status.stringValue = "" }
+        }
     }
 
     private var tagSheet: TagEditorSheet?

@@ -339,9 +339,9 @@ final class MetadataLookup: @unchecked Sendable {
         return resource("wikipedia").flatMap(URL.init(string:))
     }
 
-    /// An album's Wikipedia article: by its MusicBrainz release group, or looked up by artist and title. Without
-    /// one, Wikipedia's search for it (so the menu item always leads somewhere).
-    func albumWikipedia(releaseGroup: String?, artist: String, title: String) async -> URL {
+    /// An album's Wikipedia article: by its MusicBrainz release group, or looked up by artist and title. nil when
+    /// there's none (or MusicBrainz didn't answer): LookedUpLinks then opens `wikipediaSearch`.
+    func albumWikipedia(releaseGroup: String?, artist: String, title: String) async -> URL? {
         var id = releaseGroup
         if id == nil, let json = await get(Self.url("https://musicbrainz.org/ws/2/release-group/", [
             "query": "releasegroup:\(Self.lucene(title)) AND artist:\(Self.lucene(artist))", "fmt": "json", "limit": "1"]),
@@ -354,19 +354,24 @@ final class MetadataLookup: @unchecked Sendable {
            let url = await wikipedia(relations: (g["relations"] as? [[String: Any]]) ?? []) {
             return url
         }
-        return Self.url("https://\(Self.languages[0]).wikipedia.org/w/index.php", ["search": "\(title) \(artist) album"])
+        return nil
     }
 
-    /// The artist's subreddit when MusicBrainz lists one, else Reddit's community search for the name (a guessed
-    /// r/name is too often someone else).
-    func subreddit(artist: String, mbid: String?) async -> URL {
-        if let mbid, let a = await get(URL(string: "https://musicbrainz.org/ws/2/artist/\(mbid)?inc=url-rels&fmt=json")!,
-                                       musicBrainz: true) as? [String: Any] {
-            let urls = ((a["relations"] as? [[String: Any]]) ?? []).compactMap { ($0["url"] as? [String: Any])?["resource"] as? String }
-            if let r = urls.first(where: { $0.contains("reddit.com/r/") }), let url = URL(string: r) { return url }
-        }
-        return Self.url("https://www.reddit.com/search/", ["q": artist, "type": "communities"])
+    /// Wikipedia's search for an album, in the user's language.
+    static func wikipediaSearch(artist: String, title: String) -> URL {
+        url("https://\(languages[0]).wikipedia.org/w/index.php", ["search": "\(title) \(artist) album"])
     }
+
+    /// The artist's subreddit when MusicBrainz lists one; nil otherwise (LookedUpLinks then opens `redditSearch`).
+    func subreddit(mbid: String) async -> URL? {
+        guard let a = await get(URL(string: "https://musicbrainz.org/ws/2/artist/\(mbid)?inc=url-rels&fmt=json")!,
+                                musicBrainz: true) as? [String: Any] else { return nil }
+        let urls = ((a["relations"] as? [[String: Any]]) ?? []).compactMap { ($0["url"] as? [String: Any])?["resource"] as? String }
+        return urls.first { $0.contains("reddit.com/r/") }.flatMap(URL.init(string:))
+    }
+
+    /// Reddit's community search for the name (a guessed r/name is too often someone else's).
+    static func redditSearch(artist: String) -> URL { url("https://www.reddit.com/search/", ["q": artist, "type": "communities"]) }
 
     static func isMusic(_ description: String?) -> Bool {
         guard let d = description?.lowercased() else { return false }

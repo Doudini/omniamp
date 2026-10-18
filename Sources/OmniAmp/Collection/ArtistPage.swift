@@ -276,6 +276,7 @@ final class ArtistPage: DashPage {
     private let bio = NSTextField(wrappingLabelWithString: "")
     private let about = NSTextField(labelWithString: "")
     private var wikiButton: Pill?
+    private var redditButton: Pill?
 
     /// Looked up when the page opens (never in the background), then kept; the photo is kept on disk.
     private func loadInfo(key: String, name: String, cached: CollectionDB.CachedInfo, gen: Int) {
@@ -355,7 +356,7 @@ final class ArtistPage: DashPage {
 
     @objc private func openReddit() {
         let name = dash.name, mbid = discography?.mbid
-        Task { NSWorkspace.shared.open(await MetadataLookup.shared.subreddit(artist: name, mbid: mbid)) }
+        LookedUpLinks.subreddit(artist: name, mbid: mbid) { [weak self] busy in self?.redditButton?.isEnabled = !busy }
     }
 
     /// A discography release: open it here when you have it, or read about it on Wikipedia or MusicBrainz.
@@ -371,7 +372,7 @@ final class ArtistPage: DashPage {
         if let owned { item("Open in Library") { [weak self] in self?.onRelease?(owned) } }
         let artist = dash.name
         item("Wikipedia ↗") {
-            Task { NSWorkspace.shared.open(await MetadataLookup.shared.albumWikipedia(releaseGroup: r.id, artist: artist, title: r.title)) }
+            LookedUpLinks.albumWikipedia(releaseGroup: r.id, artist: artist, title: r.title)
         }
         item("MusicBrainz ↗") { NSWorkspace.shared.open(r.url) }
         if let e = NSApp.currentEvent { NSMenu.popUpContextMenu(menu, with: e, for: view) }
@@ -683,7 +684,9 @@ final class ArtistPage: DashPage {
         let wiki = button("", "Wikipedia ↗", #selector(openWikipedia), tip: "Read more on Wikipedia")
         wikiButton = wiki
         actionRow.addArrangedSubview(wiki)
-        actionRow.addArrangedSubview(button("", "Reddit ↗", #selector(openReddit), tip: "Talk about them with other listeners on Reddit"))
+        let reddit = button("", "Reddit ↗", #selector(openReddit), tip: "Talk about them with other listeners on Reddit")
+        redditButton = reddit
+        actionRow.addArrangedSubview(reddit)
         let text = NSStackView(views: [top] + lines + [about, bio, actionRow])
         text.orientation = .vertical
         text.alignment = .leading
