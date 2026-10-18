@@ -1310,6 +1310,22 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         Task { NSWorkspace.shared.open(await MetadataLookup.shared.albumWikipedia(releaseGroup: nil, artist: a.artist, title: a.title)) }
     }
 
+    private var tagSheet: TagEditorSheet?
+
+    /// Edit the selected release's tags and cover by hand.
+    @objc private func editTags() {
+        guard let a = selectedAlbum, let db, let w = window, tagSheet == nil else { return }
+        let sheet = TagEditorSheet(album: a, tracks: (try? db.tracks(album: a.key)) ?? [], genre: try? db.genre(album: a.key))
+        sheet.onDone = { [weak self, weak sheet] message in
+            guard let self, let sw = sheet?.window else { return }
+            w.endSheet(sw)
+            self.tagSheet = nil
+            if let message { self.status.stringValue = "“\(a.title)”: \(message)" }
+        }
+        tagSheet = sheet
+        w.beginSheet(sheet.window!)
+    }
+
     /// Look the selected release up online; write what's chosen into its files and folder.
     @objc private func findInfo() {
         guard let a = selectedAlbum, let db, let w = window, infoSheet == nil else { return }
@@ -1467,6 +1483,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         menu.addItem(.separator())
         if t === albumTable, selectedAlbums.count == 1 {
             add("Find Missing Info…", #selector(findInfo))
+            add("Edit Tags…", #selector(editTags))
             if selectedAlbum?.kind != .show { add("Wikipedia ↗", #selector(albumWikipedia)) }
         }
         if t === trackTable, trackTable.selectedRowIndexes.count == 1 { add("Show All Versions", #selector(showVersions)) }

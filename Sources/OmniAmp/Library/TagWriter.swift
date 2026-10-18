@@ -10,8 +10,16 @@ struct BasicTags: Equatable, Sendable {
     /// Per track (downloads that come untagged): the song's title and its number ("3" or "3/12").
     var title: String?
     var track: String?
+    /// The track's own artist (replaces it, unlike `artist`) and its disc number ("2" or "2/3").
+    var trackArtist: String?
+    var disc: String?
+    /// A front cover (JPEG or PNG bytes) embedded in place of every picture the file has.
+    var cover: Data?
 
-    var isEmpty: Bool { [artist, album, year, genre, title, track].allSatisfy { ($0 ?? "").isEmpty } }
+    var isEmpty: Bool { [artist, album, year, genre, title, track, trackArtist, disc].allSatisfy { ($0 ?? "").isEmpty } && cover == nil }
+
+    /// "image/png" or "image/jpeg" by the bytes.
+    static func mime(_ image: Data) -> String { image.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg" }
 }
 
 /// Writes album artist, album, year and genre (and a track's title and number) into MP3 (ID3v2.3/2.4) and FLAC files. Every other tag,
@@ -174,6 +182,15 @@ enum TagWriter {
     /// A text frame in the tag's version: UTF-16 with BOM for v2.3, UTF-8 for v2.4.
     private static func textFrame(_ id: String, _ text: String, version: UInt8) -> [UInt8] {
         let body: [UInt8] = version == 4 ? [3] + Array(text.utf8) : [1, 0xFF, 0xFE] + text.utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] }
+        return frame(id, body, version: version)
+    }
+
+    /// A front cover: Latin-1 MIME type, picture type 3, an empty description, the image.
+    private static func pictureFrame(_ image: Data, version: UInt8) -> [UInt8] {
+        frame("APIC", [0] + Array(BasicTags.mime(image).utf8) + [0, 3, 0] + [UInt8](image), version: version)
+    }
+
+    private static func frame(_ id: String, _ body: [UInt8], version: UInt8) -> [UInt8] {
         let n = body.count
         let size = version == 4 ? synchsafe(n) : [UInt8(n >> 24 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n & 0xFF)]
         return Array(id.utf8) + size + [0, 0] + body
@@ -234,6 +251,13 @@ enum TagWriter {
         if let g = tags.genre, !g.isEmpty { replace.insert("TCON"); add.append(textFrame("TCON", g, version: version)) }
         if let t = tags.title, !t.isEmpty { replace.insert("TIT2"); add.append(textFrame("TIT2", t, version: version)) }
         if let n = tags.track, !n.isEmpty { replace.insert("TRCK"); add.append(textFrame("TRCK", n, version: version)) }
+        if let a = tags.trackArtist, !a.isEmpty {
+            // Its own artist wins over the album artist's "only where it has none".
+            add.removeAll { $0.starts(with: Array("TPE1".utf8)) }
+            replace.insert("TPE1"); add.append(textFrame("TPE1", a, version: version))
+        }
+        if let d = tags.disc, !d.isEmpty { replace.insert("TPOS"); add.append(textFrame("TPOS", d, version: version)) }
+        if let c = tags.cover { replace.insert("APIC"); add.append(pictureFrame(c, version: version)) }
         let body = add.flatMap { $0 } + frames.filter { !replace.contains($0.id) }.flatMap(\.raw)
         func tag(padding: Int) -> [UInt8] {
             Array("ID3".utf8) + [version, 0, 0] + synchsafe(body.count + padding) + body + [UInt8](repeating: 0, count: padding)
@@ -306,16 +330,29 @@ enum TagWriter {
         if let g = tags.genre, !g.isEmpty { drop.insert("GENRE"); add.append("GENRE=\(g)") }
         if let t = tags.title, !t.isEmpty { drop.insert("TITLE"); add.append("TITLE=\(t)") }
         if let n = tags.track, !n.isEmpty { drop.insert("TRACKNUMBER"); add.append("TRACKNUMBER=\(n)") }
+        if let a = tags.trackArtist, !a.isEmpty {
+            add.removeAll { $0.hasPrefix("ARTIST=") }
+            drop.insert("ARTIST"); add.append("ARTIST=\(a)")
+        }
+        if let d = tags.disc, !d.isEmpty { drop.insert("DISCNUMBER"); add.append("DISCNUMBER=\(d)") }
         let list = comments.filter { !drop.contains(key($0)) } + add
         func le(_ n: Int) -> [UInt8] { [UInt8(n & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 24 & 0xFF)] }
         var comment = le(vendor.count) + vendor + le(list.count)
         for c in list { comment += le(c.utf8.count) + Array(c.utf8) }
 
         // Blocks in their order, the comments where they were (or after the stream info), padding dropped.
+        // A new cover replaces every picture block and goes after the comments.
         var out: [(UInt8, [UInt8])] = []
-        for b in blocks where b.type != 1 {
+        for b in blocks where b.type != 1 && !(tags.cover != nil && b.type == 6) {
             out.append(b.type == 4 ? (4, comment) : (b.type, b.body))
             if b.type == 0, !blocks.contains(where: { $0.type == 4 }) { out.append((4, comment)) }
+        }
+        if let c = tags.cover {
+            func be(_ n: Int) -> [UInt8] { [UInt8(n >> 24 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n & 0xFF)] }
+            let mime = Array(BasicTags.mime(c).utf8)
+            let picture = be(3) + be(mime.count) + mime + be(0) + be(0) + be(0) + be(0) + be(0) + be(c.count) + [UInt8](c)
+            let at = (out.firstIndex { $0.0 == 4 } ?? 0) + 1
+            out.insert((6, picture), at: at)
         }
         let maxBlock = (1 << 24) - 1
         guard out.allSatisfy({ $0.1.count <= maxBlock }) else { return .failed("tag too large") }

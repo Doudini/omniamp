@@ -187,6 +187,28 @@ final class TagWriterTests: XCTestCase {
         XCTAssertNil(bytes.range(of: utf16("1994-05")))
     }
 
+    /// A tiny PNG: header bytes and padding, enough to be told apart.
+    private let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] + [UInt8](repeating: 7, count: 2000))
+
+    func testMP3TrackArtistDiscAndCover() throws {
+        let url = try mp3(frame("TIT2", "Plea") + frame("TPE1", "Guest"), padding: 64)
+        let t = BasicTags(artist: "Shannon Wright", trackArtist: "Someone Else", disc: "2/2", cover: png)
+        XCTAssertEqual(TagWriter.write(t, to: url.path, backupDir: nil), .written)
+        let i = read(url)
+        XCTAssertEqual(i.artist, "Someone Else", "the track's own artist replaces it")
+        XCTAssertEqual(i.albumArtist, "Shannon Wright")
+        XCTAssertEqual(i.discNumber, 2)
+        XCTAssertEqual(i.title, "Plea")
+        XCTAssertEqual(DetailsReader.read(path: url.path, folderArt: false).artwork, png)
+        // A second cover replaces the first.
+        let other = Data([0xFF, 0xD8] + [UInt8](repeating: 9, count: 1500))
+        XCTAssertEqual(TagWriter.write(BasicTags(cover: other), to: url.path, backupDir: nil), .written)
+        let bytes = try Data(contentsOf: url)
+        XCTAssertEqual(DetailsReader.read(path: url.path, folderArt: false).artwork, other)
+        XCTAssertNil(bytes.range(of: png.prefix(8)), "old picture gone")
+        try audioIntact(url)
+    }
+
     // MARK: FLAC
 
     private func flac() throws -> URL {
@@ -240,6 +262,19 @@ final class TagWriterTests: XCTestCase {
         XCTAssertEqual(try flacAudio(url), audioBefore)
         let decoded = try AVAudioFile(forReading: url)
         XCTAssertEqual(decoded.length, 44100)
+    }
+
+    func testFLACTrackArtistDiscAndCover() throws {
+        let url = try flac()
+        let audioBefore = try flacAudio(url)
+        XCTAssertEqual(TagWriter.write(BasicTags(title: "Plea", trackArtist: "Guest", disc: "1", cover: png), to: url.path, backupDir: nil), .written)
+        let i = read(url)
+        XCTAssertEqual(i.artist, "Guest")
+        XCTAssertEqual(i.title, "Plea")
+        XCTAssertEqual(i.discNumber, 1)
+        XCTAssertEqual(DetailsReader.read(path: url.path, folderArt: false).artwork, png)
+        XCTAssertEqual(try flacAudio(url), audioBefore)
+        XCTAssertEqual(try AVAudioFile(forReading: url).length, 44100)
     }
 
     /// The test FLAC with its metadata replaced: STREAMINFO, then `blocks` (type, body), then the audio.
