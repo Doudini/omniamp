@@ -378,6 +378,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             self.controller.loadPlaylist(url)
             self.status.stringValue = "Loaded “\(SavedPlaylists.name(url))” into the player."
         }
+        playlistPage.onEditTags = { [weak self] in self?.editTags(of: $0) }
         playlistPage.onShowAlbum = { [weak self] t in
             self?.openRelease(artist: t.albumKey.components(separatedBy: "\u{1}").first ?? Keys.artist(t.artist), album: t.albumKey)
         }

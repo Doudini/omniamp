@@ -11,6 +11,7 @@ final class PlaylistPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     /// Replace the player's playlist with this one and play it.
     var onLoad: ((URL) -> Void)?
     var onShowAlbum: ((LibraryTrack) -> Void)?
+    var onEditTags: (([LibraryTrack]) -> Void)?
     var onRename: (() -> Void)?
     var onTrash: (() -> Void)?
     /// "Add to Playlist ▸ New Playlist…" on rows: the window makes it.
@@ -371,6 +372,7 @@ final class PlaylistPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         if !doc.readOnly { add("Remove from Playlist", #selector(removeSelected)) }
         menu.addItem(.separator())
         if table.selectedRowIndexes.count == 1, rows[row].library != nil { add("Show Album", #selector(showAlbum)) }
+        if rows[row].library != nil { add("Edit Tags…", #selector(editTags)) }
         add("Show in Finder", #selector(showInFinder))
     }
 
@@ -379,6 +381,9 @@ final class PlaylistPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
     @objc private func newPlaylist() { onNewPlaylist?(selectedTracks) }
     @objc private func addToSaved(_ sender: NSMenuItem) {
         if let u = sender.representedObject as? URL { onAddToSaved?(selectedTracks, u) }
+    }
+    @objc private func editTags() {
+        onEditTags?(table.selectedRowIndexes.filter { $0 < rows.count }.compactMap { rows[$0].library })
     }
     @objc private func showAlbum() {
         let r = table.clickedRow >= 0 ? table.clickedRow : table.selectedRow
