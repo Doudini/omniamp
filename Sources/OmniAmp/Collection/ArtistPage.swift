@@ -88,7 +88,7 @@ final class CareerChart: StatsChart {
     override func layoutRegions() {
         regions = marks().map { a, c in
             let what = a.kind == .show ? [a.showDate, a.venue].compactMap { $0 }.joined(separator: " ") : "\(a.title)\(a.year.map { " (\($0))" } ?? "")"
-            return Region(rect: NSRect(x: c.x - 5, y: c.y - 5, width: 10, height: 10), tip: "\(what) · \(a.kind.title) · click to open",
+            return Region(rect: NSRect(x: c.x - 7, y: c.y - 7, width: 14, height: 14), tip: "\(what) · \(a.kind.title) · click to open",
                           action: onRelease.map { f in { f(a) } })
         }
         let most = months.map(\.plays).max() ?? 0
@@ -163,6 +163,13 @@ final class CareerChart: StatsChart {
         }
         Dash.border.setFill()
         NSRect(x: Self.labelW, y: bottom, width: bounds.width - Self.labelW - 6, height: 1).fill()
+        // What's under the mouse, written into the chart at once: a tooltip waits, and the card's own tooltip
+        // can win over a small mark.
+        if let h = hovered, h < regions.count {
+            let s = Self.sans(regions[h].tip, 11, Dash.text)
+            let w = s.size().width
+            s.draw(at: NSPoint(x: max(Self.labelW + 4, bounds.width - 10 - w), y: playsTop + 2))
+        }
     }
 }
 
@@ -653,7 +660,7 @@ final class ArtistPage: DashPage {
         career.months = d.months
         career.onRelease = { [weak self] in self?.onRelease?($0) }
         add(StatsPanel(d.releases.isEmpty ? "Your listening" : "Their releases and your listening", career,
-                       note: d.releases.isEmpty ? "plays per month" : "hover for details · click a release to open it"))
+                       note: d.releases.isEmpty ? "plays per month" : "click a release to open it"))
 
         let top15 = BarListChart()
         top15.bars = d.topSongs.map { .init(id: $0.titleKey, label: $0.title, value: Double($0.plays),
