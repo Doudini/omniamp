@@ -13,10 +13,12 @@ struct BasicTags: Equatable, Sendable {
     /// The track's own artist (replaces it, unlike `artist`) and its disc number ("2" or "2/3").
     var trackArtist: String?
     var disc: String?
+    /// A note on the track (ID3 comment without a description, Vorbis COMMENT).
+    var comment: String?
     /// A front cover (JPEG or PNG bytes) embedded in place of every picture the file has.
     var cover: Data?
 
-    var isEmpty: Bool { [artist, album, year, genre, title, track, trackArtist, disc].allSatisfy { ($0 ?? "").isEmpty } && cover == nil }
+    var isEmpty: Bool { [artist, album, year, genre, title, track, trackArtist, disc, comment].allSatisfy { ($0 ?? "").isEmpty } && cover == nil }
 
     /// "image/png" or "image/jpeg" by the bytes.
     static func mime(_ image: Data) -> String { image.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg" }
@@ -190,6 +192,29 @@ enum TagWriter {
         frame("APIC", [0] + Array(BasicTags.mime(image).utf8) + [0, 3, 0] + [UInt8](image), version: version)
     }
 
+    /// A comment with no description, in English, in the tag's text encoding.
+    private static func commentFrame(_ text: String, version: UInt8) -> [UInt8] {
+        let body: [UInt8] = version == 4 ? [3] + Array("eng".utf8) + [0] + Array(text.utf8)
+            : [1] + Array("eng".utf8) + [0xFF, 0xFE, 0, 0, 0xFF, 0xFE] + text.utf16.flatMap { [UInt8($0 & 0xFF), UInt8($0 >> 8)] }
+        return frame("COMM", body, version: version)
+    }
+
+    /// A COMM frame whose description is empty: the visible comment. Described ones (iTunNORM, …) are other data.
+    static func isPlainComment(_ raw: [UInt8]) -> Bool {
+        let b = Array(raw.dropFirst(10))
+        guard b.count >= 5 else { return false }
+        switch b[0] {
+        case 1:
+            // UTF-16: the empty description is just its terminator, or a byte-order mark and then the terminator.
+            guard b.count >= 6 else { return false }
+            if b[4] == 0, b[5] == 0 { return true }
+            let bom = (b[4] == 0xFF && b[5] == 0xFE) || (b[4] == 0xFE && b[5] == 0xFF)
+            return bom && b.count >= 8 && b[6] == 0 && b[7] == 0
+        case 2: return b.count >= 6 && b[4] == 0 && b[5] == 0
+        default: return b[4] == 0
+        }
+    }
+
     private static func frame(_ id: String, _ body: [UInt8], version: UInt8) -> [UInt8] {
         let n = body.count
         let size = version == 4 ? synchsafe(n) : [UInt8(n >> 24 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n & 0xFF)]
@@ -258,7 +283,10 @@ enum TagWriter {
         }
         if let d = tags.disc, !d.isEmpty { replace.insert("TPOS"); add.append(textFrame("TPOS", d, version: version)) }
         if let c = tags.cover { replace.insert("APIC"); add.append(pictureFrame(c, version: version)) }
-        let body = add.flatMap { $0 } + frames.filter { !replace.contains($0.id) }.flatMap(\.raw)
+        if let c = tags.comment, !c.isEmpty { add.append(commentFrame(c, version: version)) }
+        let replacesComment = !(tags.comment ?? "").isEmpty
+        let body = add.flatMap { $0 } + frames.filter { !replace.contains($0.id) && !(replacesComment && $0.id == "COMM" && isPlainComment($0.raw)) }
+            .flatMap(\.raw)
         func tag(padding: Int) -> [UInt8] {
             Array("ID3".utf8) + [version, 0, 0] + synchsafe(body.count + padding) + body + [UInt8](repeating: 0, count: padding)
         }
@@ -335,6 +363,7 @@ enum TagWriter {
             drop.insert("ARTIST"); add.append("ARTIST=\(a)")
         }
         if let d = tags.disc, !d.isEmpty { drop.insert("DISCNUMBER"); add.append("DISCNUMBER=\(d)") }
+        if let c = tags.comment, !c.isEmpty { drop.formUnion(["COMMENT", "DESCRIPTION"]); add.append("COMMENT=\(c)") }
         let list = comments.filter { !drop.contains(key($0)) } + add
         func le(_ n: Int) -> [UInt8] { [UInt8(n & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 24 & 0xFF)] }
         var comment = le(vendor.count) + vendor + le(list.count)

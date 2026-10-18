@@ -19,7 +19,9 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
     private let table = KeyTableView()
     private let scroll = NSScrollView()
     private let well = CoverWell()
-    private let artist = DashField(), albumField = DashField(), year = DashField(), genre = DashField()
+    private let artist = DashField(), albumField = DashField(), year = DashField(), genre = DashField(), comment = DashField()
+    /// The comment in the first file, once read (it isn't in the library's database).
+    private var initialComment = ""
     private let saveCover = DashCheck(checkboxWithTitle: "", target: nil, action: nil)
     private let status = NSTextField(labelWithString: "")
     private var applyButton: Pill!
@@ -48,6 +50,19 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
             guard let self, self.coverData == nil else { return }
             self.well.art.image = img
         }
+        // Off the main thread: the file may be on a slow share.
+        if let first = rows.first?.path {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let c = DetailsReader.read(path: first, folderArt: false).comment ?? ""
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, self.comment.stringValue.isEmpty else { return }
+                        self.initialComment = c
+                        self.comment.stringValue = c
+                    }
+                }
+            }
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -57,7 +72,9 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
 
     private func build() {
         let title = NSTextField(labelWithAttributedString: Dash.title("Edit tags"))
-        let what = Dash.label("\(album.artist) — \(album.title)", Dash.font(13, .medium), Dash.text)
+        // Some of a release's tracks: those are what's written, album fields included.
+        let subject = rows.count == 1 ? "\(rows[0].artist) — \(rows[0].title)" : "\(album.artist) — \(album.title)"
+        let what = Dash.label(subject, Dash.font(13, .medium), Dash.text)
         what.lineBreakMode = .byTruncatingTail
 
         for (id, width, flexible) in [("disc", 34.0, false), ("number", 34.0, false), ("title", 260.0, true), ("artist", 160.0, true)] {
@@ -83,7 +100,7 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
         form.rowSpacing = 6
         form.columnSpacing = 8
         for (name, field, now) in [("ALBUM ARTIST", artist, initial.artist), ("ALBUM", albumField, initial.album),
-                                   ("YEAR", year, initial.year), ("GENRE", genre, initial.genre)] {
+                                   ("YEAR", year, initial.year), ("GENRE", genre, initial.genre), ("COMMENT", comment, "")] {
             field.stringValue = now
             field.font = Dash.font(13)
             field.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
@@ -235,6 +252,7 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
         }
         var shared = BasicTags(artist: changed(artist, initial.artist), album: changed(albumField, initial.album),
                                year: changed(year, initial.year), genre: changed(genre, initial.genre))
+        shared.comment = changed(comment, initialComment)
         shared.cover = coverData
         var jobs: [(String, BasicTags)] = []
         for (r, was) in zip(rows, original) where r.editable {

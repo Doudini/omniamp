@@ -237,6 +237,7 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     var onAddToSaved: (([LibraryTrack], URL) -> Void)?
     var onNewPlaylist: (([LibraryTrack]) -> Void)?
     var onShowAlbum: ((TrackRow) -> Void)?
+    var onEditTags: (([LibraryTrack]) -> Void)?
     var onArtist: ((String) -> Void)?
     /// All recordings of a song: artist key, title key.
     var onVersions: ((String, String) -> Void)?
@@ -707,6 +708,7 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             add("Artist Page", #selector(artistPage))
             add("Show All Versions", #selector(versions))
         }
+        add("Edit Tags…", #selector(editTags))
         add("Show in Finder", #selector(showInFinder))
     }
 
@@ -720,6 +722,7 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
     @objc private func addToSaved(_ sender: NSMenuItem) { if let u = sender.representedObject as? URL { onAddToSaved?(selectedTracks, u) } }
     @objc private func newPlaylist() { onNewPlaylist?(selectedTracks) }
     @objc private func replaceSelected() { onReplace?(selectedTracks) }
+    @objc private func editTags() { onEditTags?(selectedTracks) }
     @objc private func showAlbum() { if let r = clicked { onShowAlbum?(r) } }
     @objc private func artistPage() { if let r = clicked { onArtist?(r.artistKey) } }
     @objc private func versions() { if let r = clicked { onVersions?(r.artistKey, Keys.title(r.track.title)) } }

@@ -363,6 +363,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         tracksPage.onAdd = { [weak self] list in self?.enqueue(list) }
         tracksPage.onReplace = { [weak self] list in self?.replace(with: list) }
+        tracksPage.onEditTags = { [weak self] in self?.editTags(of: $0) }
         tracksPage.onShowAlbum = { [weak self] r in self?.openRelease(artist: r.artistKey, album: r.track.albumKey) }
         tracksPage.onArtist = { [weak self] a in self?.push(.artist(a)) }
         tracksPage.onVersions = { [weak self] a, t in self?.showSong(artist: a, titleKey: t) }
@@ -1313,9 +1314,25 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
     private var tagSheet: TagEditorSheet?
 
     /// Edit the selected release's tags and cover by hand.
-    @objc private func editTags() {
-        guard let a = selectedAlbum, let db, let w = window, tagSheet == nil else { return }
-        let sheet = TagEditorSheet(album: a, tracks: (try? db.tracks(album: a.key)) ?? [], genre: try? db.genre(album: a.key))
+    @objc private func editAlbumTags() {
+        guard let a = selectedAlbum, let db else { return }
+        editTags(a, tracks: (try? db.tracks(album: a.key)) ?? [], genre: try? db.genre(album: a.key))
+    }
+
+    @objc private func editTrackTags() {
+        editTags(of: trackTable.selectedRowIndexes.filter { $0 < tracks.count }.map { tracks[$0] })
+    }
+
+    /// Some tracks' tags: those of the first one's release (the editor is for one release at a time).
+    func editTags(of picked: [LibraryTrack]) {
+        guard let first = picked.first, let db,
+              let a = try? db.albumsWhere("a.key = ?", [first.albumKey], order: "a.key").first else { return }
+        editTags(a, tracks: picked.filter { $0.albumKey == first.albumKey }, genre: try? db.genre(album: a.key))
+    }
+
+    private func editTags(_ a: LibraryAlbum, tracks: [LibraryTrack], genre: String?) {
+        guard let w = window, tagSheet == nil, !tracks.isEmpty else { return }
+        let sheet = TagEditorSheet(album: a, tracks: tracks, genre: genre)
         sheet.onDone = { [weak self, weak sheet] message in
             guard let self, let sw = sheet?.window else { return }
             w.endSheet(sw)
@@ -1483,10 +1500,11 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         menu.addItem(.separator())
         if t === albumTable, selectedAlbums.count == 1 {
             add("Find Missing Info…", #selector(findInfo))
-            add("Edit Tags…", #selector(editTags))
+            add("Edit Tags…", #selector(editAlbumTags))
             if selectedAlbum?.kind != .show { add("Wikipedia ↗", #selector(albumWikipedia)) }
         }
         if t === trackTable, trackTable.selectedRowIndexes.count == 1 { add("Show All Versions", #selector(showVersions)) }
+        if t === trackTable { add("Edit Tags…", #selector(editTrackTags)) }
         add("Show in Finder", #selector(showInFinder))
     }
 

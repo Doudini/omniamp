@@ -209,6 +209,24 @@ final class TagWriterTests: XCTestCase {
         try audioIntact(url)
     }
 
+    func testCommentReplacesOnlyThePlainOne() throws {
+        // A described comment (iTunes' volume data) stays; the plain one is replaced.
+        func comm(_ desc: String, _ text: String) -> [UInt8] {
+            let body: [UInt8] = [0] + Array("eng".utf8) + Array(desc.utf8) + [0] + Array(text.utf8)
+            let n = body.count
+            return Array("COMM".utf8) + [UInt8(n >> 24), UInt8((n >> 16) & 0xFF), UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)] + [0, 0] + body
+        }
+        let url = try mp3(comm("iTunNORM", "0000 1111") + comm("", "old note"), padding: 256)
+        XCTAssertEqual(TagWriter.write(BasicTags(comment: "Recorded live"), to: url.path, backupDir: nil), .written)
+        let bytes = try Data(contentsOf: url)
+        XCTAssertNotNil(bytes.range(of: Data("iTunNORM".utf8)))
+        XCTAssertNil(bytes.range(of: Data("old note".utf8)))
+        XCTAssertEqual(DetailsReader.read(path: url.path, folderArt: false).comment, "Recorded live")
+        let flacURL = try flac()
+        XCTAssertEqual(TagWriter.write(BasicTags(comment: "Recorded live"), to: flacURL.path, backupDir: nil), .written)
+        XCTAssertEqual(DetailsReader.read(path: flacURL.path, folderArt: false).comment, "Recorded live")
+    }
+
     // MARK: FLAC
 
     private func flac() throws -> URL {
