@@ -36,7 +36,10 @@ final class ArtView: NSView {
 
     override func mouseEntered(with event: NSEvent) { onHover?(true) }
     override func mouseExited(with event: NSEvent) { onHover?(false) }
-    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        // Without its own action a cover is part of whatever holds it: a click on it selects a table row.
+        if let onClick { onClick() } else { super.mouseDown(with: event) }
+    }
     override func resetCursorRects() { if onClick != nil { addCursorRect(bounds, cursor: .pointingHand) } }
 
     override func draw(_ dirtyRect: NSRect) {
