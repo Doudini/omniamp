@@ -163,12 +163,21 @@ final class CareerChart: StatsChart {
         }
         Dash.border.setFill()
         NSRect(x: Self.labelW, y: bottom, width: bounds.width - Self.labelW - 6, height: 1).fill()
-        // What's under the mouse, written into the chart at once: a tooltip waits, and the card's own tooltip
-        // can win over a small mark.
+        // What's under the mouse, in a label beside it at once: a tooltip waits, and the card's own tooltip can
+        // win over a small mark.
         if let h = hovered, h < regions.count {
             let s = Self.sans(regions[h].tip, 11, Dash.text)
-            let w = s.size().width
-            s.draw(at: NSPoint(x: max(Self.labelW + 4, bounds.width - 10 - w), y: playsTop + 2))
+            let size = s.size(), anchor = regions[h].rect
+            // A month: by the top of its bar; a release: beside its mark. Right of it, or left where it won't fit.
+            let y = h >= marks.count ? (monthRect(h - marks.count, most: most)?.minY ?? anchor.minY) - 10 : anchor.midY
+            var x = anchor.maxX + 8
+            if x + size.width + 12 > bounds.width { x = anchor.minX - 8 - size.width - 12 }
+            let box = NSRect(x: max(0, x), y: min(max(0, y - size.height / 2 - 3), bounds.height - size.height - 6),
+                             width: size.width + 12, height: size.height + 6)
+            let path = NSBezierPath(roundedRect: box, xRadius: 5, yRadius: 5)
+            Dash.cardRaised.setFill(); path.fill()
+            Dash.border.setStroke(); path.lineWidth = 1; path.stroke()
+            s.draw(at: NSPoint(x: box.minX + 6, y: box.minY + 3))
         }
     }
 }
@@ -687,7 +696,7 @@ final class ArtistPage: DashPage {
         career.months = d.months
         career.onRelease = { [weak self] in self?.onRelease?($0) }
         add(StatsPanel(d.releases.isEmpty ? "Your listening" : "Their releases and your listening", career,
-                       note: d.releases.isEmpty ? "plays per month" : "click a release to open it"))
+                       note: d.releases.isEmpty ? "plays per month" : "your plays per month"))
 
         let top15 = BarListChart()
         top15.bars = d.topSongs.map { .init(id: $0.titleKey, label: $0.title, value: Double($0.plays),
