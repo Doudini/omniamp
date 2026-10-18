@@ -17,8 +17,22 @@ struct BasicTags: Equatable, Sendable {
     var comment: String?
     /// A front cover (JPEG or PNG bytes) embedded in place of every picture the file has.
     var cover: Data?
+    /// Fields taken out of the files (emptied in the tag editor). `artist` here is the album artist.
+    var remove: Set<Field> = []
 
-    var isEmpty: Bool { [artist, album, year, genre, title, track, trackArtist, disc, comment].allSatisfy { ($0 ?? "").isEmpty } && cover == nil }
+    enum Field: Hashable, Sendable { case artist, album, year, genre, title, track, trackArtist, disc, comment }
+
+    var isEmpty: Bool {
+        [artist, album, year, genre, title, track, trackArtist, disc, comment].allSatisfy { ($0 ?? "").isEmpty } && cover == nil && remove.isEmpty
+    }
+
+    /// A new track or disc number keeps the file's total: "4" over "3/12" is "4/12". One with its own total is
+    /// written as it is.
+    static func keepingTotal(_ new: String, old: String?) -> String {
+        guard !new.contains("/"), let old, let slash = old.firstIndex(of: "/") else { return new }
+        let total = old[old.index(after: slash)...].trimmingCharacters(in: .whitespaces)
+        return total.isEmpty ? new : new + "/" + total
+    }
 
     /// "image/png" or "image/jpeg" by the bytes.
     static func mime(_ image: Data) -> String { image.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg" }
@@ -112,15 +126,23 @@ enum TagWriter {
         writeAll(fd, bytes, at: offset) && fsync(fd) == 0 ? .written : .failed("couldn't write the tag")
     }
 
+    /// A file OmniAmp is about to replace (a folder's cover image), kept with the tag backups under its own name.
+    @discardableResult
+    static func backupFile(_ path: String, in dir: URL? = TagWriter.backupDir) -> Bool {
+        guard let data = try? Data(contentsOf: URL(exactPath: path)) else { return false }
+        return backup([UInt8](data), of: path, in: dir, suffix: "")
+    }
+
     /// The old tag, kept before it's replaced: <backups>/<day>/<name>.<n>.tag plus a line in index.tsv.
-    private static func backup(_ bytes: [UInt8], of path: String, in dir: URL?) {
-        guard let dir, bytes.count <= 32 << 20 else { return }
+    @discardableResult
+    private static func backup(_ bytes: [UInt8], of path: String, in dir: URL?, suffix: String = ".tag") -> Bool {
+        guard let dir, bytes.count <= 32 << 20 else { return false }
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         let day = dir.appendingPathComponent(f.string(from: Date()), isDirectory: true)
         try? FileManager.default.createDirectory(at: day, withIntermediateDirectories: true)
-        let name = "\(UUID().uuidString.prefix(8))-\((path as NSString).lastPathComponent).tag"
-        guard (try? Data(bytes).write(to: day.appendingPathComponent(name))) != nil else { return }
+        let name = "\(UUID().uuidString.prefix(8))-\((path as NSString).lastPathComponent)\(suffix)"
+        guard (try? Data(bytes).write(to: day.appendingPathComponent(name))) != nil else { return false }
         let line = "\(name)\t\(path)\n"
         let index = day.appendingPathComponent("index.tsv")
         if let h = try? FileHandle(forWritingTo: index) {
@@ -130,12 +152,13 @@ enum TagWriter {
         } else {
             try? Data(line.utf8).write(to: index)
         }
+        return true
     }
 
     /// `prefix` followed by the original file from `from` to its end, into a temporary file next to it, then
     /// renamed over it (same permissions). A failure leaves the original untouched.
-    /// Temporary files a crash left in a folder (".omniamp-….tmp", over an hour old).
-    private static func removeStaleTemporaries(in dir: String) {
+    /// Temporary files a crash left in a folder (".omniamp-….tmp", over an hour old; WMAConverter's too).
+    static func removeStaleTemporaries(in dir: String) {
         for name in ExactPath.contents(ofDirectory: dir) ?? [] where name.hasPrefix(".omniamp-") && name.hasSuffix(".tmp") {
             let p = dir + "/" + name
             var st = stat()
@@ -199,6 +222,11 @@ enum TagWriter {
         return frame("COMM", body, version: version)
     }
 
+    /// A number frame's text ("3/12"), whatever its encoding: only its digits and slash are kept.
+    private static func numberText(_ raw: [UInt8]) -> String {
+        String(decoding: raw.dropFirst(11).filter { (0x30...0x39).contains($0) || $0 == 0x2F }, as: UTF8.self)
+    }
+
     /// A COMM frame whose description is empty: the visible comment. Described ones (iTunNORM, …) are other data.
     static func isPlainComment(_ raw: [UInt8]) -> Bool {
         let b = Array(raw.dropFirst(10))
@@ -257,8 +285,12 @@ enum TagWriter {
             if flags & 0x40 != 0, start + 4 <= tag.count { start += version == 4 ? unsynch(tag, start) : be32(tag, start) + 4 }
             // Every frame must be read, or the rewritten tag would lose the ones after a misread (often the cover).
             // v2.4 sizes are synchsafe, but some taggers (older iTunes) wrote plain ones: try both, else don't write.
-            guard let all = Self.frames(tag, from: start, synchsafe: version == 4) ?? (version == 4 ? Self.frames(tag, from: start, synchsafe: false) : nil)
-            else { return .unsupported("ID3 tag it can't read safely") }
+            var all = Self.frames(tag, from: start, synchsafe: version == 4)
+            if all == nil, version == 4, let plain = Self.frames(tag, from: start, synchsafe: false) {
+                // Written back with synchsafe sizes, like the new frames: one tag with both kinds can't be read again.
+                all = plain.map { f in (f.id, Array(f.raw[0..<4]) + synchsafe(f.raw.count - 10) + Array(f.raw[8...])) }
+            }
+            guard let all else { return .unsupported("ID3 tag it can't read safely") }
             frames = all
         }
         let hasArtist = frames.contains { $0.id == "TPE1" }
@@ -275,16 +307,24 @@ enum TagWriter {
         }
         if let g = tags.genre, !g.isEmpty { replace.insert("TCON"); add.append(textFrame("TCON", g, version: version)) }
         if let t = tags.title, !t.isEmpty { replace.insert("TIT2"); add.append(textFrame("TIT2", t, version: version)) }
-        if let n = tags.track, !n.isEmpty { replace.insert("TRCK"); add.append(textFrame("TRCK", n, version: version)) }
+        func old(_ id: String) -> String? { frames.first { $0.id == id }.map { numberText($0.raw) } }
+        if let n = tags.track, !n.isEmpty {
+            replace.insert("TRCK"); add.append(textFrame("TRCK", BasicTags.keepingTotal(n, old: old("TRCK")), version: version))
+        }
         if let a = tags.trackArtist, !a.isEmpty {
             // Its own artist wins over the album artist's "only where it has none".
             add.removeAll { $0.starts(with: Array("TPE1".utf8)) }
             replace.insert("TPE1"); add.append(textFrame("TPE1", a, version: version))
         }
-        if let d = tags.disc, !d.isEmpty { replace.insert("TPOS"); add.append(textFrame("TPOS", d, version: version)) }
+        if let d = tags.disc, !d.isEmpty {
+            replace.insert("TPOS"); add.append(textFrame("TPOS", BasicTags.keepingTotal(d, old: old("TPOS")), version: version))
+        }
         if let c = tags.cover { replace.insert("APIC"); add.append(pictureFrame(c, version: version)) }
         if let c = tags.comment, !c.isEmpty { add.append(commentFrame(c, version: version)) }
-        let replacesComment = !(tags.comment ?? "").isEmpty
+        let removed: [BasicTags.Field: [String]] = [.artist: ["TPE2"], .album: ["TALB"], .year: ["TYER", "TDRC"], .genre: ["TCON"],
+                                                    .title: ["TIT2"], .track: ["TRCK"], .trackArtist: ["TPE1"], .disc: ["TPOS"]]
+        for f in tags.remove { replace.formUnion(removed[f] ?? []) }
+        let replacesComment = !(tags.comment ?? "").isEmpty || tags.remove.contains(.comment)
         let body = add.flatMap { $0 } + frames.filter { !replace.contains($0.id) && !(replacesComment && $0.id == "COMM" && isPlainComment($0.raw)) }
             .flatMap(\.raw)
         func tag(padding: Int) -> [UInt8] {
@@ -357,13 +397,23 @@ enum TagWriter {
         if let y = tags.year, !y.isEmpty { drop.formUnion(["DATE", "YEAR"]); add.append("DATE=\(y)") }
         if let g = tags.genre, !g.isEmpty { drop.insert("GENRE"); add.append("GENRE=\(g)") }
         if let t = tags.title, !t.isEmpty { drop.insert("TITLE"); add.append("TITLE=\(t)") }
-        if let n = tags.track, !n.isEmpty { drop.insert("TRACKNUMBER"); add.append("TRACKNUMBER=\(n)") }
+        func old(_ k: String) -> String? { comments.first { key($0) == k }.map { String($0.drop { $0 != "=" }.dropFirst()) } }
+        if let n = tags.track, !n.isEmpty {
+            drop.insert("TRACKNUMBER"); add.append("TRACKNUMBER=\(BasicTags.keepingTotal(n, old: old("TRACKNUMBER")))")
+        }
         if let a = tags.trackArtist, !a.isEmpty {
             add.removeAll { $0.hasPrefix("ARTIST=") }
             drop.insert("ARTIST"); add.append("ARTIST=\(a)")
         }
-        if let d = tags.disc, !d.isEmpty { drop.insert("DISCNUMBER"); add.append("DISCNUMBER=\(d)") }
-        if let c = tags.comment, !c.isEmpty { drop.formUnion(["COMMENT", "DESCRIPTION"]); add.append("COMMENT=\(c)") }
+        if let d = tags.disc, !d.isEmpty {
+            drop.insert("DISCNUMBER"); add.append("DISCNUMBER=\(BasicTags.keepingTotal(d, old: old("DISCNUMBER")))")
+        }
+        // COMMENT only: a DESCRIPTION is often other text (a show's lineage notes) the editor doesn't show.
+        if let c = tags.comment, !c.isEmpty { drop.insert("COMMENT"); add.append("COMMENT=\(c)") }
+        let removed: [BasicTags.Field: [String]] = [.artist: ["ALBUMARTIST", "ALBUM ARTIST"], .album: ["ALBUM"], .year: ["DATE", "YEAR"],
+                                                    .genre: ["GENRE"], .title: ["TITLE"], .track: ["TRACKNUMBER"], .trackArtist: ["ARTIST"],
+                                                    .disc: ["DISCNUMBER"], .comment: ["COMMENT"]]
+        for f in tags.remove { drop.formUnion(removed[f] ?? []) }
         let list = comments.filter { !drop.contains(key($0)) } + add
         func le(_ n: Int) -> [UInt8] { [UInt8(n & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 24 & 0xFF)] }
         var comment = le(vendor.count) + vendor + le(list.count)

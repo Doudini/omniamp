@@ -128,6 +128,12 @@ final class CardRowView: NSTableRowView {
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 }
 
+/// A sheet's content, on the theme's page color: a sheet's own window background is see-through material that
+/// tints it with what's behind (covers turned the page brown).
+final class SheetBackground: NSView {
+    override func draw(_ dirtyRect: NSRect) { Dash.page.setFill(); dirtyRect.fill() }
+}
+
 /// A rounded pill button: a filter, a mode, an action. On: accent tint and text.
 final class Pill: NSControl {
     var title: String { didSet { invalidateIntrinsicContentSize(); needsDisplay = true } }

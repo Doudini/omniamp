@@ -708,7 +708,7 @@ final class TracksPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NSMe
             add("Artist Page", #selector(artistPage))
             add("Show All Versions", #selector(versions))
         }
-        add("Edit Tags…", #selector(editTags))
+        menu.addItem(TagEditorSheet.menuItem(for: selectedTracks, target: self, action: #selector(editTags)))
         add("Show in Finder", #selector(showInFinder))
     }
 

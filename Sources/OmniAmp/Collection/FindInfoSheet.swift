@@ -162,7 +162,7 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         right.spacing = 10
         right.setCustomSpacing(14, after: cover)
 
-        let root = PageFill()
+        let root = SheetBackground()
         for v in [title, what, queryRow, scroll, right, bottom] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
@@ -319,36 +319,75 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
     /// Off the main thread: tags into the files, the cover into the folder (or for a `release` sharing its folder
     /// with others, into OmniAmp's own store). Returns a line for the status bar.
     nonisolated static func write(_ tags: BasicTags, paths: [String], cover: Data?, folder: String, release: String? = nil) -> String {
-        var written = 0, failed: [String] = [], skipped: [String] = []
-        if !tags.isEmpty {
-            for p in paths {
-                switch TagWriter.write(tags, to: p) {
-                case .written: written += 1
-                case .unchanged: break
-                case .unsupported(let why): skipped.append(why)
-                case .failed(let why): failed.append("\((p as NSString).lastPathComponent): \(why)")
-                }
+        var report = TagWriteReport()
+        if !tags.isEmpty { report.write(paths.map { ($0, tags) }) }
+        if let cover { saveCover(cover, folder: folder, release: release, into: &report) }
+        return report.line
+    }
+
+    /// The cover as the folder's cover file. It takes the name of the cover file already there, so it's the one
+    /// that shows (a new cover.png next to the old cover.jpg would leave that to the folder's order); the old
+    /// file is kept with the tag backups first, and left alone when it can't be. A release sharing its folder
+    /// with others gets it in OmniAmp's own store instead.
+    nonisolated static func saveCover(_ cover: Data, folder: String, release: String?, into report: inout TagWriteReport) {
+        if let release {
+            if (try? cover.write(to: LibraryArt.chosenFile(release: release), options: .atomic)) != nil {
+                report.notes.append("cover kept for this release")
+            } else {
+                report.failed.append("couldn't keep the cover")
+            }
+            return
+        }
+        let png = BasicTags.mime(cover) == "image/png"
+        var name = png ? "cover.png" : "cover.jpg"
+        let existing = DetailsReader.folderArtName(in: folder)
+        if let existing {
+            let ext = (existing as NSString).pathExtension.lowercased()
+            let sameKind = png ? ext == "png" : ["jpg", "jpeg"].contains(ext)
+            name = sameKind ? existing : (existing as NSString).deletingPathExtension + (png ? ".png" : ".jpg")
+            guard TagWriter.backupFile(folder + "/" + existing) else {
+                report.failed.append("couldn't back up \(existing), so it's left as it is")
+                return
             }
         }
+        guard (try? cover.write(to: URL(exactPath: folder + "/" + name), options: .atomic)) != nil else {
+            report.failed.append("couldn't save the cover in the folder")
+            return
+        }
+        if let existing, existing != name { unlink(folder + "/" + existing) }   // its backup was made above
+        report.notes.append(existing.map { $0 == name ? "replaced \($0)" : "replaced \($0) with \(name)" } ?? "saved \(name)")
+    }
+}
+
+/// What writing tags (and a cover) did, as a line for the status bar:
+/// "Tags written into 2 files · saved cover.jpg · 1 skipped (WMA)."
+struct TagWriteReport: Sendable {
+    var written = 0
+    /// What happened to the cover.
+    var notes: [String] = []
+    var skipped: [String] = []
+    var failed: [String] = []
+
+    /// Each file's own tags, one file at a time.
+    mutating func write(_ jobs: [(String, BasicTags)]) {
+        for (path, tags) in jobs {
+            switch TagWriter.write(tags, to: path) {
+            case .written: written += 1
+            case .unchanged: break
+            case .unsupported(let why): skipped.append(why)
+            case .failed(let why): failed.append("\((path as NSString).lastPathComponent): \(why)")
+            }
+        }
+    }
+
+    var line: String {
         var parts: [String] = []
         if written > 0 { parts.append("tags written into \(written) file\(written == 1 ? "" : "s")") }
-        if let cover, let release {
-            if (try? cover.write(to: LibraryArt.chosenFile(release: release), options: .atomic)) != nil {
-                parts.append("cover kept for this release")
-            } else {
-                failed.append("couldn't keep the cover")
-            }
-        } else if let cover {
-            let ext = cover.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "png" : "jpg"
-            if (try? cover.write(to: URL(exactPath: folder + "/cover." + ext), options: .atomic)) != nil {
-                parts.append("saved cover.\(ext)")
-            } else {
-                failed.append("couldn't save the cover in the folder")
-            }
-        }
+        parts += notes
         if !skipped.isEmpty { parts.append("\(skipped.count) skipped (\(Set(skipped).sorted().joined(separator: ", ")))") }
         if !failed.isEmpty { parts.append("\(failed.count) failed: \(failed[0])") }
-        return parts.isEmpty ? "Nothing changed." : parts.joined(separator: " · ").prefix(1).uppercased() + parts.joined(separator: " · ").dropFirst() + "."
+        let s = parts.joined(separator: " · ")
+        return s.isEmpty ? "Nothing changed." : s.prefix(1).uppercased() + s.dropFirst() + "."
     }
 }
 
@@ -395,10 +434,4 @@ final class CandidateCell: NSTableCellView {
         sub.font = Dash.font(11)
         sub.textColor = Dash.text2
     }
-}
-
-/// The theme's page color, drawn: a sheet's window background is see-through material that tints it with what's
-/// behind (covers turned the page brown).
-private final class PageFill: NSView {
-    override func draw(_ dirtyRect: NSRect) { Dash.page.setFill(); dirtyRect.fill() }
 }

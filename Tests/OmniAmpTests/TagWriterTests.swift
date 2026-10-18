@@ -388,4 +388,112 @@ final class TagWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: tmp.appendingPathComponent("cover.jpg")), jpeg)
         XCTAssertEqual(DetailsReader.folderArtName(in: tmp.path), "cover.jpg")
     }
+
+    // MARK: Tag editor fixes
+
+    private func comm(_ desc: String, _ text: String) -> [UInt8] {
+        let body: [UInt8] = [0] + Array("eng".utf8) + Array(desc.utf8) + [0] + Array(text.utf8)
+        let n = body.count
+        return Array("COMM".utf8) + [UInt8(n >> 24), UInt8((n >> 16) & 0xFF), UInt8((n >> 8) & 0xFF), UInt8(n & 0xFF)] + [0, 0] + body
+    }
+
+    private func le(_ n: Int) -> [UInt8] { [UInt8(n & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n >> 16 & 0xFF), UInt8(n >> 24 & 0xFF)] }
+    private func vorbis(_ comments: [String]) -> [UInt8] {
+        le(4) + Array("test".utf8) + le(comments.count) + comments.flatMap { le($0.utf8.count) + Array($0.utf8) }
+    }
+
+    /// A v2.4 tag read with plain sizes gets synchsafe ones throughout once a cover is added, so it can be written
+    /// again (a mix of the two can't be read either way).
+    func testID3v24PlainSizesWithCoverStaysWritable() throws {
+        let long = String(repeating: "Long comment ", count: 30)
+        let url = try mp3(frame("TXXX", long, v4: false) + frame("TIT2", "Keep Me", v4: false), padding: 64, version: 4)
+        XCTAssertEqual(TagWriter.write(BasicTags(cover: png), to: url.path, backupDir: nil), .written)
+        XCTAssertEqual(TagWriter.write(BasicTags(genre: "Rock"), to: url.path, backupDir: nil), .written)
+        let i = read(url)
+        XCTAssertEqual(i.title, "Keep Me")
+        XCTAssertEqual(i.genre, "Rock")
+        XCTAssertEqual(DetailsReader.read(path: url.path, folderArt: false).artwork, png)
+        XCTAssertNotNil(try Data(contentsOf: url).range(of: Data(long.utf8)))
+        try audioIntact(url)
+    }
+
+    /// The comment shown is the one without a description; iTunes' data comments never are.
+    func testCommentShownSkipsITunesData() throws {
+        let both = try mp3(comm("iTunNORM", " 0000041A 00000384") + comm("", "My note"), padding: 64)
+        XCTAssertEqual(DetailsReader.read(path: both.path, folderArt: false).comment, "My note")
+        let data = try mp3(comm("iTunNORM", " 0000041A 00000384") + comm("iTunSMPB", " 00000000"), padding: 64)
+        XCTAssertNil(DetailsReader.read(path: data.path, folderArt: false).comment)
+        let described = try mp3(comm("Comment", "Older tagger"), padding: 64)
+        XCTAssertEqual(DetailsReader.read(path: described.path, folderArt: false).comment, "Older tagger")
+    }
+
+    /// A new FLAC comment replaces COMMENT only: a DESCRIPTION (a show's lineage) stays, and the comment is shown.
+    func testFLACCommentKeepsDescription() throws {
+        let (url, audio) = try flac(blocks: [(4, vorbis(["DESCRIPTION=Lineage: SBD > DAT > FLAC", "COMMENT=old"])), (1, [UInt8](repeating: 0, count: 512))])
+        XCTAssertEqual(TagWriter.write(BasicTags(comment: "Great show"), to: url.path, backupDir: nil), .written)
+        XCTAssertNotNil(try Data(contentsOf: url).range(of: Data("DESCRIPTION=Lineage: SBD > DAT > FLAC".utf8)))
+        XCTAssertNil(try Data(contentsOf: url).range(of: Data("COMMENT=old".utf8)))
+        XCTAssertEqual(DetailsReader.read(path: url.path, folderArt: false).comment, "Great show")
+        XCTAssertTrue(try flacAudio(url) == audio)
+    }
+
+    /// A new track or disc number keeps the file's total.
+    func testNumbersKeepTheirTotals() throws {
+        let url = try mp3(frame("TRCK", "3/12") + frame("TPOS", "1/2"), padding: 64)
+        XCTAssertEqual(TagWriter.write(BasicTags(track: "4", disc: "2"), to: url.path, backupDir: nil), .written)
+        var d = DetailsReader.read(path: url.path, folderArt: false)
+        XCTAssertEqual(d.track, 4); XCTAssertEqual(d.trackTotal, 12)
+        XCTAssertEqual(d.disc, 2); XCTAssertEqual(d.discTotal, 2)
+        XCTAssertEqual(TagWriter.write(BasicTags(track: "5/13"), to: url.path, backupDir: nil), .written)
+        d = DetailsReader.read(path: url.path, folderArt: false)
+        XCTAssertEqual(d.track, 5); XCTAssertEqual(d.trackTotal, 13, "a total given is written as it is")
+
+        let (f, _) = try flac(blocks: [(4, vorbis(["TRACKNUMBER=3/12"])), (1, [UInt8](repeating: 0, count: 512))])
+        XCTAssertEqual(TagWriter.write(BasicTags(track: "4"), to: f.path, backupDir: nil), .written)
+        XCTAssertNotNil(try Data(contentsOf: f).range(of: Data("TRACKNUMBER=4/12".utf8)))
+        XCTAssertEqual(BasicTags.keepingTotal("4", old: nil), "4")
+        XCTAssertEqual(BasicTags.keepingTotal("4", old: "3"), "4")
+    }
+
+    /// Emptied fields are taken out of the files; the others stay.
+    func testRemovingFields() throws {
+        let url = try mp3(frame("TIT2", "Plea") + frame("TCON", "Rock") + comm("", "a note") + comm("iTunNORM", " 0000041A"), padding: 64)
+        XCTAssertFalse(BasicTags(remove: [.genre]).isEmpty)
+        XCTAssertEqual(TagWriter.write(BasicTags(remove: [.genre, .comment]), to: url.path, backupDir: nil), .written)
+        let d = DetailsReader.read(path: url.path, folderArt: false)
+        XCTAssertNil(d.genre)
+        XCTAssertNil(d.comment)
+        XCTAssertEqual(d.title, "Plea")
+        XCTAssertNotNil(try Data(contentsOf: url).range(of: Data("iTunNORM".utf8)), "a described comment isn't the comment")
+
+        let (f, _) = try flac(blocks: [(4, vorbis(["TITLE=Plea", "GENRE=Rock", "COMMENT=a note", "DESCRIPTION=lineage"])),
+                                        (1, [UInt8](repeating: 0, count: 512))])
+        XCTAssertEqual(TagWriter.write(BasicTags(remove: [.genre, .comment]), to: f.path, backupDir: nil), .written)
+        let fd = DetailsReader.read(path: f.path, folderArt: false)
+        XCTAssertNil(fd.genre)
+        XCTAssertEqual(fd.title, "Plea")
+        XCTAssertEqual(fd.comment, "lineage", "DESCRIPTION stays")
+    }
+
+    /// A new cover takes the name of the folder's cover file (its extension changing with the image's kind), and
+    /// the old file is kept with the backups.
+    func testFolderCoverReplacesTheOneThere() throws {
+        let old = Data([0xFF, 0xD8]) + Data(repeating: 3, count: 1500)
+        try old.write(to: tmp.appendingPathComponent("cover.jpg"))
+        let msg = FindInfoSheet.write(BasicTags(), paths: [], cover: png, folder: tmp.path)
+        XCTAssertEqual(msg, "Replaced cover.jpg with cover.png.")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.appendingPathComponent("cover.jpg").path))
+        XCTAssertEqual(try Data(contentsOf: tmp.appendingPathComponent("cover.png")), png)
+        XCTAssertEqual(DetailsReader.folderArtName(in: tmp.path), "cover.png")
+        let backups = FileManager.default.enumerator(atPath: TagWriter.backupDir.path)?.compactMap { $0 as? String } ?? []
+        XCTAssertTrue(backups.contains { $0.hasSuffix("-cover.jpg")
+            && (try? Data(contentsOf: TagWriter.backupDir.appendingPathComponent($0))) == old }, "the old cover is in the backups")
+
+        let jpeg = Data([0xFF, 0xD8]) + Data(repeating: 5, count: 1500)
+        let other = tmp.appendingPathComponent("other", isDirectory: true)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try old.write(to: other.appendingPathComponent("Folder.jpeg"))
+        XCTAssertEqual(FindInfoSheet.write(BasicTags(), paths: [], cover: jpeg, folder: other.path), "Replaced Folder.jpeg.")
+        XCTAssertEqual(try Data(contentsOf: other.appendingPathComponent("Folder.jpeg")), jpeg)
+    }
 }

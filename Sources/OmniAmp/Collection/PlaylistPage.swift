@@ -372,7 +372,10 @@ final class PlaylistPage: NSView, NSTableViewDataSource, NSTableViewDelegate, NS
         if !doc.readOnly { add("Remove from Playlist", #selector(removeSelected)) }
         menu.addItem(.separator())
         if table.selectedRowIndexes.count == 1, rows[row].library != nil { add("Show Album", #selector(showAlbum)) }
-        if rows[row].library != nil { add("Edit Tags…", #selector(editTags)) }
+        if rows[row].library != nil {
+            let picked = table.selectedRowIndexes.filter { $0 < rows.count }.compactMap { rows[$0].library }
+            menu.addItem(TagEditorSheet.menuItem(for: picked, target: self, action: #selector(editTags)))
+        }
         add("Show in Finder", #selector(showInFinder))
     }
 

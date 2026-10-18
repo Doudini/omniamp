@@ -1547,7 +1547,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
             if selectedAlbum?.kind != .show { add("Wikipedia ↗", #selector(albumWikipedia)) }
         }
         if t === trackTable, trackTable.selectedRowIndexes.count == 1 { add("Show All Versions", #selector(showVersions)) }
-        if t === trackTable { add("Edit Tags…", #selector(editTrackTags)) }
+        if t === trackTable {
+            let picked = trackTable.selectedRowIndexes.filter { $0 < tracks.count }.map { tracks[$0] }
+            menu.addItem(TagEditorSheet.menuItem(for: picked, target: self, action: #selector(editTrackTags)))
+        }
         if t === albumTable, selectedAlbums.count == 1, selectedAlbum?.unplayableFormat?.uppercased() == "WMA" { add("Convert Album to FLAC", #selector(convertAlbum)) }
         if t === trackTable, trackTable.selectedRowIndexes.contains(where: { $0 < tracks.count && WMAConverter.isWMA(tracks[$0].path) }) {
             add("Convert to FLAC", #selector(convertTracks))

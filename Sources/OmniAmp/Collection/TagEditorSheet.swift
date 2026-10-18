@@ -8,7 +8,9 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
     private struct Row {
         let path: String
         var title: String, artist: String, number: String, disc: String
-        /// MP3 or FLAC, one track per file (a CUE sheet's tracks share theirs).
+        /// A CUE sheet's track: its tags are in the .cue, and its file holds the others too.
+        let cue: Bool
+        /// MP3 or FLAC, one track per file.
         let editable: Bool
     }
     private let album: LibraryAlbum
@@ -35,10 +37,9 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
 
     init(album: LibraryAlbum, tracks: [LibraryTrack], genre: String?) {
         self.album = album
-        let counts = Dictionary(tracks.map { ($0.path, 1) }, uniquingKeysWith: +)
         rows = tracks.sorted { ($0.disc ?? 0, $0.number ?? 0) < ($1.disc ?? 0, $1.number ?? 0) }.map { t in
             Row(path: t.path, title: t.title, artist: t.artist, number: t.number.map(String.init) ?? "", disc: t.disc.map(String.init) ?? "",
-                editable: counts[t.path] == 1 && TagEditorSheet.writable(t.path))
+                cue: t.cueStart != nil, editable: t.cueStart == nil && TagEditorSheet.writable(t.path))
         }
         original = rows
         initial = (album.artist, album.title, album.year.map(String.init) ?? "", genre ?? "")
@@ -50,19 +51,35 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
             guard let self, self.coverData == nil else { return }
             self.well.art.image = img
         }
-        // Off the main thread: the file may be on a slow share.
-        if let first = rows.first?.path {
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                let c = DetailsReader.read(path: first, folderArt: false).comment ?? ""
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        guard let self, self.comment.stringValue.isEmpty else { return }
-                        self.initialComment = c
-                        self.comment.stringValue = c
+        // Off the main thread: the file and the folder may be on a slow share.
+        let first = rows.first { $0.editable }?.path, folder = album.folder, shared = album.sharedFolder
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let c = first.map { DetailsReader.read(path: $0, folderArt: false).comment ?? "" } ?? ""
+            let art = shared ? nil : DetailsReader.folderArtName(in: folder)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if let art {
+                        // OmniAmp (and most players) show a folder's cover file before the one inside the files.
+                        self.saveCover.title = "Replace \(art) in the folder too"
+                        self.saveCover.toolTip = "The folder's cover file is shown before the cover inside the files. The old one is kept with the tag backups."
                     }
+                    guard self.comment.stringValue.isEmpty else { return }
+                    self.initialComment = c
+                    self.comment.stringValue = c
                 }
             }
         }
+    }
+
+    /// "Edit Tags…" for a menu: greyed out, saying why, for tracks from more than one release (the editor is for
+    /// one at a time).
+    static func menuItem(for tracks: [LibraryTrack], target: AnyObject, action: Selector) -> NSMenuItem {
+        let one = Set(tracks.map(\.albumKey)).count == 1
+        let item = NSMenuItem(title: one ? "Edit Tags…" : "Edit Tags… (one album at a time)", action: one ? action : nil, keyEquivalent: "")
+        item.target = target
+        item.isEnabled = one   // for menus that don't enable items themselves
+        return item
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -111,19 +128,25 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
         }
         form.column(at: 0).xPlacement = .trailing
 
-        saveCover.title = album.sharedFolder ? "Also use it as this release's cover in OmniAmp" : "Also save it as the folder's cover file"
+        saveCover.title = album.sharedFolder ? "Also use it as this release's cover in OmniAmp" : "Also save it in the folder as its cover file"
         saveCover.state = .on
         saveCover.isEnabled = false
         saveCover.font = Dash.font(12)
 
         let files = Set(rows.filter(\.editable).map(\.path)).count
-        let others = rows.filter { !$0.editable }.count
+        let others = rows.filter { !$0.editable }.count, cues = rows.filter(\.cue).count
         status.font = Dash.font(11.5)
         status.textColor = Dash.text2
         status.lineBreakMode = .byTruncatingTail
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        status.stringValue = files == 0 ? "No MP3 or FLAC files here: tags can't be written."
-            : "Writes into \(files) MP3/FLAC file\(files == 1 ? "" : "s")" + (others > 0 ? " · \(others) other track\(others == 1 ? "" : "s") greyed out" : "")
+        if files == 0 {
+            status.stringValue = cues == rows.count ? "These tracks come from a CUE sheet: their tags are in the .cue file."
+                : "No MP3 or FLAC files here: tags can't be written."
+        } else {
+            let why = cues == others ? "from a CUE sheet" : cues == 0 ? "not MP3 or FLAC" : "CUE sheet or not MP3/FLAC"
+            status.stringValue = "Writes into \(files) MP3/FLAC file\(files == 1 ? "" : "s")"
+                + (others > 0 ? " · \(others) track\(others == 1 ? "" : "s") \(why), greyed out" : "")
+        }
         let cancel = Pill("Cancel", target: self, action: #selector(cancel))
         cancelButton = cancel
         cancel.keyEquivalent = "\u{1b}"
@@ -137,7 +160,7 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
         left.alignment = .leading
         left.spacing = 12
 
-        let root = TagEditorPage()
+        let root = SheetBackground()
         for v in [title, what, left, scroll, bottom] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
@@ -246,22 +269,25 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
     @objc private func apply() {
         guard !busy else { return }
         window?.makeFirstResponder(nil)   // the field being typed in ends its edit
-        func changed(_ f: NSTextField, _ was: String) -> String? {
-            let v = f.stringValue.trimmingCharacters(in: .whitespaces)
-            return v.isEmpty || v == was ? nil : v
+        // A changed field is written; one emptied that had a value is taken out of the files.
+        var shared = BasicTags(cover: coverData)
+        func take(_ now: String, _ was: String, _ field: BasicTags.Field, into t: inout BasicTags, _ set: (inout BasicTags, String) -> Void) {
+            let v = now.trimmingCharacters(in: .whitespaces)
+            if v == was { return }
+            if v.isEmpty { t.remove.insert(field) } else { set(&t, v) }
         }
-        var shared = BasicTags(artist: changed(artist, initial.artist), album: changed(albumField, initial.album),
-                               year: changed(year, initial.year), genre: changed(genre, initial.genre))
-        shared.comment = changed(comment, initialComment)
-        shared.cover = coverData
+        take(artist.stringValue, initial.artist, .artist, into: &shared) { $0.artist = $1 }
+        take(albumField.stringValue, initial.album, .album, into: &shared) { $0.album = $1 }
+        take(year.stringValue, initial.year, .year, into: &shared) { $0.year = $1 }
+        take(genre.stringValue, initial.genre, .genre, into: &shared) { $0.genre = $1 }
+        take(comment.stringValue, initialComment, .comment, into: &shared) { $0.comment = $1 }
         var jobs: [(String, BasicTags)] = []
         for (r, was) in zip(rows, original) where r.editable {
             var t = shared
-            func diff(_ a: String, _ b: String) -> String? { a.isEmpty || a == b ? nil : a }
-            t.title = diff(r.title, was.title)
-            t.trackArtist = diff(r.artist, was.artist)
-            t.track = diff(r.number, was.number)
-            t.disc = diff(r.disc, was.disc)
+            take(r.title, was.title, .title, into: &t) { $0.title = $1 }
+            take(r.artist, was.artist, .trackArtist, into: &t) { $0.trackArtist = $1 }
+            take(r.number, was.number, .track, into: &t) { $0.track = $1 }
+            take(r.disc, was.disc, .disc, into: &t) { $0.disc = $1 }
             if !t.isEmpty { jobs.append((r.path, t)) }
         }
         let folderCover = saveCover.state == .on ? coverData : nil
@@ -281,29 +307,13 @@ final class TagEditorSheet: NSWindowController, NSTableViewDataSource, NSTableVi
         }
     }
 
-    /// Off the main thread: each file's tags, then the cover for the folder (FindInfoSheet's way). A line for the status bar.
+    /// Off the main thread: each file's tags, then the cover for the folder (as Find Missing Info saves it). A line
+    /// for the status bar.
     nonisolated static func write(_ jobs: [(String, BasicTags)], cover: Data?, folder: String, release: String?) -> String {
-        var written = 0, failed: [String] = [], skipped: [String] = []
-        for (p, t) in jobs {
-            switch TagWriter.write(t, to: p) {
-            case .written: written += 1
-            case .unchanged: break
-            case .unsupported(let why): skipped.append(why)
-            case .failed(let why): failed.append("\((p as NSString).lastPathComponent): \(why)")
-            }
-        }
-        var parts: [String] = []
-        if written > 0 { parts.append("tags written into \(written) file\(written == 1 ? "" : "s")") }
-        if cover != nil {
-            // Its line, as a part of this one ("Saved cover.jpg." → "saved cover.jpg").
-            var line = FindInfoSheet.write(BasicTags(), paths: [], cover: cover, folder: folder, release: release)
-            if line.hasSuffix(".") { line.removeLast() }
-            parts.append(line.prefix(1).lowercased() + line.dropFirst())
-        }
-        if !skipped.isEmpty { parts.append("\(skipped.count) skipped (\(Set(skipped).sorted().joined(separator: ", ")))") }
-        if !failed.isEmpty { parts.append("\(failed.count) failed: \(failed[0])") }
-        let line = parts.joined(separator: " · ")
-        return line.isEmpty ? "Nothing changed." : line.prefix(1).uppercased() + line.dropFirst() + "."
+        var report = TagWriteReport()
+        report.write(jobs)
+        if let cover { FindInfoSheet.saveCover(cover, folder: folder, release: release, into: &report) }
+        return report.line
     }
 }
 
@@ -335,9 +345,4 @@ private final class CoverWell: NSView {
         onDrop?(url)
         return true
     }
-}
-
-/// The theme's page color, drawn (a sheet's own background is see-through material).
-private final class TagEditorPage: NSView {
-    override func draw(_ dirtyRect: NSRect) { Dash.page.setFill(); dirtyRect.fill() }
 }

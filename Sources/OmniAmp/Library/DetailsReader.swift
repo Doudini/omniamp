@@ -140,6 +140,7 @@ enum DetailsReader {
         var p = 10
         if b[5] & 0x40 != 0 { p += ver == 4 ? synchsafe(b, 10) : be32(b, 10) + 4 } // extended header
         let idLen = ver == 2 ? 3 : 4, headerLen = ver == 2 ? 6 : 10
+        var plainComment = false
         while p + headerLen <= end, b[p] != 0 {
             let id = String(decoding: b[p..<(p + idLen)], as: UTF8.self)
             let size = ver == 2 ? (Int(b[p + 3]) << 16 | Int(b[p + 4]) << 8 | Int(b[p + 5]))
@@ -157,7 +158,13 @@ enum DetailsReader {
             case "TRCK", "TRK": (d.track, d.trackTotal) = pair(text())
             case "TPOS", "TPA": (d.disc, d.discTotal) = pair(text())
             case "TCOM", "TCM": d.composer = d.composer ?? text()
-            case "COMM", "COM": if d.comment == nil { d.comment = id3Comment(b, s, e) }
+            case "COMM", "COM":
+                // The comment without a description is the one people write; described ones are other apps' data
+                // (iTunNORM volume levels, iTunSMPB gapless info), never shown.
+                if !plainComment, case let (desc, text)? = id3Comment(b, s, e) {
+                    if desc.isEmpty { d.comment = text; plainComment = true }
+                    else if d.comment == nil, !desc.hasPrefix("iTun") { d.comment = text }
+                }
             case "APIC", "PIC": if d.artwork == nil { d.artwork = id3Picture(b, s, e, v22: id == "PIC") ; d.artworkSource = "embedded" }
             default: break
             }
@@ -176,13 +183,15 @@ enum DetailsReader {
         return min(i + 1, end)
     }
 
-    /// COMM: encoding, language(3), short description\0, text.
-    private static func id3Comment(_ b: [UInt8], _ s: Int, _ e: Int) -> String? {
+    /// COMM: encoding, language(3), short description\0, text. The description and the text.
+    private static func id3Comment(_ b: [UInt8], _ s: Int, _ e: Int) -> (String, String)? {
         guard s + 4 < e else { return nil }
         let enc = b[s]
         let textStart = skipString(b, s + 4, e, encoding: enc)
-        guard textStart < e else { return nil }
-        return TagReader.decodeText([enc] + Array(b[textStart..<e]), 0, e - textStart + 1)
+        guard textStart < e, let text = TagReader.decodeText([enc] + Array(b[textStart..<e]), 0, e - textStart + 1) else { return nil }
+        let desc = textStart - 4 - s > (enc == 1 || enc == 2 ? 2 : 1)
+            ? TagReader.decodeText([enc] + Array(b[(s + 4)..<textStart]), 0, textStart - s - 3) ?? "" : ""
+        return (desc.trimmingCharacters(in: .controlCharacters), text)
     }
 
     /// APIC: encoding, MIME\0, picture type, description\0, data.  (v2.2 PIC: encoding, 3-char format, type, desc\0, data)
@@ -224,6 +233,7 @@ enum DetailsReader {
     }
 
     private static func vorbisComments(_ b: [UInt8], into d: inout TrackDetails) {
+        var hadComment = false
         var p = 4 + le32(b, 0)
         let count = le32(b, p)
         p += 4
@@ -246,7 +256,9 @@ enum DetailsReader {
             case "DISCNUMBER": let (t, n) = pair(v); d.disc = t; if n != nil { d.discTotal = n }
             case "DISCTOTAL", "TOTALDISCS": d.discTotal = Int(v)
             case "COMPOSER": d.composer = d.composer ?? v
-            case "COMMENT", "DESCRIPTION": d.comment = d.comment ?? v
+            // COMMENT before DESCRIPTION, wherever each is (the tag editor writes COMMENT).
+            case "COMMENT": if !hadComment { d.comment = v; hadComment = true }
+            case "DESCRIPTION": d.comment = d.comment ?? v
             default: break
             }
         }
