@@ -794,7 +794,8 @@ final class AlbumPanelView: NSView {
         play.toolTip = "Add to the playlist and play (Return, double-click)"
         add.toolTip = "Add to the playlist (⌥Return)"
         artistPage.toolTip = "The artist's page"
-        buttons = NSStackView(views: [play, add, artistPage])
+        wiki.toolTip = "Read about this album on Wikipedia"
+        buttons = NSStackView(views: [play, add, artistPage, wiki])
         buttons.spacing = 6
         list.onPlay = { [weak self] i in guard let self else { return }; self.onPlay?(self.tracks, i) }
         for v in [art, title, artist, meta, buttons!, list] as [NSView] {
@@ -804,8 +805,11 @@ final class AlbumPanelView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    private lazy var wiki = Pill("Wikipedia ↗", target: self, action: #selector(openWikipedia))
+
     func show(_ a: LibraryAlbum, tracks: [LibraryTrack]) {
         album = a
+        wiki.isHidden = a.kind == .show
         self.tracks = tracks
         let isShow = a.kind == .show && a.showDate != nil
         title.stringValue = isShow ? [a.showDate, a.venue].compactMap { $0 }.joined(separator: "  ") : a.title
@@ -891,6 +895,10 @@ final class AlbumPanelView: NSView {
     @objc private func playAll() { onPlay?(tracks, 0) }
     @objc private func addAll() { onAdd?(tracks) }
     @objc private func showArtist() { if let a = album { onArtist?(a.artistKey) } }
+    @objc private func openWikipedia() {
+        guard let a = album else { return }
+        Task { NSWorkspace.shared.open(await MetadataLookup.shared.albumWikipedia(releaseGroup: nil, artist: a.artist, title: a.title)) }
+    }
 }
 
 /// An album's tracks in one to three columns, numbered in play order. Double-click plays from that track.
