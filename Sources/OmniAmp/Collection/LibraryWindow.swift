@@ -1324,6 +1324,48 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         editTags(of: trackTable.selectedRowIndexes.filter { $0 < tracks.count }.map { tracks[$0] })
     }
 
+    @objc private func convertAlbum() {
+        guard let a = selectedAlbum, let db else { return }
+        convertToFLAC(((try? db.tracks(album: a.key)) ?? []).map(\.path), title: a.title)
+    }
+
+    @objc private func convertTracks() {
+        let picked = trackTable.selectedRowIndexes.filter { $0 < tracks.count }.map { tracks[$0] }
+        convertToFLAC(picked.map(\.path), title: picked.count == 1 ? picked[0].title : selectedAlbum?.title ?? "")
+    }
+
+    private var converting = false
+
+    /// WMA files to FLAC with the user's ffmpeg (macOS has no WMA decoder); the WMAs go to the Trash.
+    private func convertToFLAC(_ paths: [String], title: String) {
+        let wma = Array(Set(paths.filter(WMAConverter.isWMA))).sorted()
+        guard !wma.isEmpty, !converting else { return }
+        guard let ffmpeg = WMAConverter.ffmpeg else {
+            let alert = NSAlert()
+            alert.messageText = "Converting WMA needs ffmpeg"
+            alert.informativeText = "macOS can't decode WMA, and OmniAmp doesn't bring a decoder of its own. Install ffmpeg (in Terminal: brew install ffmpeg), then try again."
+            if let w = window { alert.beginSheetModal(for: w) } else { alert.runModal() }
+            return
+        }
+        converting = true
+        status.stringValue = "“\(title)”: converting \(wma.count) file\(wma.count == 1 ? "" : "s") to FLAC…"
+        let total = wma.count
+        Task { @MainActor [weak self] in
+            let result = await Task.detached {
+                WMAConverter.convert(wma, ffmpeg: ffmpeg) { done in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { self?.status.stringValue = "“\(title)”: converting to FLAC, \(done + 1) of \(total)…" }
+                    }
+                }
+            }.value
+            for folder in Set(wma.map { ($0 as NSString).deletingLastPathComponent }) {
+                MusicCollection.shared.reread(result.converted.filter { ($0 as NSString).deletingLastPathComponent == folder }, in: folder)
+            }
+            self?.converting = false
+            self?.status.stringValue = "“\(title)”: \(result.line)"
+        }
+    }
+
     /// Some tracks' tags: those of the first one's release (the editor is for one release at a time).
     func editTags(of picked: [LibraryTrack]) {
         guard let first = picked.first, let db,
@@ -1506,6 +1548,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSTab
         }
         if t === trackTable, trackTable.selectedRowIndexes.count == 1 { add("Show All Versions", #selector(showVersions)) }
         if t === trackTable { add("Edit Tags…", #selector(editTrackTags)) }
+        if t === albumTable, selectedAlbums.count == 1, selectedAlbum?.unplayableFormat?.uppercased() == "WMA" { add("Convert Album to FLAC", #selector(convertAlbum)) }
+        if t === trackTable, trackTable.selectedRowIndexes.contains(where: { $0 < tracks.count && WMAConverter.isWMA(tracks[$0].path) }) {
+            add("Convert to FLAC", #selector(convertTracks))
+        }
         add("Show in Finder", #selector(showInFinder))
     }
 
