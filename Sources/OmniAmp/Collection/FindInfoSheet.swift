@@ -162,7 +162,7 @@ final class FindInfoSheet: NSWindowController, NSTableViewDataSource, NSTableVie
         right.spacing = 10
         right.setCustomSpacing(14, after: cover)
 
-        let root = NSView()
+        let root = PageFill()
         for v in [title, what, queryRow, scroll, right, bottom] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(v)
@@ -395,4 +395,10 @@ final class CandidateCell: NSTableCellView {
         sub.font = Dash.font(11)
         sub.textColor = Dash.text2
     }
+}
+
+/// The theme's page color, drawn: a sheet's window background is see-through material that tints it with what's
+/// behind (covers turned the page brown).
+private final class PageFill: NSView {
+    override func draw(_ dirtyRect: NSRect) { Dash.page.setFill(); dirtyRect.fill() }
 }
