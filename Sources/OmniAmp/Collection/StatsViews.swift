@@ -15,6 +15,8 @@ class StatsChart: NSView, NSViewToolTipOwner {
     var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
     /// Grows to fill its card when the row is taller (line and column charts); lists and maps don't.
     var stretches: Bool { false }
+    /// Shows what's under the mouse itself (a label drawn at once): no system tooltip on top of it.
+    var drawsOwnTips: Bool { false }
 
     override var isFlipped: Bool { true }
     override init(frame: NSRect) {
@@ -30,6 +32,7 @@ class StatsChart: NSView, NSViewToolTipOwner {
         super.layout()
         layoutRegions()
         removeAllToolTips()
+        if drawsOwnTips { return }
         for r in regions + extraTipAreas().map({ Region(rect: $0, tip: "", action: nil) }) { addToolTip(r.rect, owner: self, userData: nil) }
     }
 

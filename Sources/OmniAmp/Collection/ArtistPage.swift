@@ -85,12 +85,27 @@ final class CareerChart: StatsChart {
         return NSRect(x: x0, y: playsTop + Self.playsH - h, width: max(1, x1 - x0 - 0.5), height: h)
     }
 
+    override var drawsOwnTips: Bool { true }
+
+    /// The releases come first in `regions`, then the months.
+    private var markCount = 0
+
+    /// The nearest release mark whose area holds the point (marks sit closer together than their areas are
+    /// wide), else the month there.
+    override func regionIndex(at p: NSPoint) -> Int? {
+        let n = min(markCount, regions.count)
+        func distance(_ i: Int) -> CGFloat { hypot(regions[i].rect.midX - p.x, regions[i].rect.midY - p.y) }
+        if let best = (0..<n).filter({ regions[$0].rect.contains(p) }).min(by: { distance($0) < distance($1) }) { return best }
+        return (n..<regions.count).first { regions[$0].rect.contains(p) }
+    }
+
     override func layoutRegions() {
         regions = marks().map { a, c in
             let what = a.kind == .show ? [a.showDate, a.venue].compactMap { $0 }.joined(separator: " ") : "\(a.title)\(a.year.map { " (\($0))" } ?? "")"
             return Region(rect: NSRect(x: c.x - 7, y: c.y - 7, width: 14, height: 14), tip: "\(what) · \(a.kind.title) · click to open",
                           action: onRelease.map { f in { f(a) } })
         }
+        markCount = regions.count
         let most = months.map(\.plays).max() ?? 0
         let f = Self.monthIn, out = Self.monthOut
         for i in months.indices {
